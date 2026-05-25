@@ -91,6 +91,7 @@ export async function startScheduler() {
   startInternalAgentsScheduler();
 
   await catchUpOnBoot();
+
 }
 
 export async function runTick(userId: number, name: string) {
@@ -107,7 +108,7 @@ export async function runTick(userId: number, name: string) {
     try {
       const cur = await query<{ state: any }>('SELECT state FROM connectors WHERE user_id=$1 AND name=$2', [userId, name]);
       const merged = { ...(cur[0]?.state ?? {}), lastTickAt: new Date().toISOString() };
-      await query('UPDATE connectors SET state=$1, updated_at=now() WHERE user_id=$2 AND name=$3', [merged, userId, name]);
+      await query('UPDATE connectors SET state=$1::jsonb, updated_at=now() WHERE user_id=$2 AND name=$3', [JSON.stringify(merged), userId, name]);
     } catch {}
   }
 }

@@ -10,6 +10,9 @@ const BUILTIN_COMMANDS = [
   { cmd: '/connectors', desc: 'Show enabled/disabled connectors.' },
   { cmd: '/who <name>', desc: 'Pull up everything I know about a person.' },
   { cmd: '/mail <query>', desc: 'Search emails across linked accounts.' },
+  { cmd: '/brains', desc: 'List my connected brains (the people I can query).' },
+  { cmd: '/network', desc: 'Alias of /brains.' },
+  { cmd: '/connections', desc: 'Alias of /brains.' },
 ];
 
 async function buildToolCatalog(userId: number): Promise<{ connectorsLine: string; toolsList: string; commandsList: string }> {
@@ -110,11 +113,18 @@ export async function buildSystemContext(userId: number): Promise<string> {
   } catch {}
 
   parts.push(
+    'BRAIN NETWORK — quando l\'utente cita un peer ("chiedi a Mattia / Federico / <email> info su X", "vedi cosa sa <peer> su Y", "estrai dal cervello di <peer>"), DEVI chiamare `mcp__super_agent__agent_network_query_peer` con `target` = nome/cognome o email (il backend fa fuzzy match sui peer collegati) e una query naturale chiara. Avvisalo che la richiesta è stata inviata e che il peer deve approvare. Se non sei sicuro di chi è il peer giusto usa `mcp__super_agent__agent_network_resolve_peer` prima. Quando le note arrivano (cartella `shared/<peer>/`), le puoi citare normalmente — usano frontmatter `origin:` per indicare la fonte.\n\n' +
+    'Quando l\'utente scrive `/brains`, `/network`, `/connections`, "i miei cervelli", "mostrami i cervelli (collegati)", "lista cervelli", "chi conosco", "miei collegamenti", "con chi sono connesso" — chiama `mcp__super_agent__agent_network_peers` e mostra UN solo messaggio compatto in italiano (o inglese se language=en):\n' +
+    '  - se 0 peer: "🧠 Nessun cervello collegato ancora. Vai su Network → Scopri per aggiungerne."\n' +
+    '  - altrimenti header `🧠 *I tuoi cervelli collegati:*` poi per ognuno UNA riga: `• <nome o email> · <stato>` dove stato = ✓ collegato / ⏳ in attesa / 🚫 bloccato. Termina con suggerimento: "_Scrivi \'chiedi a <nome> info su X\' per interrogare uno di loro._" Mai dump JSON.'
+  );
+
+  parts.push(
     'BUSINESS ROADMAP — THIS IS THE ANCHOR OF EVERY CONVERSATION.\n' +
     'You own `meta/business-roadmap.md`. It is NOT a side artifact: it is the single source of truth for what we are building together. Every interaction must reference it explicitly or implicitly.\n\n' +
     (roadmapSummary
-      ? 'CURRENT ROADMAP STATE (compact view, refresh with `mcp__super_agent__roadmap_get` for full):\n```\n' + roadmapSummary + '\n```\n\n'
-      : '(roadmap not yet initialized — call `mcp__super_agent__roadmap_get` to create it on first business turn)\n\n') +
+      ? 'CURRENT ROADMAP STATE (compact view, refresh with `mcp__super_agent__agent_roadmap_get` for full):\n```\n' + roadmapSummary + '\n```\n\n'
+      : '(roadmap not yet initialized — call `mcp__super_agent__agent_roadmap_get` to create it on first business turn)\n\n') +
     'HARD RULES:\n' +
     '1. At the START of every business-relevant turn, mentally check: which roadmap item does this message advance, answer, or block?\n' +
     '2. If the user just gave info that answers a Discovery item → call `roadmap_set_status` to mark it done, then briefly acknowledge ("Ottimo, segnato. Adesso sappiamo che…").\n' +
@@ -147,7 +157,7 @@ export async function buildSystemContext(userId: number): Promise<string> {
 export async function buildTurnPrompt(userId: number, userMessage: string, recentHistory: { direction: string; content: string }[]): Promise<string> {
   const sys = await buildSystemContext(userId);
   const hist = recentHistory.slice(-10).map((m) => `${m.direction === 'in' ? 'USER' : 'YOU'}: ${m.content}`).join('\n');
-  return `${sys}\n\nRECENT CONVERSATION:\n${hist}\n\nNEW USER MESSAGE:\n${userMessage}\n\nINSTRUCTIONS:\n1. FIRST mental step: which roadmap item does this message touch? (Discovery answer? Strategy decision? Execution update? Off-roadmap?)\n2. If user answered a Discovery item → call \`mcp__super_agent__roadmap_set_status\` to mark done.\n3. Save other meaningful user facts to vault via Write (with proper \`related:\` links).\n4. Grep/Glob vault for prior context BEFORE answering.\n5. Reply concisely. End with the mandated roadmap-anchored question/commitment/closure (see HARD RULES rule 4). Output ONLY reply text. No preamble.\n6. Split via \`<<MSG>>\`.\n`;
+  return `${sys}\n\nRECENT CONVERSATION:\n${hist}\n\nNEW USER MESSAGE:\n${userMessage}\n\nINSTRUCTIONS:\n1. FIRST mental step: which roadmap item does this message touch? (Discovery answer? Strategy decision? Execution update? Off-roadmap?)\n2. If user answered a Discovery item → call \`mcp__super_agent__agent_roadmap_set_status\` to mark done.\n3. Save other meaningful user facts to vault via Write (with proper \`related:\` links).\n4. Grep/Glob vault for prior context BEFORE answering.\n5. Reply concisely. End with the mandated roadmap-anchored question/commitment/closure (see HARD RULES rule 4). Output ONLY reply text. No preamble.\n6. Split via \`<<MSG>>\`.\n`;
 }
 
 export async function buildProactivePrompt(userId: number, trigger: string, payload: any): Promise<string> {

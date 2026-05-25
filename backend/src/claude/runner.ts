@@ -78,14 +78,14 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   try {
     const rows = await query<{ id: number }>(
       `INSERT INTO agent_runs(user_id,kind,status,model,duration_ms,input_tokens,output_tokens,cache_creation_tokens,cache_read_tokens,cost_usd,num_turns,prompt,result,meta,error)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15) RETURNING id`,
       [
         userId, kind, ok ? 'ok' : 'error', config.claudeModel, durationMs,
         out.inputTokens ?? null, out.outputTokens ?? null,
         out.cacheCreationTokens ?? null, out.cacheReadTokens ?? null,
         out.costUsd ?? null, out.numTurns ?? null,
         prompt.slice(0, 8000), text.slice(0, 8000),
-        opts.meta ?? {},
+        JSON.stringify(opts.meta ?? {}),
         ok ? null : (result.stderr || `exit ${result.code}`).slice(0, 2000),
       ]
     );

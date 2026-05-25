@@ -11,6 +11,35 @@ import { requireUser } from '../auth/index.js';
 
 export const router = Router();
 
+// ===== MCP bridge endpoints — auth via service header `x-super-agent-user`.
+// These MUST be mounted BEFORE requireUser middleware so the local MCP bridge
+// (which has no cookie) can still list/invoke tools.
+router.get('/tools', (_req, res) => {
+  res.json(listTools().map((t) => ({
+    name: t.fullName, connector: t.connector, description: t.description, inputSchema: t.inputSchema,
+  })));
+});
+router.post('/tools/:name', async (req, res) => {
+  const headerUid = Number(req.header('x-super-agent-user') || '');
+  // Prefer header (bridge call) — fall back to cookie session if present
+  let userId = Number.isFinite(headerUid) && headerUid > 0 ? headerUid : NaN;
+  if (!userId) {
+    // Try cookie auth manually
+    const { verifyToken } = await import('../auth/index.js');
+    const { config } = await import('../config.js');
+    const tok = (req as any).cookies?.[config.cookieName];
+    const d = tok ? verifyToken(tok) : null;
+    if (d) userId = d.uid;
+  }
+  if (!userId) return res.status(401).json({ ok: false, error: 'missing user id (header or cookie)' });
+  try {
+    const out = await invokeTool(userId, req.params.name, req.body ?? {});
+    res.json({ ok: true, result: out });
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
+
 // All routes below require auth
 router.use(requireUser);
 
@@ -108,32 +137,19 @@ router.post('/connectors/imap/test', async (req, res) => {
   }
 });
 
-router.get('/tools', (_req, res) => {
-  res.json(listTools().map((t) => ({
-    name: t.fullName, connector: t.connector, description: t.description, inputSchema: t.inputSchema,
-  })));
-});
-
-// Tool invocation: prefer header from MCP bridge, fallback to authed cookie user
-router.post('/tools/:name', async (req, res) => {
-  const headerUid = Number(req.header('x-super-agent-user') || '');
-  const userId = Number.isFinite(headerUid) && headerUid > 0 ? headerUid : req.user!.id;
-  try {
-    const out = await invokeTool(userId, req.params.name, req.body ?? {});
-    res.json({ ok: true, result: out });
-  } catch (e: any) {
-    res.status(400).json({ ok: false, error: String(e?.message ?? e) });
-  }
-});
-
 router.get('/brain/graph', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
+  const origin = req.query.origin ? String(req.query.origin) : 'all'; // 'all' | 'native' | <email>
   const g = await buildGraph(req.user!.id);
-  if (filter === 'all') return res.json(g);
-  const nodes = g.nodes.filter((n) => n.visibility === filter);
+  let nodes = g.nodes;
+  if (filter !== 'all') nodes = nodes.filter((n) => n.visibility === filter);
+  if (origin === 'native') nodes = nodes.filter((n) => !n.origin_user_id);
+  else if (origin !== 'all') nodes = nodes.filter((n) => n.origin_email === origin);
   const ids = new Set(nodes.map((n) => n.id));
   const links = g.links.filter((l) => ids.has(l.source) && ids.has(l.target));
-  res.json({ nodes, links });
+  // Collect distinct origin emails for the filter UI
+  const origins = Array.from(new Set(g.nodes.map((n) => n.origin_email).filter(Boolean))) as string[];
+  res.json({ nodes, links, origins });
 });
 
 // Internal agents
@@ -255,8 +271,8 @@ router.post('/tasks', async (req, res) => {
   const cron = (await import('node-cron')).default;
   if (!cron.validate(expr)) return res.status(400).json({ error: `invalid cron: ${expr}` });
   const rows = await query<{ id: number }>(
-    `INSERT INTO scheduled_tasks(user_id,name,cron,action_type,action_payload,enabled) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
-    [req.user!.id, name, expr, action_type, action_payload ?? {}, enabled]
+    `INSERT INTO scheduled_tasks(user_id,name,cron,action_type,action_payload,enabled) VALUES($1,$2,$3,$4,$5::jsonb,$6) RETURNING id`,
+    [req.user!.id, name, expr, action_type, JSON.stringify(action_payload ?? {}), enabled]
   );
   const { refreshTasks } = await import('../scheduler/tasks.js');
   await refreshTasks();
@@ -289,6 +305,81 @@ router.post('/tasks/:id/run', async (req, res) => {
   const { runTaskById } = await import('../scheduler/tasks.js');
   await runTaskById(req.user!.id, Number(req.params.id));
   res.json({ ok: true });
+});
+
+// Network (P2P brain sharing) — discovery: all users with public-ish blurb
+router.get('/network/discover', async (req, res) => {
+  const me = req.user!.id;
+  const users = await query<any>(
+    `SELECT u.id::int, u.email, u.name,
+            (SELECT value FROM settings WHERE user_id=u.id AND key='profile')   AS profile,
+            (SELECT value FROM settings WHERE user_id=u.id AND key='business')  AS business
+       FROM users u WHERE u.id <> $1 ORDER BY u.created_at DESC`,
+    [me]
+  );
+  const conns = await query<any>(
+    `SELECT a_user_id::int, b_user_id::int, status, initiator_user_id::int
+       FROM user_connections WHERE a_user_id=$1 OR b_user_id=$1`, [me]
+  );
+  const byPeer = new Map<number, any>();
+  for (const c of conns) {
+    const peer = c.a_user_id === me ? c.b_user_id : c.a_user_id;
+    byPeer.set(peer, c);
+  }
+  res.json(users.map((u: any) => {
+    const c = byPeer.get(u.id);
+    return {
+      id: u.id, email: u.email, name: u.name,
+      role: u.profile?.role ?? null,
+      company: u.business?.company ?? null,
+      what: u.business?.what ?? null,
+      connection_status: c?.status ?? 'none',
+      connection_initiator: c?.initiator_user_id ?? null,
+    };
+  }));
+});
+
+router.get('/network/peers', async (req, res) => {
+  const m = await import('../network/index.js');
+  res.json(await m.listPeers(req.user!.id));
+});
+router.post('/network/connect', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.requestConnection(req.user!.id, String(req.body?.email ?? ''))); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/network/connection/:id/respond', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.respondConnection(req.user!.id, Number(req.params.id), !!req.body?.accept)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/network/share/incoming', async (req, res) => {
+  const m = await import('../network/index.js');
+  res.json(await m.listIncomingShareRequests(req.user!.id));
+});
+router.get('/network/share/outgoing', async (req, res) => {
+  const m = await import('../network/index.js');
+  res.json(await m.listOutgoingShareRequests(req.user!.id));
+});
+router.post('/network/share', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.createShareRequest(req.user!.id, String(req.body?.email ?? ''), String(req.body?.query ?? ''))); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/network/share/:id/review', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.triggerReview(Number(req.params.id), req.user!.id)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/network/share/:id/approve', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.approveShareRequest(req.user!.id, Number(req.params.id), req.body?.paths ?? [])); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/network/share/:id/deny', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.denyShareRequest(req.user!.id, Number(req.params.id), req.body?.reason)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
 router.get('/mcp/external', async (req, res) => {

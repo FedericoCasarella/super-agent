@@ -58,9 +58,9 @@ export async function runInternalAgent(userId: number, name: string) {
     report = { error: String(e?.message ?? e) };
   }
   await query(
-    `UPDATE internal_agents SET last_run_at=now(), last_status=$3, last_report=$4, updated_at=now()
+    `UPDATE internal_agents SET last_run_at=now(), last_status=$3, last_report=$4::jsonb, updated_at=now()
      WHERE user_id=$1 AND name=$2`,
-    [userId, name, status, report]
+    [userId, name, status, JSON.stringify(report ?? {})]
   );
   // Telegram notify if enabled
   try {

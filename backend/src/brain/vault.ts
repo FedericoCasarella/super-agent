@@ -101,7 +101,7 @@ export async function searchNotes(userId: number, q: string, limit = 20): Promis
 async function indexNote(userId: number, relPath: string, fm: Record<string, any>, content: string) {
   await query(
     `INSERT INTO brain_index(user_id,path,kind,title,tags,summary,refs,visibility,updated_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,now())
+     VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,now())
      ON CONFLICT(user_id,path) DO UPDATE SET kind=EXCLUDED.kind, title=EXCLUDED.title,
        tags=EXCLUDED.tags, summary=EXCLUDED.summary, refs=EXCLUDED.refs,
        visibility=COALESCE(EXCLUDED.visibility, brain_index.visibility), updated_at=now()`,
@@ -112,7 +112,7 @@ async function indexNote(userId: number, relPath: string, fm: Record<string, any
       fm.title ?? null,
       fm.tags ?? [],
       content.slice(0, 280),
-      fm.refs ?? {},
+      JSON.stringify(fm.refs ?? {}),
       fm.visibility ?? null,
     ]
   );

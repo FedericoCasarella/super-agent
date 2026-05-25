@@ -174,6 +174,41 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 ALTER TABLE internal_agents ALTER COLUMN notify_on_run SET DEFAULT true;
 
+-- P2P Brain Network
+CREATE TABLE IF NOT EXISTS user_connections (
+  id BIGSERIAL PRIMARY KEY,
+  a_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  b_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('pending','accepted','blocked')) DEFAULT 'pending',
+  initiator_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at TIMESTAMPTZ,
+  CONSTRAINT user_connections_pair_uniq UNIQUE (a_user_id, b_user_id),
+  CONSTRAINT user_connections_order CHECK (a_user_id < b_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS brain_share_requests (
+  id BIGSERIAL PRIMARY KEY,
+  requester_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  query_text TEXT NOT NULL,
+  agent_review JSONB,
+  approved_items JSONB,
+  status TEXT NOT NULL CHECK (status IN ('pending','reviewed','approved','denied','delivered','expired')) DEFAULT 'pending',
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS brain_share_requests_target_idx ON brain_share_requests(target_user_id, status);
+CREATE INDEX IF NOT EXISTS brain_share_requests_requester_idx ON brain_share_requests(requester_user_id, status);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='brain_index' AND column_name='origin_user_id') THEN
+    ALTER TABLE brain_index ADD COLUMN origin_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS brain_index_origin_idx ON brain_index(origin_user_id);
+
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='brain_index' AND column_name='visibility') THEN
     ALTER TABLE brain_index ADD COLUMN visibility TEXT;

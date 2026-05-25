@@ -1,6 +1,7 @@
 import type { Connector } from '../../types.js';
 import { getSetting, setSetting } from '../../../db/index.js';
 import { readNote, writeNote } from '../../../brain/vault.js';
+import * as net from '../../../network/index.js';
 
 const ROADMAP_PATH = 'meta/business-roadmap.md';
 
@@ -111,6 +112,90 @@ const connector: Connector = {
         await writeNote(ctx.userId, ROADMAP_PATH, { kind: 'roadmap', title: 'Business Roadmap', tags: ['roadmap', 'meta'], updated: new Date().toISOString() }, content);
         return { ok: true, path: ROADMAP_PATH };
       },
+    },
+    {
+      name: 'network_peers',
+      description: 'List my brain-network peers (connected users). Shows connection status and direction.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => net.listPeers(ctx.userId),
+    },
+    {
+      name: 'network_request_connection',
+      description: 'Request a brain-network connection with another user by email. They must accept before queries can flow.',
+      inputSchema: {
+        type: 'object',
+        properties: { email: { type: 'string' } },
+        required: ['email'], additionalProperties: false,
+      },
+      handler: async (ctx, { email }) => net.requestConnection(ctx.userId, email),
+    },
+    {
+      name: 'network_respond_connection',
+      description: 'Accept or block an incoming connection request.',
+      inputSchema: {
+        type: 'object',
+        properties: { connection_id: { type: 'number' }, accept: { type: 'boolean' } },
+        required: ['connection_id', 'accept'], additionalProperties: false,
+      },
+      handler: async (ctx, { connection_id, accept }) => net.respondConnection(ctx.userId, connection_id, !!accept),
+    },
+    {
+      name: 'network_query_peer',
+      description: 'Ask a connected peer\'s brain a question. `target` can be an email OR a name/surname (e.g. "Mattia", "Mattia Calastri") — matched fuzzy among your accepted peers. Triggers human-in-the-loop review.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Peer email or name/surname.' },
+          query: { type: 'string', description: 'Natural-language question to ask the peer\'s brain.' },
+        },
+        required: ['target', 'query'], additionalProperties: false,
+      },
+      handler: async (ctx, { target, query: q }) => net.createShareRequest(ctx.userId, target, q),
+    },
+    {
+      name: 'network_resolve_peer',
+      description: 'Resolve a name or email to a peer record. Use when uncertain which peer the user means.',
+      inputSchema: {
+        type: 'object',
+        properties: { identifier: { type: 'string' } },
+        required: ['identifier'], additionalProperties: false,
+      },
+      handler: async (ctx, { identifier }) => net.resolvePeer(ctx.userId, identifier),
+    },
+    {
+      name: 'network_pending_incoming',
+      description: 'List share requests waiting for my approval (other users asking my brain).',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => net.listIncomingShareRequests(ctx.userId),
+    },
+    {
+      name: 'network_pending_outgoing',
+      description: 'List share requests I sent and their status.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => net.listOutgoingShareRequests(ctx.userId),
+    },
+    {
+      name: 'network_approve_share',
+      description: 'Approve a brain-share request, picking which candidate notes to actually share.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          request_id: { type: 'number' },
+          paths: { type: 'array', items: { type: 'string' }, description: 'Subset of candidate paths to share. Empty = share nothing (use deny instead).' },
+        },
+        required: ['request_id', 'paths'], additionalProperties: false,
+      },
+      handler: async (ctx, { request_id, paths }) => net.approveShareRequest(ctx.userId, request_id, paths),
+    },
+    {
+      name: 'network_deny_share',
+      description: 'Deny a brain-share request with optional reason.',
+      inputSchema: {
+        type: 'object',
+        properties: { request_id: { type: 'number' }, reason: { type: 'string' } },
+        required: ['request_id'], additionalProperties: false,
+      },
+      handler: async (ctx, { request_id, reason }) => net.denyShareRequest(ctx.userId, request_id, reason),
     },
     {
       name: 'roadmap_set_status',

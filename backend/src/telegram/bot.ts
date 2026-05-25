@@ -37,6 +37,20 @@ async function startBotForUser(userId: number) {
   await stopBotForUser(userId);
   const bot = new Telegraf(cfg.token);
 
+  // Explicit /start handler — Telegraf treats /start as a command and may
+  // bypass generic on('message') depending on update type / entities.
+  bot.start(async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (!cur?.chatId) {
+      await setSetting(userId, 'telegram', { ...cur, chatId });
+    } else if (cur.chatId !== chatId) {
+      await ctx.reply('Not authorized.');
+      return;
+    }
+    await ctx.reply("Linked. I'm online.");
+  });
+
   bot.on('message', async (ctx) => {
     const chatId = ctx.chat.id;
     const cur = await getSetting<any>(userId, 'telegram');
@@ -76,8 +90,19 @@ async function startBotForUser(userId: number) {
   });
 
   bot.catch((err) => console.error(`[telegram:${userId}] error`, err));
-  bot.launch().catch((e) => console.error(`[telegram:${userId}] launch`, e));
   bots.set(userId, { bot, token: cfg.token });
+  // Launch with retry on 409 Conflict (stale polling from prior instance)
+  const launchWithRetry = (attempt = 0) => {
+    bot.launch().catch((e: any) => {
+      const is409 = e?.response?.error_code === 409;
+      const delay = Math.min(2000 + attempt * 3000, 30_000);
+      console.error(`[telegram:${userId}] launch fail (attempt ${attempt}, retry in ${delay}ms)`, is409 ? '409 Conflict' : e?.message ?? e);
+      if (attempt < 6 && bots.get(userId)?.bot === bot) {
+        setTimeout(() => launchWithRetry(attempt + 1), delay);
+      }
+    });
+  };
+  launchWithRetry();
   console.log(`[telegram:${userId}] started`);
 }
 

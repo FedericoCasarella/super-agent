@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import ForceGraph2D, { ForceGraphMethods } from 'react-force-graph-2d';
 import { api } from '../api';
 
-type Node = { id: string; title: string; kind: string; tags: string[]; size: number; visibility?: 'protected' | 'public' | null; x?: number; y?: number };
+type Node = { id: string; title: string; kind: string; tags: string[]; size: number; visibility?: 'protected' | 'public' | null; origin_email?: string | null; x?: number; y?: number };
 type Link = { source: string | Node; target: string | Node };
 
 // Theme gradient stops (inner-bright → outer-deep), tuned to software palette
@@ -26,7 +26,28 @@ const SYNAPSE    = '#7dd3fc';
 const LABEL = 'rgba(220, 220, 230, 0.85)';
 const LABEL_DIM = 'rgba(180, 180, 200, 0.45)';
 
-export default function BrainGraph3D({ onSelect, onDeselect, visibilityFilter = 'all' }: { onSelect: (id: string) => void; onDeselect?: () => void; visibilityFilter?: 'all' | 'public' | 'protected' }) {
+// Stable hue per origin email
+function hashHue(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
+}
+function originColor(email: string): string {
+  return `hsl(${hashHue(email)}, 70%, 62%)`;
+}
+
+export default function BrainGraph3D({
+  onSelect, onDeselect,
+  visibilityFilter = 'all',
+  originFilter = 'all',
+  onOriginsChange,
+}: {
+  onSelect: (id: string) => void;
+  onDeselect?: () => void;
+  visibilityFilter?: 'all' | 'public' | 'protected';
+  originFilter?: string;
+  onOriginsChange?: (origins: string[]) => void;
+}) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
   const [hover, setHover] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -34,7 +55,12 @@ export default function BrainGraph3D({ onSelect, onDeselect, visibilityFilter = 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
 
-  useEffect(() => { api.brainGraphFiltered(visibilityFilter).then(setData).catch(() => {}); }, [visibilityFilter]);
+  useEffect(() => {
+    api.brainGraphFiltered(visibilityFilter, originFilter).then((g) => {
+      setData(g);
+      if (onOriginsChange) onOriginsChange(g.origins ?? []);
+    }).catch(() => {});
+  }, [visibilityFilter, originFilter]);
 
   // Spread nodes further apart and add collision so they don't overlap
   useEffect(() => {
@@ -104,28 +130,58 @@ export default function BrainGraph3D({ onSelect, onDeselect, visibilityFilter = 
 
   const nodePaint = useCallback((node: any, ctx: CanvasRenderingContext2D, scale: number) => {
     if (node.x == null || node.y == null) return;
+    // Foreign-origin nodes override theme color with a per-user hue
+    const isForeign = !!node.origin_email;
     const stops: GradStops =
       node.visibility === 'protected' ? VIS_PROTECTED_GRAD
       : node.visibility === 'public'  ? VIS_PUBLIC_GRAD
       : (KIND_GRAD[node.kind] ?? DEFAULT_GRAD);
-    const color = stops[1]; // mid tone = signature color
-    const darkRim = stops[2];
-    const r = 4 + Math.sqrt(node.size) * 1.6;
+    const color = isForeign ? originColor(node.origin_email) : stops[1];
+    const darkRim = isForeign ? `hsl(${hashHue(node.origin_email)}, 70%, 35%)` : stops[2];
+    const r = (isForeign ? 5 : 4) + Math.sqrt(node.size) * 1.6;
     const dim = hi && !hi.has(node.id);
 
     ctx.save();
     ctx.globalAlpha = dim ? 0.3 : 1;
 
-    // Solid filled disc — flat theme color
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Crisp darker rim
-    ctx.strokeStyle = darkRim;
-    ctx.lineWidth = 1.2 / scale;
-    ctx.stroke();
+    if (isForeign) {
+      // Foreign brain: rounded square with peer hue + 🧠 glyph centered
+      const side = r * 2;
+      const radius = r * 0.45;
+      const x0 = node.x - r, y0 = node.y - r;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x0 + radius, y0);
+      ctx.lineTo(x0 + side - radius, y0);
+      ctx.quadraticCurveTo(x0 + side, y0, x0 + side, y0 + radius);
+      ctx.lineTo(x0 + side, y0 + side - radius);
+      ctx.quadraticCurveTo(x0 + side, y0 + side, x0 + side - radius, y0 + side);
+      ctx.lineTo(x0 + radius, y0 + side);
+      ctx.quadraticCurveTo(x0, y0 + side, x0, y0 + side - radius);
+      ctx.lineTo(x0, y0 + radius);
+      ctx.quadraticCurveTo(x0, y0, x0 + radius, y0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = darkRim;
+      ctx.lineWidth = 1.2 / scale;
+      ctx.stroke();
+      // 🧠 brain glyph
+      const glyphSize = r * 1.3;
+      ctx.font = `${glyphSize}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.fillText('🧠', node.x, node.y + glyphSize * 0.05);
+    } else {
+      // Native: solid disc
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = darkRim;
+      ctx.lineWidth = 1.2 / scale;
+      ctx.stroke();
+    }
 
     // Selection / hover ring
     if (selected === node.id || hover === node.id) {

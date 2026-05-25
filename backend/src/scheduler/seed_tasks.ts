@@ -50,8 +50,8 @@ export async function seedDefaultTasksForUser(userId: number) {
     if (existing.length) continue;
     await query(
       `INSERT INTO scheduled_tasks(user_id, name, cron, action_type, action_payload, enabled)
-       VALUES($1, $2, $3, $4, $5, true)`,
-      [userId, def.name, def.cron, def.action_type, def.action_payload]
+       VALUES($1, $2, $3, $4, $5::jsonb, true)`,
+      [userId, def.name, def.cron, def.action_type, JSON.stringify(def.action_payload)]
     );
     created++;
   }

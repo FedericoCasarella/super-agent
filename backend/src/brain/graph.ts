@@ -3,7 +3,16 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import { getVaultRoot } from './vault.js';
 
-export type GraphNode = { id: string; title: string; kind: string; tags: string[]; size: number; visibility: 'protected' | 'public' | null };
+export type GraphNode = {
+  id: string;
+  title: string;
+  kind: string;
+  tags: string[];
+  size: number;
+  visibility: 'protected' | 'public' | null;
+  origin_user_id: number | null;
+  origin_email: string | null;
+};
 export type GraphLink = { source: string; target: string };
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
@@ -46,6 +55,8 @@ export async function buildGraph(userId: number): Promise<{ nodes: GraphNode[]; 
     try {
       const raw = await fs.readFile(path.join(root, rel), 'utf8');
       const { data, content } = matter(raw);
+      const originUser = data.origin?.user_id ?? null;
+      const originEmail = data.origin?.user_email ?? null;
       nodes.set(rel, {
         id: rel,
         title: data.title || path.basename(rel, '.md'),
@@ -53,6 +64,8 @@ export async function buildGraph(userId: number): Promise<{ nodes: GraphNode[]; 
         tags: data.tags ?? [],
         size: 1,
         visibility: (data.visibility === 'protected' || data.visibility === 'public') ? data.visibility : null,
+        origin_user_id: typeof originUser === 'number' ? originUser : null,
+        origin_email: typeof originEmail === 'string' ? originEmail : null,
       });
       const targets = new Set<string>();
       const related = data.related;

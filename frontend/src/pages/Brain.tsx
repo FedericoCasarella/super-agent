@@ -10,6 +10,8 @@ type Filter = 'all' | 'public' | 'protected';
 export default function Brain() {
   const [tab, setTab] = useState<Tab>('graph');
   const [filter, setFilter] = useState<Filter>('all');
+  const [originFilter, setOriginFilter] = useState<string>('all');
+  const [origins, setOrigins] = useState<string[]>([]);
   const [q, setQ] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [note, setNote] = useState<any | null>(null);
@@ -31,12 +33,24 @@ export default function Brain() {
       ))}
     </div>
   );
+  const OriginBar = (
+    <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1 flex-wrap">
+      <Button size="sm" variant={originFilter === 'all' ? 'primary' : 'ghost'} onClick={() => setOriginFilter('all')}>Origini: tutte</Button>
+      <Button size="sm" variant={originFilter === 'native' ? 'primary' : 'ghost'} onClick={() => setOriginFilter('native')}>Solo mie</Button>
+      {origins.map((e) => (
+        <Button key={e} size="sm" variant={originFilter === e ? 'primary' : 'ghost'} onClick={() => setOriginFilter(e)}>
+          <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ background: `hsl(${[...e].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0) % 360}, 70%, 62%)` }} />
+          {e}
+        </Button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="space-y-5 h-full flex flex-col">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-semibold text-gradient">Brain</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {FilterBar}
           <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
             <Button variant={tab === 'graph' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('graph')}>Graph</Button>
@@ -44,11 +58,18 @@ export default function Brain() {
           </div>
         </div>
       </div>
+      {tab === 'graph' && OriginBar}
 
       {tab === 'graph' ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
           <Card className="lg:col-span-2 p-0 overflow-hidden h-[78vh]">
-            <BrainGraph3D onSelect={open} onDeselect={() => setNote(null)} visibilityFilter={filter} />
+            <BrainGraph3D
+              onSelect={open}
+              onDeselect={() => setNote(null)}
+              visibilityFilter={filter}
+              originFilter={originFilter}
+              onOriginsChange={setOrigins}
+            />
           </Card>
           <Card className="h-[78vh] overflow-y-auto">
             {!note ? (
