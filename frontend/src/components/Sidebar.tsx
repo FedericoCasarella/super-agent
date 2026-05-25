@@ -86,16 +86,16 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
         <div className="mt-auto px-1 pt-4 border-t border-border/60 space-y-2">
           {!collapsed && <div className="text-xs text-muted truncate font-medium px-1">{user?.name || user?.email}</div>}
           <Button variant="ghost" size="sm" className={`w-full ${collapsed ? 'md:px-2' : ''}`} onClick={logout}>
-            {collapsed ? '↩' : 'Logout'}
+            {collapsed ? '↩' : t('nav.logout')}
           </Button>
           <Button
             variant="ghost"
             size="sm"
             className="hidden md:flex w-full"
             onClick={onToggleCollapse}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? t('nav.expand') : t('nav.collapseTip')}
           >
-            {collapsed ? '»' : '« Collapse'}
+            {collapsed ? '»' : t('nav.collapse')}
           </Button>
           <div className={`text-[10px] text-muted/70 text-center tracking-widest ${collapsed ? 'md:hidden' : ''}`}>v0.1.0</div>
         </div>
