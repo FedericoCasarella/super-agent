@@ -36,6 +36,30 @@ function originColor(email: string): string {
   return `hsl(${hashHue(email)}, 70%, 62%)`;
 }
 
+// Lucide `brain` icon — paths only. Stroke recolored per peer hue. No background.
+const BRAIN_PATHS = [
+  'M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z',
+  'M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z',
+  'M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4',
+  'M17.599 6.5a3 3 0 0 0 .399-1.375',
+  'M6.003 5.125A3 3 0 0 0 6.401 6.5',
+  'M3.477 10.896a4 4 0 0 1 .585-.396',
+  'M19.938 10.5a4 4 0 0 1 .585.396',
+  'M6 18a4 4 0 0 1-1.967-.516',
+  'M19.967 17.484A4 4 0 0 1 18 18',
+];
+const brainImgCache = new Map<string, HTMLImageElement>();
+function brainImageFor(color: string): HTMLImageElement {
+  let img = brainImgCache.get(color);
+  if (img) return img;
+  const paths = BRAIN_PATHS.map((d) => `<path d="${d}"/>`).join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  img = new Image();
+  img.src = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  brainImgCache.set(color, img);
+  return img;
+}
+
 export default function BrainGraph3D({
   onSelect, onDeselect,
   visibilityFilter = 'all',
@@ -145,33 +169,22 @@ export default function BrainGraph3D({
     ctx.globalAlpha = dim ? 0.3 : 1;
 
     if (isForeign) {
-      // Foreign brain: rounded square with peer hue + 🧠 glyph centered
-      const side = r * 2;
-      const radius = r * 0.45;
-      const x0 = node.x - r, y0 = node.y - r;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(x0 + radius, y0);
-      ctx.lineTo(x0 + side - radius, y0);
-      ctx.quadraticCurveTo(x0 + side, y0, x0 + side, y0 + radius);
-      ctx.lineTo(x0 + side, y0 + side - radius);
-      ctx.quadraticCurveTo(x0 + side, y0 + side, x0 + side - radius, y0 + side);
-      ctx.lineTo(x0 + radius, y0 + side);
-      ctx.quadraticCurveTo(x0, y0 + side, x0, y0 + side - radius);
-      ctx.lineTo(x0, y0 + radius);
-      ctx.quadraticCurveTo(x0, y0, x0 + radius, y0);
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = darkRim;
-      ctx.lineWidth = 1.2 / scale;
-      ctx.stroke();
-      // 🧠 brain glyph
-      const glyphSize = r * 1.3;
-      ctx.font = `${glyphSize}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(255,255,255,0.95)';
-      ctx.fillText('🧠', node.x, node.y + glyphSize * 0.05);
+      // Foreign brain: lucide brain icon stroked in peer hue, NO background
+      const img = brainImageFor(color);
+      const size = r * 2.4;
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, node.x - size / 2, node.y - size / 2, size, size);
+      } else {
+        // First-paint fallback while SVG loads — small dot so node is visible
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        // Trigger repaint when image is ready
+        img.onload = () => {
+          /* canvas-graph redraws on next sim tick; nothing else needed */
+        };
+      }
     } else {
       // Native: solid disc
       ctx.fillStyle = color;

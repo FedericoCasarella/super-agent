@@ -9,6 +9,7 @@ type Ctx = {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name?: string) => Promise<{ claimedOrphans?: boolean }>;
   logout: () => Promise<void>;
+  deleteAccount: (password: string) => Promise<void>;
   refresh: () => Promise<void>;
 };
 
@@ -34,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async login(email, password) { const r = await auth.login(email, password); setUser(r.user); await refresh(); },
       async register(email, password, name) { const r = await auth.register(email, password, name); setUser(r.user); await refresh(); return { claimedOrphans: r.claimedOrphans }; },
       async logout() { await auth.logout(); setUser(null); await refresh(); },
+      async deleteAccount(password: string) { await auth.deleteAccount(password); setUser(null); await refresh(); },
       refresh,
     }}>{children}</AuthContext.Provider>
   );

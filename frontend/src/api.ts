@@ -18,6 +18,7 @@ export const auth = {
   login: (email: string, password: string) =>
     req<{ user: any }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   logout: () => req('/auth/logout', { method: 'POST' }),
+  deleteAccount: (password: string) => req('/auth/me', { method: 'DELETE', body: JSON.stringify({ password }) }),
 };
 
 export const api = {

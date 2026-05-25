@@ -55,3 +55,25 @@ authRouter.post('/logout', requireUser, (_req, res) => {
   clearAuthCookie(res);
   res.json({ ok: true });
 });
+
+authRouter.delete('/me', requireUser, async (req, res) => {
+  const { password } = req.body ?? {};
+  if (!password) return res.status(400).json({ error: 'password required' });
+  const { getUserByEmail, verifyPassword } = await import('./index.js');
+  const me = req.user!;
+  const full = await getUserByEmail(me.email);
+  if (!full) return res.status(404).json({ error: 'user not found' });
+  const ok = await verifyPassword(password, full.pass_hash);
+  if (!ok) return res.status(401).json({ error: 'wrong password' });
+
+  // Stop Telegram bot before destroying DB rows
+  try {
+    const { stopBotForUser } = await import('../telegram/bot.js');
+    await stopBotForUser(me.id);
+  } catch {}
+
+  const { query } = await import('../db/index.js');
+  await query('DELETE FROM users WHERE id=$1', [me.id]);
+  clearAuthCookie(res);
+  res.json({ ok: true });
+});

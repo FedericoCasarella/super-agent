@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Field, Input, Textarea, Modal, Banner, Chip, Toggle, useToast } from '../components/ui';
 import { useI18n, Lang } from '../i18n';
+import { useAuth } from '../auth';
 
 export default function Settings() {
   const [s, setS] = useState<any>(null);
@@ -23,6 +24,22 @@ export default function Settings() {
 
   const toast = useToast();
   const { t, lang, setLang } = useI18n();
+  const { deleteAccount } = useAuth();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  async function doDeleteAccount() {
+    if (!deletePassword) return;
+    setDeleting(true);
+    try {
+      await deleteAccount(deletePassword);
+      toast.push(lang === 'it' ? 'Account eliminato' : 'Account deleted', 'on');
+    } catch (e: any) {
+      toast.push(e.message, 'err');
+      setDeleting(false);
+    }
+  }
 
   async function changeVault() {
     try {
@@ -127,6 +144,43 @@ export default function Settings() {
         <Field label={t('settings.replaceToken')}><Input className="font-mono" placeholder="123456:ABC-…" value={token} onChange={(e) => setToken(e.target.value)} /></Field>
         <div className="mt-4 flex justify-end"><Button onClick={saveToken} disabled={!token}>{t('settings.updateToken')}</Button></div>
       </Card>
+
+      <Card className="border-err/40">
+        <h2 className="text-lg font-semibold mb-1 text-err">{lang === 'it' ? 'Zona pericolo' : 'Danger zone'}</h2>
+        <p className="text-sm text-muted mb-4">
+          {lang === 'it'
+            ? 'Eliminare l\'account rimuove tutti i tuoi dati dal database (settings, messaggi, brain index, persone, agent runs, task, richieste network). I file del vault sul filesystem restano dove sono — eliminali manualmente se vuoi.'
+            : 'Deleting your account wipes all your data from the database (settings, messages, brain index, people, agent runs, tasks, network requests). Vault files on disk stay where they are — remove them manually if you want.'}
+        </p>
+        <div className="flex justify-end">
+          <Button variant="danger" onClick={() => setDeleteOpen(true)}>
+            {lang === 'it' ? 'Elimina account' : 'Delete account'}
+          </Button>
+        </div>
+      </Card>
+
+      <Modal
+        open={deleteOpen}
+        title={lang === 'it' ? 'Confermi eliminazione account?' : 'Confirm account deletion?'}
+        onClose={() => { setDeleteOpen(false); setDeletePassword(''); }}
+        footer={<>
+          <Button variant="ghost" onClick={() => { setDeleteOpen(false); setDeletePassword(''); }}>{t('common.cancel')}</Button>
+          <Button variant="danger" onClick={doDeleteAccount} disabled={!deletePassword || deleting}>
+            {deleting ? '…' : (lang === 'it' ? 'Sì, elimina definitivamente' : 'Yes, delete permanently')}
+          </Button>
+        </>}
+      >
+        <Banner tone="err">
+          {lang === 'it'
+            ? 'Operazione irreversibile. Tutti i dati associati al tuo account verranno cancellati immediatamente. Verrai disconnesso.'
+            : 'This is irreversible. All data tied to your account will be wiped immediately. You will be logged out.'}
+        </Banner>
+        <div className="mt-4">
+          <Field label={lang === 'it' ? 'Conferma con la tua password' : 'Confirm with your password'}>
+            <Input type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} autoComplete="current-password" />
+          </Field>
+        </div>
+      </Modal>
 
       <Modal
         open={confirmOpen}
