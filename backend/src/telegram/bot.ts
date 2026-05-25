@@ -80,6 +80,36 @@ async function startBotForUser(userId: number): Promise<void> {
         return;
       }
       const msg: any = ctx.message;
+
+      // Document path (pdf, docx, txt, …) — save raw, let Claude read via Read tool.
+      // Cherry-picked from upstream 02bfc31 sess.2379. Integrated above voice/audio path.
+      const doc = msg.document;
+      if (doc?.file_id) {
+        try {
+          await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+          const link = await ctx.telegram.getFileLink(doc.file_id);
+          const dres = await fetch(link.href);
+          if (!dres.ok) throw new Error(`download ${dres.status}`);
+          const buf = Buffer.from(await dres.arrayBuffer());
+          const { archiveAttachment } = await import('../brain/extract.js');
+          const a = await archiveAttachment(userId, doc.file_name ?? 'file', buf, doc.mime_type);
+          const sizeKb = (buf.length / 1024).toFixed(1);
+          await ctx.reply(`📎 ${doc.file_name} (${a.kind}, ${sizeKb}KB). Sto analizzando…`).catch(() => {});
+          const preview = (a.inlineText ?? '').slice(0, 300).replace(/\s+/g, ' ');
+          const userPayload = `[Allegato ricevuto: ${doc.file_name} · ${a.kind} · ${a.bytes}B]
+Note metadata: \`${a.notePath}\`
+Raw file (assoluto): \`${a.rawAbsPath}\`
+
+${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a fondo usa lo strumento Read sul percorso assoluto del raw file. Claude Code legge PDF e file di testo nativamente. Estrai i punti chiave, collega a note esistenti (related:) e dimmi cosa farne in relazione alla roadmap.`;
+          bus.emit('telegram:incoming', { userId, chatId, text: userPayload });
+        } catch (e: any) {
+          console.error('[telegram] document error', e);
+          await ctx.reply(`⚠️ Errore elaborando il file: ${String(e?.message ?? e).slice(0, 160)}`);
+        }
+        return;
+      }
+
+      // Voice/audio path
       const audio = msg.voice ?? msg.audio ?? msg.video_note;
       if (!audio?.file_id) return;
       try {
