@@ -37,7 +37,7 @@ export default function Connectors() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Connectors</h1>
-      <p className="text-muted text-sm">Native plugins (super-agent built-in). Drop a folder in <code className="font-mono text-text">backend/src/connectors/builtin/</code> to add more.</p>
+      <p className="text-muted text-sm">Native plugins (Polpo Brain built-in). Drop a folder in <code className="font-mono text-text">backend/src/connectors/builtin/</code> to add more.</p>
       <h2 className="text-sm uppercase text-muted tracking-wider mt-2">Native</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {items.map((c) => (

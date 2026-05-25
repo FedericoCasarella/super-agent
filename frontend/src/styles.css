@@ -7,9 +7,9 @@
   html, body, #root { height: 100%; }
   body {
     background:
-      radial-gradient(900px 500px at 90% -10%, rgba(192,132,252,0.10), transparent 60%),
-      radial-gradient(800px 500px at -10% 110%, rgba(34,211,238,0.07), transparent 60%),
-      #0a0a0c;
+      radial-gradient(900px 500px at 90% -10%, rgba(0,212,170,0.12), transparent 60%),
+      radial-gradient(800px 500px at -10% 110%, rgba(255,107,157,0.08), transparent 60%),
+      #0a0f1a;
     background-attachment: fixed;
   }
   *, *::before, *::after { transition-property: background-color, border-color, color, fill, stroke, opacity, transform, box-shadow; transition-duration: 220ms; transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }

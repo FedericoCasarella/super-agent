@@ -44,11 +44,11 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
         <div className={`flex items-center gap-3 px-2 py-3 animate-fade-in ${collapsed ? 'md:justify-center' : ''}`}>
           <div className="relative shrink-0">
             <div className="absolute inset-0 rounded-2xl bg-accent/30 blur-xl animate-soft-pulse" />
-            <img src="/rounded-image.png" alt="super-agent" className="relative w-11 h-11 rounded-2xl ring-1 ring-white/10 shadow-lg" />
+            <div aria-label="Polpo Brain" className="relative w-11 h-11 rounded-2xl ring-1 ring-white/10 shadow-lg flex items-center justify-center text-2xl bg-gradient-to-br from-accent/20 to-accent2/20">🐙</div>
           </div>
           <div className={collapsed ? 'md:hidden' : ''}>
-            <div className="text-base font-semibold tracking-tight text-gradient">super-agent</div>
-            <div className="text-[10px] uppercase tracking-[0.18em] text-muted">personal · brain</div>
+            <div className="text-base font-semibold tracking-tight text-gradient">Polpo Brain</div>
+            <div className="text-[10px] uppercase tracking-[0.18em] text-muted">sovereign mind</div>
           </div>
         </div>
 
