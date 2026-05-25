@@ -145,6 +145,19 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS agent_runs_user_idx ON agent_runs(user_id);
 
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  cron TEXT NOT NULL,
+  action_type TEXT NOT NULL CHECK (action_type IN ('notify','prompt','tool')),
+  action_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  last_run_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_result TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_tasks' AND column_name='user_id') THEN
     ALTER TABLE scheduled_tasks ADD COLUMN user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
