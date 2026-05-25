@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Chip } from '../components/ui';
 import MarkdownView from '../components/MarkdownView';
+import { useI18n } from '../i18n';
 
 export default function Roadmap() {
+  const { t } = useI18n();
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
@@ -25,15 +27,15 @@ export default function Roadmap() {
 
   return (
     <div className="space-y-5 max-w-4xl">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Business Roadmap</h1>
-        <div className="flex items-center gap-2">
-          <Chip>{total} items</Chip>
-          <Chip tone="on">{done} done</Chip>
-          <Chip tone="warn">{wip} wip</Chip>
-          <Chip>{pending} pending</Chip>
-          {blocked > 0 && <Chip tone="err">{blocked} blocked</Chip>}
-          <Button variant="ghost" size="sm" onClick={load} disabled={loading}>{loading ? '…' : 'Refresh'}</Button>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-semibold text-gradient">{t('roadmap.title')}</h1>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Chip>{total} {t('roadmap.items')}</Chip>
+          <Chip tone="on">{done} {t('roadmap.done')}</Chip>
+          <Chip tone="warn">{wip} {t('roadmap.wip')}</Chip>
+          <Chip>{pending} {t('roadmap.pending')}</Chip>
+          {blocked > 0 && <Chip tone="err">{blocked} {t('roadmap.blocked')}</Chip>}
+          <Button variant="ghost" size="sm" onClick={load} disabled={loading}>{loading ? '…' : t('roadmap.refresh')}</Button>
         </div>
       </div>
 
@@ -44,12 +46,10 @@ export default function Roadmap() {
           </div>
           <div className="text-sm text-muted font-mono">{pct}%</div>
         </div>
-        {content ? <MarkdownView content={content} /> : <div className="text-muted text-sm">empty</div>}
+        {content ? <MarkdownView content={content} /> : <div className="text-muted text-sm">{t('roadmap.empty2')}</div>}
       </Card>
 
-      <p className="text-xs text-muted">
-        Auto-managed at <code className="font-mono text-text">meta/business-roadmap.md</code>. The agent updates this on every business-relevant turn and during the 2-min reflection cycle.
-      </p>
+      <p className="text-xs text-muted">{t('roadmap.footer')}</p>
     </div>
   );
 }

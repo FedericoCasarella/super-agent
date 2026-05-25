@@ -4,12 +4,14 @@ import { Button, Card, Chip, Input } from '../components/ui';
 import BrainGraph3D from '../components/BrainGraph3D';
 import BrainGraph3DConstellation from '../components/BrainGraph3DConstellation';
 import MarkdownView from '../components/MarkdownView';
+import { useI18n } from '../i18n';
 
 type Tab = 'graph' | 'list';
 type View = '2d' | '3d';
 type Filter = 'all' | 'public' | 'protected';
 
 export default function Brain() {
+  const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('graph');
   const [view, setView] = useState<View>(() => (typeof localStorage !== 'undefined' && localStorage.getItem('brain_view') === '3d' ? '3d' : '2d'));
   useEffect(() => { try { localStorage.setItem('brain_view', view); } catch {} }, [view]);
@@ -30,7 +32,7 @@ export default function Brain() {
     <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
       {(['all', 'public', 'protected'] as Filter[]).map((f) => (
         <Button key={f} size="sm" variant={filter === f ? 'primary' : 'ghost'} onClick={() => setFilter(f)}>
-          {f === 'all' ? 'All' : f === 'public' ? '◇ Public' : '◆ Protected'}
+          {f === 'all' ? t('brain.all') : f === 'public' ? `◇ ${t('brain.publicLbl')}` : `◆ ${t('brain.protectedLbl')}`}
         </Button>
       ))}
     </div>
@@ -43,13 +45,13 @@ export default function Brain() {
         <div className="flex items-center gap-2">
           {FilterBar}
           <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
-            <Button variant={tab === 'graph' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('graph')}>Graph</Button>
-            <Button variant={tab === 'list' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('list')}>List</Button>
+            <Button variant={tab === 'graph' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('graph')}>{t('brain.viewGraph')}</Button>
+            <Button variant={tab === 'list' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('list')}>{t('brain.viewList')}</Button>
           </div>
           {tab === 'graph' && (
             <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
-              <Button size="sm" variant={view === '2d' ? 'primary' : 'ghost'} onClick={() => setView('2d')}>2D</Button>
-              <Button size="sm" variant={view === '3d' ? 'primary' : 'ghost'} onClick={() => setView('3d')}>✦ 3D</Button>
+              <Button size="sm" variant={view === '2d' ? 'primary' : 'ghost'} onClick={() => setView('2d')}>{t('brain.view2d')}</Button>
+              <Button size="sm" variant={view === '3d' ? 'primary' : 'ghost'} onClick={() => setView('3d')}>{t('brain.view3d')}</Button>
             </div>
           )}
         </div>
@@ -81,8 +83,8 @@ export default function Brain() {
             ) : (
               <div>
                 <div className="text-xs text-muted font-mono mb-2 flex items-center gap-2">
-                  {note.data?.visibility === 'protected' && <Chip tone="accent">◆ protected</Chip>}
-                  {note.data?.visibility === 'public' && <Chip tone="accent2">◇ public</Chip>}
+                  {note.data?.visibility === 'protected' && <Chip tone="accent">◆ {t('brain.protectedLabel')}</Chip>}
+                  {note.data?.visibility === 'public' && <Chip tone="accent2">◇ {t('brain.publicLabel')}</Chip>}
                   <span>{note.path}</span>
                 </div>
                 <h2 className="text-lg font-semibold mb-3">{note.title || note.path}</h2>
@@ -97,8 +99,8 @@ export default function Brain() {
       ) : (
         <>
           <div className="flex gap-2">
-            <Input placeholder="Search notes…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && reloadList()} />
-            <Button onClick={reloadList}>Search</Button>
+            <Input placeholder={t('brain.searchPlaceholder')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && reloadList()} />
+            <Button onClick={reloadList}>{t('brain.searchBtn')}</Button>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card className="max-h-[70vh] overflow-y-auto">

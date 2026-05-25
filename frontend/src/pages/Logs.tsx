@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Chip, Modal } from '../components/ui';
+import { useI18n } from '../i18n';
 
 type Row = {
   id: number; ts: string; kind: string; status: string; model: string;
@@ -30,6 +31,7 @@ export default function Logs() {
   const [kind, setKind] = useState<string>('');
   const [open, setOpen] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
+  const { t } = useI18n();
 
   async function load() {
     setLoading(true);
@@ -49,14 +51,14 @@ export default function Logs() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Logs</h1>
-        <Button variant="ghost" size="sm" onClick={load} disabled={loading}>{loading ? '…' : 'Refresh'}</Button>
+        <h1 className="text-2xl font-semibold text-gradient">{t('logs.title')}</h1>
+        <Button variant="ghost" size="sm" onClick={load} disabled={loading}>{loading ? '…' : t('logs.refresh')}</Button>
       </div>
 
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card><div className="text-xs text-muted uppercase">Today</div><div className="text-2xl font-semibold mt-1">{fmtUsd(stats.today?.cost)}</div><div className="text-xs text-muted">{stats.today?.runs ?? 0} runs</div></Card>
-          <Card><div className="text-xs text-muted uppercase">All time</div><div className="text-2xl font-semibold mt-1">{fmtUsd(stats.allTime?.cost)}</div><div className="text-xs text-muted">{stats.allTime?.runs ?? 0} runs</div></Card>
+          <Card><div className="text-xs text-muted uppercase">{t('logs.today')}</div><div className="text-2xl font-semibold mt-1">{fmtUsd(stats.today?.cost)}</div><div className="text-xs text-muted">{stats.today?.runs ?? 0} {t('logs.runs')}</div></Card>
+          <Card><div className="text-xs text-muted uppercase">{t('logs.allTime')}</div><div className="text-2xl font-semibold mt-1">{fmtUsd(stats.allTime?.cost)}</div><div className="text-xs text-muted">{stats.allTime?.runs ?? 0} {t('logs.runs')}</div></Card>
           <Card><div className="text-xs text-muted uppercase">Reflection (today)</div><div className="text-2xl font-semibold mt-1">{fmtUsd((stats.byDay ?? []).filter((d: any) => d.kind === 'reflection' && d.day?.slice(0,10) === new Date().toISOString().slice(0,10)).reduce((a: number, x: any) => a + (x.cost || 0), 0))}</div><div className="text-xs text-muted">2-min cycle</div></Card>
           <Card><div className="text-xs text-muted uppercase">Chat (today)</div><div className="text-2xl font-semibold mt-1">{fmtUsd((stats.byDay ?? []).filter((d: any) => d.kind === 'chat_turn' && d.day?.slice(0,10) === new Date().toISOString().slice(0,10)).reduce((a: number, x: any) => a + (x.cost || 0), 0))}</div><div className="text-xs text-muted">user turns</div></Card>
         </div>
@@ -75,16 +77,16 @@ export default function Logs() {
         <table className="w-full text-sm min-w-[760px]">
           <thead className="text-xs uppercase text-muted bg-surface2/50">
             <tr>
-              <th className="text-left px-4 py-2.5">Time</th>
-              <th className="text-left px-4 py-2.5">Kind</th>
-              <th className="text-left px-4 py-2.5">Status</th>
+              <th className="text-left px-4 py-2.5">{t('logs.time')}</th>
+              <th className="text-left px-4 py-2.5">{t('logs.kind')}</th>
+              <th className="text-left px-4 py-2.5">{t('logs.status')}</th>
               <th className="text-right px-4 py-2.5">In</th>
               <th className="text-right px-4 py-2.5">Out</th>
               <th className="text-right px-4 py-2.5">Cache</th>
-              <th className="text-right px-4 py-2.5">Cost</th>
-              <th className="text-right px-4 py-2.5">Turns</th>
+              <th className="text-right px-4 py-2.5">{t('logs.cost')}</th>
+              <th className="text-right px-4 py-2.5">{t('logs.turns')}</th>
               <th className="text-right px-4 py-2.5">ms</th>
-              <th className="text-left px-4 py-2.5">Preview</th>
+              <th className="text-left px-4 py-2.5">{t('logs.preview')}</th>
             </tr>
           </thead>
           <tbody>

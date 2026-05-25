@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, Textarea, Toggle, Modal, useToast } from '../components/ui';
+import { useI18n } from '../i18n';
 
 type Task = {
   id: number;
@@ -14,22 +15,23 @@ type Task = {
   last_result: string | null;
 };
 
-const PRESETS: { label: string; cron: string }[] = [
-  { label: 'Every 5 min', cron: '*/5 * * * *' },
-  { label: 'Every 30 min', cron: '*/30 * * * *' },
-  { label: 'Hourly', cron: '0 * * * *' },
-  { label: 'Daily 9:00', cron: '0 9 * * *' },
-  { label: 'Mon 9:00', cron: '0 9 * * MON' },
-  { label: 'Fri 18:00', cron: '0 18 * * FRI' },
-];
-
 export default function Tasks() {
   const [items, setItems] = useState<Task[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
+  const [running, setRunning] = useState<Set<number>>(new Set());
   const toast = useToast();
+  const { t } = useI18n();
 
-  // form state
+  const PRESETS: { label: string; cron: string }[] = [
+    { label: t('tasks.preset.5min'),   cron: '*/5 * * * *' },
+    { label: t('tasks.preset.30min'),  cron: '*/30 * * * *' },
+    { label: t('tasks.preset.hourly'), cron: '0 * * * *' },
+    { label: t('tasks.preset.daily9'), cron: '0 9 * * *' },
+    { label: t('tasks.preset.mon9'),   cron: '0 9 * * MON' },
+    { label: t('tasks.preset.fri18'),  cron: '0 18 * * FRI' },
+  ];
+
   const [name, setName] = useState('');
   const [cron, setCron] = useState('0 9 * * *');
   const [type, setType] = useState<'notify' | 'prompt' | 'tool'>('notify');
@@ -73,61 +75,74 @@ export default function Tasks() {
       const data = { name, cron, action_type: type, action_payload: payload, enabled: true };
       if (editing) await api.taskUpdate(editing.id, data);
       else await api.taskCreate(data);
-      toast.push(`Task ${editing ? 'updated' : 'created'}`, 'on');
+      toast.push(editing ? t('tasks.updated') : t('tasks.created'), 'on');
       setModalOpen(false);
       load();
     } catch (e: any) { toast.push(e.message, 'err'); }
   }
 
-  async function toggle(t: Task) {
-    await api.taskUpdate(t.id, { enabled: !t.enabled });
-    toast.push(`${t.name} ${!t.enabled ? 'enabled' : 'disabled'}`, !t.enabled ? 'on' : 'warn');
+  async function toggle(task: Task) {
+    await api.taskUpdate(task.id, { enabled: !task.enabled });
     load();
   }
-  async function remove(t: Task) {
-    if (!confirm(`Delete "${t.name}"?`)) return;
-    await api.taskDelete(t.id);
-    toast.push('Deleted', 'warn');
+  async function remove(task: Task) {
+    if (!confirm(t('tasks.confirmDelete').replace('{name}', task.name))) return;
+    await api.taskDelete(task.id);
+    toast.push(t('tasks.deleted'), 'warn');
     load();
   }
-  async function run(t: Task) {
-    await api.taskRun(t.id);
-    toast.push(`Ran ${t.name}`, 'info');
-    setTimeout(load, 1500);
+  async function run(task: Task) {
+    setRunning((s) => new Set(s).add(task.id));
+    try {
+      await api.taskRun(task.id);
+      toast.push(t('tasks.ran').replace('{name}', task.name), 'on');
+    } catch (e: any) {
+      toast.push(e.message, 'err');
+    } finally {
+      setRunning((s) => { const n = new Set(s); n.delete(task.id); return n; });
+      load();
+    }
   }
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Scheduled Tasks</h1>
-        <Button onClick={openCreate}>+ New task</Button>
+        <h1 className="text-2xl font-semibold text-gradient">{t('tasks.title')}</h1>
+        <Button onClick={openCreate}>{t('tasks.new')}</Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {items.length === 0 && <Card><div className="text-muted text-sm">No tasks yet.</div></Card>}
-        {items.map((t) => (
-          <Card key={t.id}>
+        {items.length === 0 && <Card><div className="text-muted text-sm">{t('tasks.none')}</div></Card>}
+        {items.map((task) => (
+          <Card key={task.id}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <div className="font-semibold truncate">{t.name}</div>
-                  <Chip>{t.action_type}</Chip>
+                  <div className="font-semibold truncate">{task.name}</div>
+                  <Chip>{task.action_type}</Chip>
                 </div>
-                <div className="text-xs text-muted font-mono mt-1">{t.cron}</div>
-                {t.last_run_at && (
+                <div className="text-xs text-muted font-mono mt-1">{task.cron}</div>
+                {task.last_run_at && (
                   <div className="text-xs text-muted mt-2">
-                    last: {new Date(t.last_run_at).toLocaleString()} ·{' '}
-                    <span className={t.last_status === 'ok' ? 'text-ok' : 'text-err'}>{t.last_status}</span>
+                    {t('tasks.last')}: {new Date(task.last_run_at).toLocaleString()} ·{' '}
+                    <span className={task.last_status === 'ok' ? 'text-ok' : 'text-err'}>{task.last_status}</span>
                   </div>
                 )}
-                {t.last_result && <div className="text-xs text-muted mt-1 line-clamp-2">{t.last_result}</div>}
+                {task.last_result && <div className="text-xs text-muted mt-1 line-clamp-2">{task.last_result}</div>}
               </div>
-              <Toggle checked={t.enabled} onChange={() => toggle(t)} />
+              <Toggle checked={task.enabled} onChange={() => toggle(task)} />
             </div>
-            <div className="mt-3 flex gap-2">
-              <Button variant="ghost" size="sm" onClick={() => openEdit(t)}>Edit</Button>
-              <Button variant="ghost" size="sm" onClick={() => run(t)}>Run now</Button>
-              <Button variant="danger" size="sm" onClick={() => remove(t)}>Delete</Button>
+            <div className="mt-3 flex gap-2 flex-wrap">
+              <Button variant="ghost" size="sm" onClick={() => openEdit(task)}>{t('tasks.edit')}</Button>
+              <Button variant="ghost" size="sm" onClick={() => run(task)} disabled={running.has(task.id)}>
+                {running.has(task.id) ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="inline-block w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+                    {t('tasks.running')}
+                  </span>
+                ) : t('tasks.runNow')}
+              </Button>
+              <Button variant="danger" size="sm" onClick={() => remove(task)}>{t('tasks.delete')}</Button>
             </div>
           </Card>
         ))}
@@ -135,16 +150,16 @@ export default function Tasks() {
 
       <Modal
         open={modalOpen}
-        title={editing ? `Edit task #${editing.id}` : 'New scheduled task'}
+        title={editing ? t('tasks.editTitle').replace('{id}', String(editing.id)) : t('tasks.newTitle')}
         onClose={() => setModalOpen(false)}
         footer={<>
-          <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancel</Button>
-          <Button onClick={save} disabled={!name || !cron}>Save</Button>
+          <Button variant="ghost" onClick={() => setModalOpen(false)}>{t('common.cancel')}</Button>
+          <Button onClick={save} disabled={!name || !cron}>{t('common.save')}</Button>
         </>}
       >
         <div className="space-y-3">
-          <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Daily standup ping" /></Field>
-          <Field label="Cron (5-field)">
+          <Field label={t('tasks.name')}><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+          <Field label={t('tasks.cron')}>
             <Input className="font-mono" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 9 * * *" />
           </Field>
           <div className="flex flex-wrap gap-1">
@@ -152,7 +167,7 @@ export default function Tasks() {
               <Button key={p.cron} size="sm" variant="ghost" onClick={() => setCron(p.cron)}>{p.label}</Button>
             ))}
           </div>
-          <Field label="Action">
+          <Field label={t('tasks.action')}>
             <div className="flex gap-1">
               {(['notify', 'prompt', 'tool'] as const).map((k) => (
                 <Button key={k} size="sm" variant={type === k ? 'primary' : 'ghost'} onClick={() => setType(k)}>{k}</Button>
@@ -161,26 +176,26 @@ export default function Tasks() {
           </Field>
 
           {type === 'notify' && (
-            <Field label="Message text (sent to Telegram)">
-              <Textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Buongiorno, check the roadmap." />
+            <Field label={t('tasks.notifyText')}>
+              <Textarea value={text} onChange={(e) => setText(e.target.value)} />
             </Field>
           )}
           {type === 'prompt' && (
-            <Field label="Claude prompt (full advisor context auto-injected)">
-              <Textarea value={promptText} onChange={(e) => setPromptText(e.target.value)} placeholder="Riassumi le email importanti di oggi e mandami le top 3 azioni." />
+            <Field label={t('tasks.promptText')}>
+              <Textarea value={promptText} onChange={(e) => setPromptText(e.target.value)} />
             </Field>
           )}
           {type === 'tool' && (
             <>
-              <Field label="Tool name (e.g. agent_roadmap_get, imap_fetch_recent)">
+              <Field label={t('tasks.toolName')}>
                 <Input className="font-mono" value={toolName} onChange={(e) => setToolName(e.target.value)} />
               </Field>
-              <Field label="Args (JSON)">
+              <Field label={t('tasks.toolArgs')}>
                 <Textarea className="font-mono" value={toolArgs} onChange={(e) => setToolArgs(e.target.value)} />
               </Field>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={toolNotify} onChange={(e) => setToolNotify(e.target.checked)} />
-                Send result to Telegram
+                {t('tasks.toolNotify')}
               </label>
             </>
           )}
