@@ -9,6 +9,7 @@ import { getVaultRoot } from '../brain/vault.js';
 import { runReflectionForUser, runReflectionAllUsers } from '../agent/reflection.js';
 import { refreshTasks as refreshScheduledTasks } from './tasks.js';
 import { startInternalAgentsScheduler } from '../agents/internal/registry.js';
+import { seedDefaultTasksAllUsers } from './seed_tasks.js';
 
 function cronIntervalMinutes(expr: string): number {
   const m = expr.trim().match(/^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/);
@@ -84,6 +85,7 @@ export async function startScheduler() {
   });
   console.log('[scheduler] reflection loop armed (every 2m, all users)');
 
+  await seedDefaultTasksAllUsers();
   await refreshScheduledTasks();
   console.log('[scheduler] user-defined tasks loaded');
   startInternalAgentsScheduler();

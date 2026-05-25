@@ -27,6 +27,12 @@ authRouter.post('/register', async (req, res) => {
   const isFirst = (await countUsers()) === 0;
   const user = await createUser(email, password, name ?? null);
   if (isFirst) await claimOrphanData(user.id);
+  // Seed default daily anchor tasks (kickoff + evening commit)
+  try {
+    const { seedDefaultTasksForUser } = await import('../scheduler/seed_tasks.js');
+    const { refreshTasks } = await import('../scheduler/tasks.js');
+    if (await seedDefaultTasksForUser(user.id)) await refreshTasks();
+  } catch (e) { console.error('[register] seed tasks', e); }
   const token = signToken(user);
   setAuthCookie(res, token);
   res.json({ user, claimedOrphans: isFirst });
