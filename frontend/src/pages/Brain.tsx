@@ -2,13 +2,17 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Chip, Input } from '../components/ui';
 import BrainGraph3D from '../components/BrainGraph3D';
+import BrainGraph3DConstellation from '../components/BrainGraph3DConstellation';
 import MarkdownView from '../components/MarkdownView';
 
 type Tab = 'graph' | 'list';
+type View = '2d' | '3d';
 type Filter = 'all' | 'public' | 'protected';
 
 export default function Brain() {
   const [tab, setTab] = useState<Tab>('graph');
+  const [view, setView] = useState<View>(() => (typeof localStorage !== 'undefined' && localStorage.getItem('brain_view') === '3d' ? '3d' : '2d'));
+  useEffect(() => { try { localStorage.setItem('brain_view', view); } catch {} }, [view]);
   const [filter, setFilter] = useState<Filter>('all');
   const [q, setQ] = useState('');
   const [items, setItems] = useState<any[]>([]);
@@ -42,13 +46,31 @@ export default function Brain() {
             <Button variant={tab === 'graph' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('graph')}>Graph</Button>
             <Button variant={tab === 'list' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('list')}>List</Button>
           </div>
+          {tab === 'graph' && (
+            <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
+              <Button size="sm" variant={view === '2d' ? 'primary' : 'ghost'} onClick={() => setView('2d')}>2D</Button>
+              <Button size="sm" variant={view === '3d' ? 'primary' : 'ghost'} onClick={() => setView('3d')}>✦ 3D</Button>
+            </div>
+          )}
         </div>
       </div>
 
       {tab === 'graph' ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
-          <Card className="lg:col-span-2 p-0 overflow-hidden h-[78vh]">
-            <BrainGraph3D onSelect={open} onDeselect={() => setNote(null)} visibilityFilter={filter} />
+          <Card className="lg:col-span-2 p-0 overflow-hidden h-[78vh] relative">
+            {view === '3d' ? (
+              <BrainGraph3DConstellation
+                onSelect={open}
+                onDeselect={() => setNote(null)}
+                visibilityFilter={filter}
+              />
+            ) : (
+              <BrainGraph3D
+                onSelect={open}
+                onDeselect={() => setNote(null)}
+                visibilityFilter={filter}
+              />
+            )}
           </Card>
           <Card className="h-[78vh] overflow-y-auto">
             {!note ? (
