@@ -78,7 +78,7 @@ export async function buildSystemContext(userId: number): Promise<string> {
   );
 
   parts.push(
-    'BUSINESS ROADMAP: own `meta/business-roadmap.md` via `mcp__super_agent__roadmap_*`. Workflow: roadmap_get → set_status on answered items → roadmap_update when ready to draft Strategy/Execution. Check before asking.'
+    'BUSINESS ROADMAP: own `meta/business-roadmap.md` via `mcp__polpo_brain__roadmap_*`. Workflow: roadmap_get → set_status on answered items → roadmap_update when ready to draft Strategy/Execution. Check before asking.'
   );
 
   if (profile) parts.push('USER PROFILE (onboarding):\n' + JSON.stringify(profile, null, 2));

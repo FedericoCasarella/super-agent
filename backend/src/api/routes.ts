@@ -116,7 +116,7 @@ router.get('/tools', (_req, res) => {
 
 // Tool invocation: prefer header from MCP bridge, fallback to authed cookie user
 router.post('/tools/:name', async (req, res) => {
-  const headerUid = Number(req.header('x-super-agent-user') || '');
+  const headerUid = Number(req.header('x-polpo-brain-user') || '');
   const userId = Number.isFinite(headerUid) && headerUid > 0 ? headerUid : req.user!.id;
   try {
     const out = await invokeTool(userId, req.params.name, req.body ?? {});

@@ -46,7 +46,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
-      env: { ...process.env, SUPER_AGENT_USER_ID: String(userId) },
+      env: { ...process.env, POLPO_BRAIN_USER_ID: String(userId) },
     });
     let stdout = '', stderr = '';
     const timer = setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs ?? 120_000);

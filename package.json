@@ -1,5 +1,5 @@
 {
-  "name": "super-agent",
+  "name": "polpo-brain",
   "private": true,
   "version": "0.1.0",
   "workspaces": ["backend", "frontend"],

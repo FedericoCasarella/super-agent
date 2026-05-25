@@ -42,7 +42,7 @@ TASKS:
 
 1) UPDATE PROFILE — read \`meta/user-profile.md\` (create if missing), extract communication style/insecurities/strengths/quirks. Keep <80 lines.
 
-2) REVIEW ROADMAP — \`mcp__super_agent__roadmap_get\`, tick answered Discovery, draft Strategy/Execution when ready.
+2) REVIEW ROADMAP — \`mcp__polpo_brain__roadmap_get\`, tick answered Discovery, draft Strategy/Execution when ready.
 
 3) DECIDE PING — BIAS: ASK when info gap.
    a) If user said "stop/smettila" → \`agent_set_quiet\` + silent.

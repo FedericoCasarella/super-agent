@@ -1,6 +1,8 @@
-# super-agent
+# 🐙 Polpo Brain
 
-Personal AI agent. Telegram-driven, Claude Code backed, second-brain aware.
+Personal AI · Sovereign Mind. Telegram-driven, Claude Code backed, second-brain aware.
+
+> Forked from [`super-agent`](https://github.com/FedericoCasarella/super-agent) (Federico Casarella) — rebranded Polpo identity, sess.2282.
 
 ## Stack
 - Backend: Node + TS, Express, ws, Telegraf, Postgres, node-cron
@@ -12,7 +14,7 @@ Personal AI agent. Telegram-driven, Claude Code backed, second-brain aware.
 ```bash
 cp .env.example .env
 # edit DATABASE_URL
-createdb super_agent
+createdb polpo_brain
 npm install
 npm run db:migrate
 npm run dev
