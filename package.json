@@ -1,0 +1,16 @@
+{
+  "name": "super-agent",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["backend", "frontend"],
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend -c blue,magenta \"npm:dev -w backend\" \"npm:dev -w frontend\"",
+    "dev:backend": "npm run dev -w backend",
+    "dev:frontend": "npm run dev -w frontend",
+    "build": "npm run build -w backend && npm run build -w frontend",
+    "db:migrate": "npm run db:migrate -w backend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

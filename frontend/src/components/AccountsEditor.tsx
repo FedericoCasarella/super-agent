@@ -1,0 +1,92 @@
+import { useState } from 'react';
+import { api } from '../api';
+import { Button, Chip, Field, Input, useToast } from './ui';
+
+export type Account = {
+  label: string;
+  host: string;
+  port?: number;
+  user: string;
+  pass: string;
+  mailbox?: string;
+  initialBacklog?: number;
+};
+
+type Props = { value: Account[]; onChange: (next: Account[]) => void };
+
+const blank: Account = { label: '', host: 'imap.gmail.com', port: 993, user: '', pass: '', mailbox: 'INBOX', initialBacklog: 0 };
+
+export default function AccountsEditor({ value, onChange }: Props) {
+  const accounts = value ?? [];
+  const [open, setOpen] = useState<number | null>(accounts.length === 0 ? -1 : null);
+  const [testing, setTesting] = useState<number | null>(null);
+  const [testResult, setTestResult] = useState<Record<number, { ok: boolean; msg: string }>>({});
+  const toast = useToast();
+
+  function update(i: number, patch: Partial<Account>) {
+    onChange(accounts.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+  }
+  function remove(i: number) {
+    const removed = accounts[i];
+    onChange(accounts.filter((_, idx) => idx !== i));
+    toast.push(`Removed ${removed?.label || 'account'}`, 'warn');
+  }
+  function add() {
+    onChange([...accounts, { ...blank }]);
+    setOpen(accounts.length);
+    toast.push('Account added — fill credentials then Test', 'on');
+  }
+
+  async function test(i: number) {
+    const a = accounts[i];
+    setTesting(i);
+    setTestResult((p) => ({ ...p, [i]: { ok: false, msg: 'testing…' } }));
+    try {
+      const r = await api.testImapAccount(a);
+      if (r.ok) {
+        setTestResult((p) => ({ ...p, [i]: { ok: true, msg: `OK · ${r.messages} msgs in ${r.mailbox}` } }));
+        toast.push(`Connection OK · ${a.label || a.user} (${r.messages} messages)`, 'on');
+      } else {
+        setTestResult((p) => ({ ...p, [i]: { ok: false, msg: r.error } }));
+        toast.push(`Connection failed: ${r.error}`, 'err');
+      }
+    } catch (e: any) {
+      setTestResult((p) => ({ ...p, [i]: { ok: false, msg: String(e?.message ?? e) } }));
+      toast.push(`Test failed: ${e?.message ?? e}`, 'err');
+    } finally { setTesting(null); }
+  }
+
+  return (
+    <div className="space-y-3">
+      {accounts.map((a, i) => (
+        <div key={i} className="border border-border rounded-xl bg-surface2/40">
+          <div className="flex items-center justify-between px-4 py-3">
+            <button className="text-left flex-1" onClick={() => setOpen(open === i ? null : i)}>
+              <div className="font-medium">{a.label || '(no label)'} <span className="text-muted text-xs ml-2">{a.user}</span></div>
+              <div className="text-xs text-muted">{a.host}:{a.port ?? 993} · {a.mailbox || 'INBOX'}</div>
+            </button>
+            <Button variant="danger" size="sm" onClick={() => remove(i)}>Remove</Button>
+          </div>
+          {open === i && (
+            <div className="px-4 pb-4 grid grid-cols-2 gap-3">
+              <Field label="Label"><Input value={a.label} onChange={(e) => update(i, { label: e.target.value.replace(/[^a-z0-9_-]/gi, '-') })} placeholder="work" /></Field>
+              <Field label="Mailbox"><Input value={a.mailbox ?? ''} onChange={(e) => update(i, { mailbox: e.target.value })} placeholder="INBOX" /></Field>
+              <Field label="Host"><Input value={a.host} onChange={(e) => update(i, { host: e.target.value })} /></Field>
+              <Field label="Port"><Input type="number" value={a.port ?? 993} onChange={(e) => update(i, { port: Number(e.target.value) })} /></Field>
+              <Field label="User"><Input value={a.user} onChange={(e) => update(i, { user: e.target.value })} placeholder="you@gmail.com" /></Field>
+              <Field label="Password (app password)"><Input type="password" value={a.pass} onChange={(e) => update(i, { pass: e.target.value })} /></Field>
+              <div className="col-span-2"><Field label="Initial backlog (0 = only new)"><Input type="number" value={a.initialBacklog ?? 0} onChange={(e) => update(i, { initialBacklog: Number(e.target.value) })} /></Field></div>
+              <div className="col-span-2 flex items-center justify-between gap-3">
+                <div>{testResult[i] && <Chip tone={testResult[i].ok ? 'on' : 'err'}>{testResult[i].msg}</Chip>}</div>
+                <Button variant="ghost" size="sm" onClick={() => test(i)} disabled={testing === i || !a.host || !a.user || !a.pass}>
+                  {testing === i ? 'Testing…' : 'Test connection'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      <Button variant="ghost" className="w-full" onClick={add}>+ Add account</Button>
+    </div>
+  );
+}
