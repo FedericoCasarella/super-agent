@@ -27,10 +27,17 @@ function unwrapList(data: any): any[] {
 }
 
 // Canonical summary parser (dict-vs-string fallback chain, mirrors fathom_api.extract_summary_text).
+// Fathom API returns { summary: { template_name, markdown_formatted } } — unwrap recursively
+// so nested markdown_formatted is preferred over the raw JSON envelope.
 function summaryText(data: any): string {
   if (typeof data === 'string') return data;
   if (data?.markdown_formatted) return String(data.markdown_formatted);
-  if (data?.summary) return typeof data.summary === 'string' ? data.summary : JSON.stringify(data.summary, null, 2);
+  if (data?.summary != null) {
+    if (typeof data.summary === 'string') return data.summary;
+    if (data.summary?.markdown_formatted) return String(data.summary.markdown_formatted);
+    if (data.summary?.text) return String(data.summary.text);
+    return JSON.stringify(data.summary, null, 2);
+  }
   if (data?.text) return String(data.text);
   return JSON.stringify(data, null, 2);
 }
@@ -61,7 +68,7 @@ const connector: Connector = {
 
     const state = { ...(ctx.state ?? {}) };
     const seen: Record<string, boolean> = { ...(state.seenIds ?? {}) };
-    const firstRun = !state.seenIds; // baseline-only on first tick: don't flood brain/Telegram with old calls
+    const firstRun = !state.seenIds; // populate vault on first tick, suppress events to avoid Telegram flood
 
     let list: any[] = [];
     try {
@@ -77,8 +84,6 @@ const connector: Connector = {
       if (id == null) continue;
       const key = String(id);
       if (seen[key]) continue;
-      seen[key] = true;
-      if (firstRun) continue; // mark current calls as baseline without ingesting
 
       try {
         const body = summaryText(await fathomGet(apiKey, `/recordings/${id}/summary`));
@@ -98,23 +103,28 @@ const connector: Connector = {
           },
           `# ${title}\n\n${body}\n`
         );
-        bus.emit('connector:event', {
-          userId: ctx.userId,
-          connector: 'fathom',
-          kind: 'new-call',
-          payload: { recording_id: id, title, start: m.start ?? null, share_url: m.share_url ?? null },
-        });
-        ctx.log('ingested-call', { id, title });
+        seen[key] = true;
+        if (!firstRun) {
+          bus.emit('connector:event', {
+            userId: ctx.userId,
+            connector: 'fathom',
+            kind: 'new-call',
+            payload: { recording_id: id, title, start: m.start ?? null, share_url: m.share_url ?? null },
+          });
+        }
+        ctx.log('ingested-call', { id, title, firstRun });
         ingested++;
       } catch (e) {
         ctx.log('summary-failed', { id, err: String(e) });
-        seen[key] = false; // unmark → retry next tick
+        // leave seen[key] unset → retry next tick
       }
     }
 
     state.seenIds = seen;
     await ctx.saveState(state);
-    if (ingested) ctx.log('tick-complete', { ingested });
+    if (ingested) ctx.log('tick-complete', { ingested, firstRun });
+    // onTick fix sess.2282 — firstRun back-fills vault (writeNote) while suppressing bus.emit (no Telegram flood).
+    // Previous behavior: firstRun marked all IDs as seen without ingesting → vault stayed empty forever unless NEW calls arrived later.
   },
   tools: [
     {

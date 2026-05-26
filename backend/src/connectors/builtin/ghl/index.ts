@@ -62,7 +62,7 @@ const connector: Connector = {
 
     const state = { ...(ctx.state ?? {}) };
     const known: Record<string, string> = { ...(state.oppStages ?? {}) };
-    const firstRun = !state.oppStages; // baseline-only on first tick
+    const firstRun = !state.oppStages; // populate vault on first tick, suppress events to avoid Telegram flood
 
     let opps: any[] = [];
     try {
@@ -79,9 +79,10 @@ const connector: Connector = {
       if (!id) continue;
       const stage = String(o.pipelineStageId ?? o.stageId ?? o.status ?? '');
       const prev = known[String(id)];
-      known[String(id)] = stage;
-      if (firstRun) continue;
-      if (prev === stage) continue;
+      if (!firstRun && prev === stage) {
+        known[String(id)] = stage;
+        continue;
+      }
 
       const name = o.name ?? o.title ?? `Opportunity ${id}`;
       const kind = prev == null ? 'new-opportunity' : 'opportunity-stage-change';
@@ -102,22 +103,28 @@ const connector: Connector = {
           },
           `# ${name}\n\n- Stage: ${stage}\n- Status: ${o.status ?? ''}\n- Value: ${o.monetaryValue ?? ''}\n- Contact: ${o.contact?.name ?? o.contactId ?? ''}\n`
         );
+        known[String(id)] = stage;
+        if (!firstRun) {
+          bus.emit('connector:event', {
+            userId: ctx.userId,
+            connector: 'ghl',
+            kind,
+            payload: { opp_id: id, name, stage, prev_stage: prev ?? null, value: o.monetaryValue ?? null },
+          });
+        }
+        ctx.log(firstRun ? 'ingested-opportunity' : kind, { id, name, stage });
+        changes++;
       } catch (e) {
         ctx.log('note-failed', { id, err: String(e) });
+        // leave known[id] unset → retry next tick
       }
-      bus.emit('connector:event', {
-        userId: ctx.userId,
-        connector: 'ghl',
-        kind,
-        payload: { opp_id: id, name, stage, prev_stage: prev ?? null, value: o.monetaryValue ?? null },
-      });
-      ctx.log(kind, { id, name, stage });
-      changes++;
     }
 
     state.oppStages = known;
     await ctx.saveState(state);
-    if (changes) ctx.log('tick-complete', { changes });
+    if (changes) ctx.log('tick-complete', { changes, firstRun });
+    // onTick fix sess.2282 — firstRun back-fills vault (writeNote) while suppressing bus.emit (no Telegram flood).
+    // Previous behavior: firstRun marked all stages as known without writing notes → vault stayed empty until a deal moved stage.
   },
   tools: [
     {
