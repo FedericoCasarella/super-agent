@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { config } from '../config.js';
 import { MCP_CONFIG_PATH, MCP_SERVER_NAME } from '../mcp/config.js';
 import { query } from '../db/index.js';
 import { externalMcpAllowEntries } from './external_mcps.js';
+import { listVaults } from '../brain/vaults.js';
+import { bus } from '../bus.js';
 
 export type ClaudeRunOptions = {
   cwd?: string;
@@ -32,7 +35,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   const started = Date.now();
   const kind = opts.kind ?? 'turn';
 
-  const args = ['-p', prompt, '--output-format', 'json', '--model', config.claudeModel];
+  const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--model', config.claudeModel];
   if (opts.useMcp !== false) {
     args.push('--mcp-config', MCP_CONFIG_PATH);
   }
@@ -43,24 +46,77 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   ];
   args.push('--allowed-tools', allowed.join(','));
 
-  const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
+  // Pre-load vault paths for brain:access mapping
+  const vaults = await listVaults(userId).catch(() => []);
+  function mapBrainAccess(filePath: string): { vaultName: string; rel: string } | null {
+    const norm = path.resolve(filePath);
+    for (const v of vaults) {
+      const vp = path.resolve(v.path);
+      if (norm === vp || norm.startsWith(vp + path.sep)) {
+        const rel = norm === vp ? '' : norm.slice(vp.length + 1);
+        if (!rel.toLowerCase().endsWith('.md')) return null;
+        return { vaultName: v.name, rel };
+      }
+    }
+    return null;
+  }
+
+  const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null }>((resolve) => {
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
       env: { ...process.env, SUPER_AGENT_USER_ID: String(userId) },
     });
     let stdout = '', stderr = '';
+    let buf = '';
+    let finalEvent: any = null;
     const timer = setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs ?? 120_000);
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stdout.on('data', (d) => {
+      const s = d.toString();
+      stdout += s;
+      buf += s;
+      let idx: number;
+      while ((idx = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          // Detect tool_use blocks → emit brain:access
+          if (ev?.type === 'assistant' && ev.message?.content) {
+            for (const block of ev.message.content) {
+              if (block?.type !== 'tool_use') continue;
+              const name = block.name as string;
+              const input = block.input ?? {};
+              const candidatePaths: string[] = [];
+              if (name === 'Read' || name === 'Write' || name === 'Edit') {
+                if (input.file_path) candidatePaths.push(input.file_path);
+              } else if (name === 'Grep' || name === 'Glob') {
+                if (input.path) candidatePaths.push(input.path);
+              }
+              for (const p of candidatePaths) {
+                const hit = mapBrainAccess(p);
+                if (hit) {
+                  bus.emit('brain:access', {
+                    userId, vaultName: hit.vaultName, rel: hit.rel,
+                    tool: name, ts: Date.now(),
+                  });
+                }
+              }
+            }
+          }
+          if (ev?.type === 'result') finalEvent = ev;
+        } catch {}
+      }
+    });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code }); });
-    child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code, finalEvent }); });
+    child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null }); });
   });
 
   const durationMs = Date.now() - started;
-  let parsed: any = null;
-  try { parsed = JSON.parse(result.stdout); } catch {}
+  const parsed: any = result.finalEvent;
 
-  const text = (parsed?.result ?? result.stdout).trim();
+  const text = (parsed?.result ?? '').trim();
   const usage = parsed?.usage ?? {};
   const ok = result.code === 0 && !!parsed && parsed.subtype !== 'error_during_execution';
 

@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import ForceGraph3D, { ForceGraphMethods } from 'react-force-graph-3d';
 import * as THREE from 'three';
 import { api } from '../api';
+import { useWS } from '../ws';
+
+const MRI_GREEN = '#39ff7a';
+const MRI_DURATION_MS = 4000;
 
 type Node = {
   id: string;
@@ -113,6 +117,32 @@ export default function BrainGraph3DConstellation({
   const focusIdxSetRef = useRef<Set<number> | null>(null);
   const focusDirtyRef = useRef<boolean>(false);
   const idToIdxRef = useRef<Map<string, number>>(new Map());
+  // MRI active set: nodeId → expiry ms timestamp
+  const mriRef = useRef<Map<string, number>>(new Map());
+  const [, setMriTick] = useState(0);
+  useWS((msg) => {
+    if (msg?.type !== 'brain:access') return;
+    const p = msg.payload ?? {};
+    if (!p.vaultName || !p.rel) return;
+    const id = `${p.vaultName}::${p.rel}`;
+    mriRef.current.set(id, Date.now() + MRI_DURATION_MS);
+    focusDirtyRef.current = true;
+    setMriTick((t) => t + 1);
+  });
+  // Tick while MRI active so nodeColor callback re-runs + auto-clear
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const now = Date.now();
+      let any = false;
+      for (const [k, exp] of mriRef.current) {
+        if (exp <= now) mriRef.current.delete(k);
+        else any = true;
+      }
+      setMriTick((t) => t + 1);
+      if (!any) return;
+    }, 400);
+    return () => clearInterval(iv);
+  }, []);
 
   useEffect(() => {
     api.brainGraphFiltered(visibilityFilter, originFilter, vaultFilter).then((g: any) => {
@@ -269,11 +299,16 @@ export default function BrainGraph3DConstellation({
 
     // Track user interaction to pause manual orbit
     const lastInteractRef = { current: 0 };
+    const hoveringRef = { current: false };
     const dom: HTMLElement | undefined = fg.renderer?.()?.domElement;
     const onInteract = () => { lastInteractRef.current = performance.now(); };
+    const onEnter = () => { hoveringRef.current = true; };
+    const onLeave = () => { hoveringRef.current = false; };
     if (dom) {
       dom.addEventListener('pointerdown', onInteract);
       dom.addEventListener('wheel', onInteract, { passive: true });
+      dom.addEventListener('pointerenter', onEnter);
+      dom.addEventListener('pointerleave', onLeave);
     }
 
     let raf = 0;
@@ -290,12 +325,36 @@ export default function BrainGraph3DConstellation({
         const { positions, colors, baseColors, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis } = f;
         const nodes = data.nodes as any[];
         const totalP = sourceIdx.length;
-        // Recompute per-particle color when focus changes (cheap: O(N) writes, once per change)
+        // MRI: sweep expired entries; if any active, mark dirty each frame
+        const nowMs = Date.now();
+        let mriActive = false;
+        if (mriRef.current.size > 0) {
+          for (const [k, exp] of mriRef.current) {
+            if (exp <= nowMs) mriRef.current.delete(k);
+            else mriActive = true;
+          }
+          if (mriActive) focusDirtyRef.current = true;
+          else focusDirtyRef.current = true; // one extra pass after clear
+        }
         if (focusDirtyRef.current) {
           const fset = focusIdxSetRef.current;
+          const mriIdx = new Set<number>();
+          if (mriRef.current.size) {
+            for (const id of mriRef.current.keys()) {
+              const idx = idToIdxRef.current.get(id);
+              if (idx != null) mriIdx.add(idx);
+            }
+          }
+          const G = new THREE.Color(MRI_GREEN);
           for (let i = 0; i < totalP; i++) {
             const src = sourceIdx[i];
             const tgt = targetIdx[i];
+            if (mriIdx.has(src) || mriIdx.has(tgt)) {
+              colors[i * 3]     = G.r;
+              colors[i * 3 + 1] = G.g;
+              colors[i * 3 + 2] = G.b;
+              continue;
+            }
             const dim = fset ? (!(fset.has(src) || fset.has(tgt))) : false;
             const k = dim ? 0.1 : 1.0;
             colors[i * 3]     = baseColors[i * 3]     * k;
@@ -346,7 +405,8 @@ export default function BrainGraph3DConstellation({
         const cam = fg.camera?.();
         const target = ctrls?.target;
         const idleMs = performance.now() - lastInteractRef.current;
-        if (cam && target && idleMs > 2000) {
+        if (ctrls) ctrls.autoRotate = !hoveringRef.current;
+        if (cam && target && idleMs > 2000 && !hoveringRef.current) {
           // Rotate camera around target on Y axis at ~0.12 rad/sec
           const dx = cam.position.x - target.x;
           const dz = cam.position.z - target.z;
@@ -372,6 +432,8 @@ export default function BrainGraph3DConstellation({
       if (dom) {
         dom.removeEventListener('pointerdown', onInteract);
         dom.removeEventListener('wheel', onInteract);
+        dom.removeEventListener('pointerenter', onEnter);
+        dom.removeEventListener('pointerleave', onLeave);
       }
       try {
         const ctrls: any = fg.controls?.();
@@ -414,6 +476,8 @@ export default function BrainGraph3DConstellation({
   }, [labelThreshold, showLabels]);
 
   const nodeColorCb = useCallback((n: any) => {
+    const exp = mriRef.current.get(n.id);
+    if (exp && exp > Date.now()) return MRI_GREEN;
     const base = colorFor(n);
     if (!focusSet) return base;
     return focusSet.has(n.id) ? base : '#181a24';
