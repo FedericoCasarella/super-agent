@@ -36,6 +36,21 @@ async function buildToolCatalog(userId: number): Promise<{ connectorsLine: strin
   return { connectorsLine, toolsList, commandsList };
 }
 
+// Minimal context for scheduled tasks: language + brain access + tools.
+// SKIPS conductor mandate, turn anatomy, roadmap anchor, hard rules — those
+// would override the task's specific instructions.
+export async function buildScheduledTaskContext(userId: number): Promise<string> {
+  const { toolsList } = await buildToolCatalog(userId);
+  const lang = (await getSetting<string>(userId, 'language')) ?? 'it';
+  const langLabel = lang === 'it' ? 'Italian (Italiano)' : 'English';
+  const parts: string[] = [];
+  parts.push(`LANGUAGE: ALWAYS respond in ${langLabel}.`);
+  parts.push('You are running as a SCHEDULED TASK. Do NOT apply your usual conductor framing ("OK dove eravamo…", roadmap anchor, mandatory closing question). Follow the task INSTRUCTIONS below LITERALLY. No preamble, no extra commentary beyond what the task asks for.');
+  parts.push('Vault access: cwd is the user\'s second-brain. Read/Grep/Glob freely. Write only if task says so.');
+  parts.push('TOOLS available (MCP via `' + MCP_SERVER_NAME + '`):\n' + toolsList);
+  return parts.join('\n\n');
+}
+
 export async function buildSystemContext(userId: number): Promise<string> {
   const profile = await getSetting<any>(userId, 'profile');
   const business = await getSetting<any>(userId, 'business');

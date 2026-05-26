@@ -2,7 +2,7 @@ import cron, { ScheduledTask } from 'node-cron';
 import { query } from '../db/index.js';
 import { sendTelegram } from '../telegram/bot.js';
 import { runClaude } from '../claude/runner.js';
-import { buildSystemContext } from '../claude/prompts.js';
+import { buildScheduledTaskContext } from '../claude/prompts.js';
 import { getVaultRoot } from '../brain/vault.js';
 import { invokeTool } from '../connectors/tools.js';
 
@@ -64,10 +64,10 @@ export async function runTaskById(userId: number, id: number) {
       await sendTelegram(userId, text);
       result = `sent: ${text.slice(0, 120)}`;
     } else if (t.action_type === 'prompt') {
-      const sys = await buildSystemContext(userId);
+      const sys = await buildScheduledTaskContext(userId);
       const userPrompt = String(t.action_payload?.prompt ?? '').trim();
       if (!userPrompt) throw new Error('prompt: empty');
-      const fullPrompt = `${sys}\n\n=== SCHEDULED TASK: ${t.name} ===\n\nINSTRUCTIONS:\n${userPrompt}\n\nOUTPUT RULES:\n- If you should send something to Telegram, output it directly (split with <<MSG>>).\n- Otherwise output \`SKIP\`.`;
+      const fullPrompt = `${sys}\n\n=== SCHEDULED TASK: ${t.name} ===\n\nINSTRUCTIONS (follow exactly, ignore advisor/conductor framing):\n${userPrompt}\n\nOUTPUT RULES:\n- Output ONLY what the task asks for. No "OK dove eravamo", no roadmap recap, no closing question unless the task itself asks for it.\n- If something should be sent to Telegram: output it directly (split with <<MSG>> for multiple messages).\n- If nothing should be sent: output the literal token \`SKIP\` and nothing else.`;
       const vault = await getVaultRoot(userId);
       const res = await runClaude(userId, fullPrompt, { cwd: vault ?? process.cwd(), timeoutMs: 180_000, kind: 'scheduled', meta: { taskId: t.id, name: t.name } });
       const out = (res.text || '').trim();
