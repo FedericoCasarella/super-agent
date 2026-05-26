@@ -46,8 +46,12 @@ export const api = {
   updateInternalAgent: (name: string, data: any) => req(`/internal-agents/${name}`, { method: 'PUT', body: JSON.stringify(data) }),
   runInternalAgent: (name: string) => req<{ status: string; report: any }>(`/internal-agents/${name}/run`, { method: 'POST' }),
   brainIndexFiltered: (visibility: 'all' | 'public' | 'protected') => req<any[]>(`/brain/index?visibility=${visibility}`),
-  brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all') =>
-    req<{ nodes: any[]; links: any[]; origins: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}`),
+  brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
+    req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
+  vaultsList: () => req<any[]>('/vaults'),
+  vaultsCreate: (data: { name: string; path: string; seed?: boolean; makePrimary?: boolean }) => req<any>('/vaults', { method: 'POST', body: JSON.stringify(data) }),
+  vaultsSetPrimary: (id: number) => req<any>(`/vaults/${id}/primary`, { method: 'POST' }),
+  vaultsDelete: (id: number) => req<any>(`/vaults/${id}`, { method: 'DELETE' }),
   netDiscover: () => req<any[]>('/network/discover'),
   netPeers: () => req<any[]>('/network/peers'),
   netConnect: (email: string) => req<any>('/network/connect', { method: 'POST', body: JSON.stringify({ email }) }),

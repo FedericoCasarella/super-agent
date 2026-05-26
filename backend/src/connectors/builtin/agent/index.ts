@@ -114,6 +114,47 @@ const connector: Connector = {
       },
     },
     {
+      name: 'vaults_list',
+      description: 'List the user\'s connected brains (vaults). Each has name, path, and whether it is primary.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => {
+        const m = await import('../../../brain/vaults.js');
+        return m.listVaults(ctx.userId);
+      },
+    },
+    {
+      name: 'vaults_create',
+      description: 'Create / connect a new brain (vault). `name` is a short slug. `path` is an absolute folder path. `seed` (default true) creates standard subfolders. `makePrimary` (default false) sets it as the active brain.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          path: { type: 'string' },
+          seed: { type: 'boolean', default: true },
+          makePrimary: { type: 'boolean', default: false },
+        },
+        required: ['name', 'path'], additionalProperties: false,
+      },
+      handler: async (ctx, { name, path, seed, makePrimary }) => {
+        const m = await import('../../../brain/vaults.js');
+        return m.createVault(ctx.userId, name, path, { seed: seed !== false, makePrimary: !!makePrimary });
+      },
+    },
+    {
+      name: 'vaults_set_primary',
+      description: 'Make a vault the primary brain (becomes cwd for chat turns).',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'number' } },
+        required: ['id'], additionalProperties: false,
+      },
+      handler: async (ctx, { id }) => {
+        const m = await import('../../../brain/vaults.js');
+        await m.setPrimaryVault(ctx.userId, id);
+        return { ok: true };
+      },
+    },
+    {
       name: 'network_peers',
       description: 'List my brain-network peers (connected users). Shows connection status and direction.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },

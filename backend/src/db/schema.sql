@@ -209,6 +209,25 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS brain_index_origin_idx ON brain_index(origin_user_id);
 
+-- Multi-vault support
+CREATE TABLE IF NOT EXISTS vaults (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  path TEXT NOT NULL,
+  is_primary BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS vaults_user_name_uniq ON vaults(user_id, name);
+CREATE INDEX IF NOT EXISTS vaults_user_primary_idx ON vaults(user_id, is_primary);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='brain_index' AND column_name='vault_id') THEN
+    ALTER TABLE brain_index ADD COLUMN vault_id BIGINT REFERENCES vaults(id) ON DELETE CASCADE;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS brain_index_vault_idx ON brain_index(vault_id);
+
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='brain_index' AND column_name='visibility') THEN
     ALTER TABLE brain_index ADD COLUMN visibility TEXT;

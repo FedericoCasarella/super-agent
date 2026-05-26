@@ -64,13 +64,17 @@ export default function BrainGraph3D({
   onSelect, onDeselect,
   visibilityFilter = 'all',
   originFilter = 'all',
+  vaultFilter = 'all',
   onOriginsChange,
+  onVaultsChange,
 }: {
   onSelect: (id: string) => void;
   onDeselect?: () => void;
   visibilityFilter?: 'all' | 'public' | 'protected';
   originFilter?: string;
+  vaultFilter?: string;
   onOriginsChange?: (origins: string[]) => void;
+  onVaultsChange?: (vaults: string[]) => void;
 }) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
   const [hover, setHover] = useState<string | null>(null);
@@ -80,11 +84,12 @@ export default function BrainGraph3D({
   const [size, setSize] = useState({ w: 800, h: 600 });
 
   useEffect(() => {
-    api.brainGraphFiltered(visibilityFilter, originFilter).then((g) => {
+    api.brainGraphFiltered(visibilityFilter, originFilter, vaultFilter).then((g) => {
       setData(g);
       if (onOriginsChange) onOriginsChange(g.origins ?? []);
+      if (onVaultsChange) onVaultsChange((g as any).vaults ?? []);
     }).catch(() => {});
-  }, [visibilityFilter, originFilter]);
+  }, [visibilityFilter, originFilter, vaultFilter]);
 
   // Spread nodes further apart and add collision so they don't overlap
   useEffect(() => {

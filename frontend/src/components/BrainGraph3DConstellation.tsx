@@ -77,13 +77,17 @@ export default function BrainGraph3DConstellation({
   onSelect, onDeselect,
   visibilityFilter = 'all',
   originFilter = 'all',
+  vaultFilter = 'all',
   onOriginsChange,
+  onVaultsChange,
 }: {
   onSelect: (id: string) => void;
   onDeselect?: () => void;
   visibilityFilter?: 'all' | 'public' | 'protected';
   originFilter?: string;
+  vaultFilter?: string;
   onOriginsChange?: (origins: string[]) => void;
+  onVaultsChange?: (vaults: string[]) => void;
 }) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
   const [hover, setHover] = useState<string | null>(null);
@@ -96,6 +100,8 @@ export default function BrainGraph3DConstellation({
   const fieldRef = useRef<{
     points: THREE.Points;
     positions: Float32Array;
+    colors: Float32Array;
+    baseColors: Float32Array;
     sourceIdx: Int32Array;
     targetIdx: Int32Array;
     t: Float32Array;
@@ -104,13 +110,17 @@ export default function BrainGraph3DConstellation({
     curveAxis: Float32Array; // 3 floats per particle
   } | null>(null);
   const neighborsRef = useRef<Map<number, number[]>>(new Map());
+  const focusIdxSetRef = useRef<Set<number> | null>(null);
+  const focusDirtyRef = useRef<boolean>(false);
+  const idToIdxRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
-    api.brainGraphFiltered(visibilityFilter, originFilter).then((g) => {
+    api.brainGraphFiltered(visibilityFilter, originFilter, vaultFilter).then((g: any) => {
       setData(g);
       if (onOriginsChange) onOriginsChange(g.origins ?? []);
+      if (onVaultsChange) onVaultsChange(g.vaults ?? []);
     }).catch(() => {});
-  }, [visibilityFilter, originFilter]);
+  }, [visibilityFilter, originFilter, vaultFilter]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -224,19 +234,47 @@ export default function BrainGraph3DConstellation({
       blending: THREE.AdditiveBlending,
     });
     const points = new THREE.Points(geo, mat);
+    (points as any).raycast = () => {};
     scene.add(points);
-    fieldRef.current = { points, positions, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis };
+    const baseColors = new Float32Array(colors); // copy for re-modulation on focus
+    idToIdxRef.current = idToIdx;
+    fieldRef.current = { points, positions, colors, baseColors, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis };
+    focusDirtyRef.current = true;
   }, [data]);
+
+  // Build focus index set + mark dirty whenever hover/select changes
+  useEffect(() => {
+    const focus = hover ?? selected;
+    if (!focus) {
+      focusIdxSetRef.current = null;
+    } else {
+      const set = new Set<number>();
+      const idx = idToIdxRef.current.get(focus);
+      if (idx != null) {
+        set.add(idx);
+        for (const n of (neighborsRef.current.get(idx) ?? [])) set.add(n);
+      }
+      focusIdxSetRef.current = set;
+    }
+    focusDirtyRef.current = true;
+  }, [hover, selected, data]);
 
   // Animation loop — particles flow source→target along curved path, then respawn on new neighbor
   useEffect(() => {
     const fg: any = fgRef.current;
     if (!fg) return;
-    // Enable slow auto-rotate via OrbitControls
-    try {
-      const ctrls: any = fg.controls?.();
-      if (ctrls) { ctrls.autoRotate = true; ctrls.autoRotateSpeed = 0.35; }
-    } catch {}
+    // OrbitControls autoRotate as fallback (library may pause after cooldown)
+    const ctrls0: any = fg.controls?.();
+    if (ctrls0) { ctrls0.autoRotate = true; ctrls0.autoRotateSpeed = 0.4; }
+
+    // Track user interaction to pause manual orbit
+    const lastInteractRef = { current: 0 };
+    const dom: HTMLElement | undefined = fg.renderer?.()?.domElement;
+    const onInteract = () => { lastInteractRef.current = performance.now(); };
+    if (dom) {
+      dom.addEventListener('pointerdown', onInteract);
+      dom.addEventListener('wheel', onInteract, { passive: true });
+    }
 
     let raf = 0;
     let stopped = false;
@@ -249,9 +287,24 @@ export default function BrainGraph3DConstellation({
       const f = fieldRef.current;
       const nbrs = neighborsRef.current;
       if (f && data.nodes.length > 0) {
-        const { positions, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis } = f;
+        const { positions, colors, baseColors, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis } = f;
         const nodes = data.nodes as any[];
         const totalP = sourceIdx.length;
+        // Recompute per-particle color when focus changes (cheap: O(N) writes, once per change)
+        if (focusDirtyRef.current) {
+          const fset = focusIdxSetRef.current;
+          for (let i = 0; i < totalP; i++) {
+            const src = sourceIdx[i];
+            const tgt = targetIdx[i];
+            const dim = fset ? (!(fset.has(src) || fset.has(tgt))) : false;
+            const k = dim ? 0.1 : 1.0;
+            colors[i * 3]     = baseColors[i * 3]     * k;
+            colors[i * 3 + 1] = baseColors[i * 3 + 1] * k;
+            colors[i * 3 + 2] = baseColors[i * 3 + 2] * k;
+          }
+          (f.points.geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
+          focusDirtyRef.current = false;
+        }
         for (let i = 0; i < totalP; i++) {
           t[i] += speed[i] * dt;
           if (t[i] >= 1) {
@@ -287,12 +340,39 @@ export default function BrainGraph3DConstellation({
         }
         (f.points.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
       }
+      // Manual perpetual camera orbit around origin — pauses 2s after user interaction
+      try {
+        const ctrls: any = fg.controls?.();
+        const cam = fg.camera?.();
+        const target = ctrls?.target;
+        const idleMs = performance.now() - lastInteractRef.current;
+        if (cam && target && idleMs > 2000) {
+          // Rotate camera around target on Y axis at ~0.12 rad/sec
+          const dx = cam.position.x - target.x;
+          const dz = cam.position.z - target.z;
+          const r = Math.hypot(dx, dz);
+          if (r > 0.01) {
+            const ang = Math.atan2(dz, dx) + 0.12 * dt;
+            cam.position.x = target.x + Math.cos(ang) * r;
+            cam.position.z = target.z + Math.sin(ang) * r;
+            cam.lookAt(target);
+          }
+        }
+        if (ctrls?.update) ctrls.update();
+        const renderer = fg.renderer?.();
+        const scene = fg.scene?.();
+        if (renderer && scene && cam) renderer.render(scene, cam);
+      } catch {}
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => {
       stopped = true;
       cancelAnimationFrame(raf);
+      if (dom) {
+        dom.removeEventListener('pointerdown', onInteract);
+        dom.removeEventListener('wheel', onInteract);
+      }
       try {
         const ctrls: any = fg.controls?.();
         if (ctrls) ctrls.autoRotate = false;
@@ -307,30 +387,59 @@ export default function BrainGraph3DConstellation({
     return sizes[topN - 1] ?? Infinity;
   }, [data]);
 
-  const nodeThree = useMemo(() => {
-    return (node: any) => {
+  // Focus set: focused node + 1-hop neighbors
+  const focusSet = useMemo(() => {
+    const focus = hover ?? selected;
+    if (!focus) return null;
+    const set = new Set<string>([focus]);
+    for (const l of data.links) {
+      const s = typeof l.source === 'object' ? (l.source as any).id : l.source;
+      const t = typeof l.target === 'object' ? (l.target as any).id : l.target;
+      if (s === focus) set.add(t as string);
+      else if (t === focus) set.add(s as string);
+    }
+    return set;
+  }, [hover, selected, data]);
+
+  // Label-only extension; library owns the default sphere so onNodeHover fires reliably
+  const nodeLabelExt = useMemo(() => {
+    return (node: any): THREE.Object3D => {
+      if (!(showLabels && (node.size ?? 1) >= labelThreshold)) return new THREE.Object3D();
       const color = colorFor(node);
-      const r = 2.5 + Math.sqrt(node.size) * 1.2;
-      const group = new THREE.Group();
-      group.add(new THREE.Mesh(
-        new THREE.SphereGeometry(r, 14, 14),
-        new THREE.MeshBasicMaterial({ color }),
-      ));
-      if (showLabels && (node.size ?? 1) >= labelThreshold) {
-        const sprite = makeLabelSprite(node.title || node.id, color);
-        sprite.position.set(0, r + 4, 0);
-        group.add(sprite);
-      }
-      return group;
+      const r = 1.5 + Math.sqrt(node.size ?? 1) * 0.5;
+      const sprite = makeLabelSprite(node.title || node.id, color);
+      sprite.position.set(0, r + 3, 0);
+      return sprite;
     };
   }, [labelThreshold, showLabels]);
 
+  const nodeColorCb = useCallback((n: any) => {
+    const base = colorFor(n);
+    if (!focusSet) return base;
+    return focusSet.has(n.id) ? base : '#181a24';
+  }, [focusSet]);
+
   const linkColor = useCallback((l: any) => {
     const focus = hover ?? selected;
-    if (!focus) return 'rgba(170,170,200,0.18)';
+    if (!focus) return 'rgba(0,0,0,0)';
     const s = typeof l.source === 'object' ? l.source.id : l.source;
     const t = typeof l.target === 'object' ? l.target.id : l.target;
-    return (s === focus || t === focus) ? '#ffffff' : 'rgba(140,140,160,0.04)';
+    if (s !== focus && t !== focus) return 'rgba(0,0,0,0)';
+    // hot link tinted by the other endpoint (neighbor) — vivid, not grey
+    const sNode: any = typeof l.source === 'object' ? l.source : null;
+    const tNode: any = typeof l.target === 'object' ? l.target : null;
+    const other = sNode && sNode.id === focus ? tNode : sNode;
+    const base = other ? colorFor(other) : '#7dd3fc';
+    // convert hex → rgba w/ moderate alpha so particles overlay reads as glow
+    const c = new THREE.Color(base);
+    return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.55)`;
+  }, [hover, selected]);
+  const linkWidthCb = useCallback((l: any) => {
+    const focus = hover ?? selected;
+    if (!focus) return 0;
+    const s = typeof l.source === 'object' ? l.source.id : l.source;
+    const t = typeof l.target === 'object' ? l.target.id : l.target;
+    return (s === focus || t === focus) ? 0.6 : 0;
   }, [hover, selected]);
 
   function zoom(factor: number) {
@@ -377,22 +486,47 @@ export default function BrainGraph3DConstellation({
           height={size.h}
           backgroundColor="#02030a"
           showNavInfo={false}
-          nodeThreeObject={nodeThree}
-          nodeOpacity={1}
+          nodeRelSize={2.6}
+          nodeVal={(n: any) => (n.size ?? 1)}
+          nodeColor={nodeColorCb}
+          nodeOpacity={0.95}
+          nodeResolution={16}
+          nodeThreeObject={nodeLabelExt}
+          nodeThreeObjectExtend={true}
           nodeLabel={(n: any) => `<div style="font:500 11px Inter,system-ui; padding:6px 10px; background:rgba(8,16,28,0.92); border:1px solid #1f4a55; border-radius:8px; color:#e8e8f0;">${n.title}<div style="font-size:9px;color:#7a7a8c;margin-top:2px;">${n.id}</div></div>`}
           linkColor={linkColor}
-          linkOpacity={0.35}
-          linkWidth={0.3}
+          linkOpacity={1}
+          linkWidth={linkWidthCb}
           linkDirectionalParticles={(l: any) => {
             const focus = hover ?? selected;
             if (!focus) return 0;
             const s = typeof l.source === 'object' ? l.source.id : l.source;
             const t = typeof l.target === 'object' ? l.target.id : l.target;
-            return (s === focus || t === focus) ? 4 : 0;
+            return (s === focus || t === focus) ? 10 : 0;
           }}
-          linkDirectionalParticleSpeed={0.006}
-          linkDirectionalParticleWidth={1.6}
-          linkDirectionalParticleColor={() => '#7dd3fc'}
+          linkDirectionalParticleSpeed={(l: any) => {
+            const focus = hover ?? selected;
+            if (!focus) return 0;
+            const s = typeof l.source === 'object' ? l.source.id : l.source;
+            const t = typeof l.target === 'object' ? l.target.id : l.target;
+            return (s === focus || t === focus) ? 0.011 : 0;
+          }}
+          linkDirectionalParticleWidth={(l: any) => {
+            const focus = hover ?? selected;
+            if (!focus) return 0;
+            const s = typeof l.source === 'object' ? l.source.id : l.source;
+            const t = typeof l.target === 'object' ? l.target.id : l.target;
+            return (s === focus || t === focus) ? 2.6 : 0;
+          }}
+          linkDirectionalParticleColor={(l: any) => {
+            const focus = hover ?? selected;
+            if (!focus) return '#ffffff';
+            const sNode: any = typeof l.source === 'object' ? l.source : null;
+            const tNode: any = typeof l.target === 'object' ? l.target : null;
+            const other = sNode && sNode.id === focus ? tNode : sNode;
+            return other ? colorFor(other) : '#7dd3fc';
+          }}
+          linkDirectionalParticleResolution={6}
           onNodeHover={(n: any) => setHover(n?.id ?? null)}
           onNodeClick={(n: any) => {
             setSelected(n.id);
@@ -407,7 +541,8 @@ export default function BrainGraph3DConstellation({
           }}
           onBackgroundClick={() => { setSelected(null); onDeselect?.(); }}
           enableNodeDrag
-          cooldownTicks={300}
+          cooldownTicks={Infinity}
+          cooldownTime={Infinity}
           warmupTicks={80}
         />
       )}

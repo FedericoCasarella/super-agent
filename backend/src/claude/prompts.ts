@@ -85,7 +85,19 @@ export async function buildSystemContext(userId: number): Promise<string> {
     'EMOJI: ~1 every 3-4 messages, never more than one per msg, never decorative. 🎯 sharp, ✅ confirm, 🔥 urgency, 📊 metrics, 🧠 reframe, 👀 noticed, ⚡ quick win, 🚩 red flag, 😏 light irony, 🙏 vulnerability. Skip on heavy topics. Never emoji-spam.'
   );
   parts.push("YOUR ONE JOB: improve user's business outcomes. Every interaction → gather info / clarify decision / ship action. You measure success in commitments extracted and items closed, NOT in messages exchanged.");
-  parts.push('You have a per-user second-brain (Obsidian vault) at cwd. Use Read/Grep/Glob/Write/Edit.');
+  // Multi-vault awareness
+  try {
+    const { listVaults } = await import('../brain/vaults.js');
+    const vaults = await listVaults(userId);
+    if (vaults.length > 0) {
+      const lines = vaults.map((v) => `- ${v.name}${v.is_primary ? ' (primary, current cwd)' : ''}: ${v.path}`).join('\n');
+      parts.push('BRAINS (multi-vault) — the user has these vaults connected:\n' + lines + '\n\nYour cwd is the primary vault. To read/write notes in OTHER vaults, use their absolute paths with Read/Write/Edit/Grep/Glob. Always cite which vault when you reference a note ("from <vaultName>").');
+    } else {
+      parts.push('You have a per-user second-brain (Obsidian vault) at cwd. Use Read/Grep/Glob/Write/Edit.');
+    }
+  } catch {
+    parts.push('You have a per-user second-brain (Obsidian vault) at cwd. Use Read/Grep/Glob/Write/Edit.');
+  }
   parts.push('Always save important facts as notes in vault under people/, projects/, inbox/.');
   parts.push(
     'LINKING RULE: every note MUST include frontmatter `related: ["[[path]]"]` to existing notes (grep first to find candidates). Body uses `[[wikilinks]]`. Zero-link note = code smell.'

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Button, Card, Chip, Input } from '../components/ui';
+import { Button, Card, Chip, Input, Modal, Field, useToast } from '../components/ui';
 import BrainGraph3D from '../components/BrainGraph3D';
 import BrainGraph3DConstellation from '../components/BrainGraph3DConstellation';
 import MarkdownView from '../components/MarkdownView';
 import { useI18n } from '../i18n';
+import { api as apiX } from '../api';
 
 type Tab = 'graph' | 'list';
 type View = '2d' | '3d';
@@ -18,6 +19,26 @@ export default function Brain() {
   const [filter, setFilter] = useState<Filter>('all');
   const [originFilter, setOriginFilter] = useState<string>('all');
   const [origins, setOrigins] = useState<string[]>([]);
+  const [vaultFilter, setVaultFilter] = useState<string>('all');
+  const [vaults, setVaults] = useState<string[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [graphKey, setGraphKey] = useState(0);
+  const [nvName, setNvName] = useState('');
+  const [nvPath, setNvPath] = useState('');
+  const [nvSeed, setNvSeed] = useState(true);
+  const [nvBusy, setNvBusy] = useState(false);
+  const toast = useToast();
+  async function createVault() {
+    setNvBusy(true);
+    try {
+      await apiX.vaultsCreate({ name: nvName, path: nvPath, seed: nvSeed, makePrimary: false });
+      toast.push('Cervello collegato', 'on');
+      setCreateOpen(false); setNvName(''); setNvPath(''); setNvSeed(true);
+      setGraphKey((k) => k + 1); // force graph re-mount → re-fetch vaults
+      reloadList();
+    } catch (e: any) { toast.push(e.message, 'err'); }
+    finally { setNvBusy(false); }
+  }
   const [q, setQ] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [note, setNote] = useState<any | null>(null);
@@ -51,11 +72,22 @@ export default function Brain() {
       ))}
     </div>
   );
+  const VaultBar = vaults.length >= 1 ? (
+    <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1 flex-wrap">
+      <Button size="sm" variant={vaultFilter === 'all' ? 'primary' : 'ghost'} onClick={() => setVaultFilter('all')}>🧠 {t('brain.vaultAll')}</Button>
+      {vaults.map((v) => (
+        <Button key={v} size="sm" variant={vaultFilter === v ? 'primary' : 'ghost'} onClick={() => setVaultFilter(v)}>{v}</Button>
+      ))}
+    </div>
+  ) : null;
 
   return (
     <div className="space-y-5 h-full flex flex-col">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-semibold text-gradient">Brain</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-semibold text-gradient">{t('brain.title2')}</h1>
+          <Button size="sm" variant="ghost" onClick={() => setCreateOpen(true)}>+ Cervello</Button>
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           {FilterBar}
           <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
@@ -70,26 +102,37 @@ export default function Brain() {
           )}
         </div>
       </div>
-      {tab === 'graph' && OriginBar}
+      {tab === 'graph' && (
+        <div className="flex gap-2 flex-wrap">
+          {VaultBar}
+          {OriginBar}
+        </div>
+      )}
 
       {tab === 'graph' ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
           <Card className="lg:col-span-2 p-0 overflow-hidden h-[78vh] relative">
             {view === '3d' ? (
               <BrainGraph3DConstellation
+                key={`3d-${graphKey}`}
                 onSelect={open}
                 onDeselect={() => setNote(null)}
                 visibilityFilter={filter}
                 originFilter={originFilter}
+                vaultFilter={vaultFilter}
                 onOriginsChange={setOrigins}
+                onVaultsChange={setVaults}
               />
             ) : (
               <BrainGraph3D
+                key={`2d-${graphKey}`}
                 onSelect={open}
                 onDeselect={() => setNote(null)}
                 visibilityFilter={filter}
                 originFilter={originFilter}
+                vaultFilter={vaultFilter}
                 onOriginsChange={setOrigins}
+                onVaultsChange={setVaults}
               />
             )}
           </Card>
@@ -164,6 +207,25 @@ export default function Brain() {
           </div>
         </>
       )}
+
+      <Modal
+        open={createOpen}
+        title="Nuovo cervello"
+        onClose={() => setCreateOpen(false)}
+        footer={<>
+          <Button variant="ghost" onClick={() => setCreateOpen(false)}>{t('common.cancel')}</Button>
+          <Button onClick={createVault} disabled={!nvName || !nvPath || nvBusy}>{nvBusy ? '…' : t('settings.vaultCreate')}</Button>
+        </>}
+      >
+        <div className="space-y-3">
+          <Field label={t('settings.vaultName')}><Input value={nvName} onChange={(e) => setNvName(e.target.value)} placeholder="work / personal / …" /></Field>
+          <Field label={t('settings.vaultNewPath')}><Input className="font-mono" value={nvPath} onChange={(e) => setNvPath(e.target.value)} placeholder="/Users/you/brain-work" /></Field>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={nvSeed} onChange={(e) => setNvSeed(e.target.checked)} />
+            {t('settings.vaultSeed')}
+          </label>
+        </div>
+      </Modal>
     </div>
   );
 }

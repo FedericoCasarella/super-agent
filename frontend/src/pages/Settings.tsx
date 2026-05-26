@@ -29,6 +29,32 @@ export default function Settings() {
   const [deletePassword, setDeletePassword] = useState('');
   const [deleting, setDeleting] = useState(false);
 
+  // ---------- Vaults ----------
+  const [vaults, setVaults] = useState<any[]>([]);
+  const [newVaultName, setNewVaultName] = useState('');
+  const [newVaultPath, setNewVaultPath] = useState('');
+  const [newVaultSeed, setNewVaultSeed] = useState(true);
+  const [newVaultPrimary, setNewVaultPrimary] = useState(false);
+  async function loadVaults() { try { setVaults(await api.vaultsList()); } catch {} }
+  useEffect(() => { loadVaults(); }, []);
+  async function createVault() {
+    try {
+      await api.vaultsCreate({ name: newVaultName, path: newVaultPath, seed: newVaultSeed, makePrimary: newVaultPrimary });
+      toast.push(t('settings.vaultCreated'), 'on');
+      setNewVaultName(''); setNewVaultPath(''); setNewVaultSeed(true); setNewVaultPrimary(false);
+      await loadVaults(); await load();
+    } catch (e: any) { toast.push(e.message, 'err'); }
+  }
+  async function setPrimaryVault(id: number) {
+    try { await api.vaultsSetPrimary(id); toast.push(t('settings.vaultPrimarySet'), 'on'); await loadVaults(); await load(); }
+    catch (e: any) { toast.push(e.message, 'err'); }
+  }
+  async function removeVault(v: any) {
+    if (!confirm(t('settings.confirmRemoveVault').replace('{name}', v.name))) return;
+    try { await api.vaultsDelete(v.id); toast.push(t('settings.vaultRemoved'), 'warn'); await loadVaults(); await load(); }
+    catch (e: any) { toast.push(e.message, 'err'); }
+  }
+
   async function doDeleteAccount() {
     if (!deletePassword) return;
     setDeleting(true);
@@ -99,6 +125,47 @@ export default function Settings() {
               await load();
             }}
           />
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="text-lg font-semibold mb-1">{t('settings.vaults')}</h2>
+        <p className="text-sm text-muted mb-4">{t('settings.vaultsDesc')}</p>
+        {vaults.length > 0 && (
+          <ul className="space-y-2 mb-4">
+            {vaults.map((v) => (
+              <li key={v.id} className="flex items-center justify-between gap-3 border border-border rounded-2xl p-3 bg-surface2/40">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{v.name}</span>
+                    {v.is_primary && <Chip tone="on">{t('settings.vaultPrimary')}</Chip>}
+                  </div>
+                  <div className="text-xs text-muted font-mono truncate">{v.path}</div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  {!v.is_primary && <Button size="sm" variant="ghost" onClick={() => setPrimaryVault(v.id)}>{t('settings.vaultSetPrimary')}</Button>}
+                  <Button size="sm" variant="danger" onClick={() => removeVault(v)} disabled={vaults.length === 1}>{t('settings.vaultRemove')}</Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="space-y-3 border-t border-border pt-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label={t('settings.vaultName')}><Input value={newVaultName} onChange={(e) => setNewVaultName(e.target.value)} placeholder="work / personal / …" /></Field>
+            <Field label={t('settings.vaultNewPath')}><Input className="font-mono" value={newVaultPath} onChange={(e) => setNewVaultPath(e.target.value)} placeholder="/Users/you/brain-work" /></Field>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={newVaultSeed} onChange={(e) => setNewVaultSeed(e.target.checked)} />
+            {t('settings.vaultSeed')}
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={newVaultPrimary} onChange={(e) => setNewVaultPrimary(e.target.checked)} />
+            {t('settings.vaultPrimary')}
+          </label>
+          <div className="flex justify-end">
+            <Button onClick={createVault} disabled={!newVaultName || !newVaultPath}>{t('settings.vaultCreate')}</Button>
+          </div>
         </div>
       </Card>
 

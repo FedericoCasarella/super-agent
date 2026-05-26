@@ -139,17 +139,17 @@ router.post('/connectors/imap/test', async (req, res) => {
 
 router.get('/brain/graph', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
-  const origin = req.query.origin ? String(req.query.origin) : 'all'; // 'all' | 'native' | <email>
-  const g = await buildGraph(req.user!.id);
+  const origin = req.query.origin ? String(req.query.origin) : 'all';
+  const vaultFilter = req.query.vault ? String(req.query.vault) : 'all';
+  const g = await buildGraph(req.user!.id, { vaultFilter });
   let nodes = g.nodes;
   if (filter !== 'all') nodes = nodes.filter((n) => n.visibility === filter);
   if (origin === 'native') nodes = nodes.filter((n) => !n.origin_user_id);
   else if (origin !== 'all') nodes = nodes.filter((n) => n.origin_email === origin);
   const ids = new Set(nodes.map((n) => n.id));
   const links = g.links.filter((l) => ids.has(l.source) && ids.has(l.target));
-  // Collect distinct origin emails for the filter UI
   const origins = Array.from(new Set(g.nodes.map((n) => n.origin_email).filter(Boolean))) as string[];
-  res.json({ nodes, links, origins });
+  res.json({ nodes, links, origins, vaults: g.vaults });
 });
 
 // Internal agents
@@ -176,8 +176,32 @@ router.get('/brain/search', async (req, res) => {
 });
 
 router.get('/brain/note', async (req, res) => {
-  const p = String(req.query.path ?? '');
-  const note = await readNote(req.user!.id, p);
+  const raw = String(req.query.path ?? '');
+  const userId = req.user!.id;
+  // Support id format `<vaultName>::<relPath>`
+  if (raw.includes('::')) {
+    const [vaultName, rel] = raw.split('::', 2);
+    const { listVaults } = await import('../brain/vaults.js');
+    const vs = await listVaults(userId);
+    const v = vs.find((x) => x.name === vaultName);
+    if (!v) return res.status(404).json({ error: 'vault not found' });
+    try {
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const matter = (await import('gray-matter')).default;
+      const fullPath = path.join(v.path, rel);
+      const txt = await fs.readFile(fullPath, 'utf8');
+      const parsed = matter(txt);
+      return res.json({
+        path: raw,
+        title: parsed.data.title,
+        tags: parsed.data.tags ?? [],
+        data: parsed.data,
+        content: parsed.content,
+      });
+    } catch { return res.status(404).json({ error: 'not found' }); }
+  }
+  const note = await readNote(userId, raw);
   if (!note) return res.status(404).json({ error: 'not found' });
   res.json(note);
 });
@@ -379,6 +403,29 @@ router.post('/network/share/:id/approve', async (req, res) => {
 router.post('/network/share/:id/deny', async (req, res) => {
   const m = await import('../network/index.js');
   try { res.json(await m.denyShareRequest(req.user!.id, Number(req.params.id), req.body?.reason)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Vaults (multi-brain)
+router.get('/vaults', async (req, res) => {
+  const m = await import('../brain/vaults.js');
+  res.json(await m.listVaults(req.user!.id));
+});
+router.post('/vaults', async (req, res) => {
+  const m = await import('../brain/vaults.js');
+  const { name, path: p, seed = true, makePrimary = false } = req.body ?? {};
+  if (!name || !p) return res.status(400).json({ error: 'name and path required' });
+  try { res.json(await m.createVault(req.user!.id, String(name), String(p), { seed: !!seed, makePrimary: !!makePrimary })); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/vaults/:id/primary', async (req, res) => {
+  const m = await import('../brain/vaults.js');
+  try { await m.setPrimaryVault(req.user!.id, Number(req.params.id)); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/vaults/:id', async (req, res) => {
+  const m = await import('../brain/vaults.js');
+  try { await m.deleteVault(req.user!.id, Number(req.params.id)); res.json({ ok: true }); }
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
