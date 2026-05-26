@@ -1,14 +1,70 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { query, getSetting, setSetting, listActiveUsers } from '../db/index.js';
 import { runClaude } from '../claude/runner.js';
 import { buildSystemContext } from '../claude/prompts.js';
 import { sendTelegram } from '../telegram/bot.js';
 import { getVaultRoot } from '../brain/vault.js';
 
+// Gate ZERO-LLM: se nessuna nota del vault e' cambiata dall'ultima reflection
+// E sono passate <STALE_FORCE_H ore -> SKIP a costo zero (no chiamata LLM).
+// Pattern canonico dal sovrano ~/projects/polpo-brain/backend/reflection.py (sess.2271).
+// Eccezione "stale": ogni STALE_FORCE_H forziamo comunque una reflection per
+// catturare trigger TEMPORALI (deadline scadute, silenzi prolungati) che il
+// solo gate mtime non vedrebbe.
+const STALE_FORCE_H = 4;
+const SKIP_VAULT_DIRS = new Set(['.obsidian', '.git', '.trash', '_archive', 'node_modules', '__pycache__']);
+
+async function scanVaultMaxMtime(root: string): Promise<number> {
+  let max = 0;
+  async function walk(dir: string) {
+    let entries: any[] = [];
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (SKIP_VAULT_DIRS.has(e.name)) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { await walk(full); continue; }
+      if (!e.name.endsWith('.md')) continue;
+      try {
+        const st = await fs.stat(full);
+        if (st.mtimeMs > max) max = st.mtimeMs;
+      } catch {}
+    }
+  }
+  await walk(root);
+  return max;
+}
+
 export async function runReflectionForUser(userId: number) {
   const quiet = await getSetting<any>(userId, 'agent_quiet_until');
   if (quiet?.until && new Date(quiet.until) > new Date()) return;
   const sleep = await getSetting<any>(userId, 'agent_next_reflection_at');
   if (sleep?.until && new Date(sleep.until) > new Date()) return;
+
+  // ─── Gate ZERO-LLM (mtime vault) ────────────────────────────────────────
+  const vault = await getVaultRoot(userId);
+  if (vault) {
+    try {
+      const maxMtime = await scanVaultMaxMtime(vault);
+      const lastMtime = (await getSetting<number>(userId, 'last_reflection_mtime')) ?? 0;
+      const lastAtIso = await getSetting<string>(userId, 'last_reflection_at');
+      const elapsedH = lastAtIso ? (Date.now() - new Date(lastAtIso).getTime()) / 3600_000 : Infinity;
+      const vaultChanged = maxMtime > lastMtime;
+      const stale = elapsedH >= STALE_FORCE_H;
+      if (lastMtime > 0 && !vaultChanged && !stale) {
+        const iso = new Date(maxMtime).toISOString();
+        console.log(`[reflection:u${userId}] skip_no_change (mtime: ${iso}, elapsed: ${elapsedH.toFixed(2)}h)`);
+        // self-throttle: prossimo retry fra 30min (evita re-scan loop ogni 2min)
+        await setSetting(userId, 'agent_next_reflection_at', { until: new Date(Date.now() + 30 * 60_000).toISOString(), reason: 'skip_no_change', setAt: new Date().toISOString() });
+        return;
+      }
+      // Memorizza il mtime corrente come "ultimo scansionato" per il prossimo tick
+      await setSetting(userId, 'last_reflection_mtime', maxMtime);
+    } catch (e) {
+      console.error(`[reflection:u${userId}] mtime gate failed (proceeding)`, e);
+    }
+  }
+
   await setSetting(userId, 'last_reflection_at', new Date().toISOString());
 
   const history = await query<{ direction: string; content: string; ts: string }>(
@@ -58,7 +114,6 @@ TASKS:
    - PING: only message(s), <<MSG>> split. NO preamble.
    - SKIP: literal 4 chars S K I P. Nothing else.`;
 
-  const vault = await getVaultRoot(userId);
   const res = await runClaude(userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 180_000, kind: 'reflection' });
   if (!res.ok) { console.log(`[reflection:u${userId}] failed`); return; }
   const out = res.text.trim();

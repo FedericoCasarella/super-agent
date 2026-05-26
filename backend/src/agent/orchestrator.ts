@@ -20,7 +20,7 @@ async function handleIncoming({ userId, text }: { userId: number; chatId: number
   const stopTyping = await startTyping(userId);
   let res;
   try {
-    res = await runClaude(userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 180_000, kind: 'chat_turn', meta: { incoming: text.slice(0, 200) } });
+    res = await runClaude(userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 180_000, kind: 'chat_turn', userText: text, meta: { incoming: text.slice(0, 200) } });
   } finally {
     stopTyping();
   }
