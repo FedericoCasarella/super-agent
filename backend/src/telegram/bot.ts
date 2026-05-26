@@ -11,9 +11,12 @@ type BotEntry = {
 };
 const bots = new Map<number, BotEntry>(); // userId → bot
 const startInFlight = new Map<number, Promise<void>>(); // userId → in-flight start promise
-// After Telegram returns 409, the server-side getUpdates slot needs ~3s to free.
-// We hold a short cooldown to prevent immediate restart loops.
-const TELEGRAM_STOP_GRACE_MS = 1500;
+// After Telegram returns 409, the server-side getUpdates slot needs ~3-5s to free.
+// We hold a cooldown to prevent immediate restart loops. Raised 1500→5000 sess.2379
+// after recurring 409 in err.log during tsx-watch hot reloads.
+const TELEGRAM_STOP_GRACE_MS = 5000;
+const TELEGRAM_LAUNCH_MAX_RETRIES = 3;
+const TELEGRAM_LAUNCH_RETRY_BASE_MS = 3000;
 
 async function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
@@ -135,16 +138,31 @@ ${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a
     bot.catch((err) => console.error(`[telegram:${userId}] error`, err));
     // launch() returns a promise that resolves only when polling loop exits (after stop()).
     // We mark state='running' via onLaunch callback (fired AFTER getMe but BEFORE getUpdates loop).
-    entry.launchPromise = bot
-      .launch({}, () => {
-        // onLaunch: botInfo is set; polling loop is about to start.
-        if (entry.state === 'starting') entry.state = 'running';
-      })
-      .catch((e) => {
-        console.error(`[telegram:${userId}] launch`, e);
-        // 409 / 401 / network → mark stopped so next call can retry from clean slate.
-        entry.state = 'stopped';
-      });
+    // Retry-with-backoff on 409 sess.2379: prior code marked state='stopped' on first 409,
+    // requiring an external restart trigger that never came → bot stayed dead until next sendTelegram.
+    const launchWithRetry = async () => {
+      for (let attempt = 1; attempt <= TELEGRAM_LAUNCH_MAX_RETRIES; attempt++) {
+        try {
+          await bot.launch({}, () => {
+            if (entry.state === 'starting') entry.state = 'running';
+          });
+          return;
+        } catch (e: any) {
+          const code = e?.response?.error_code ?? e?.code;
+          const is409 = code === 409;
+          if (is409 && attempt < TELEGRAM_LAUNCH_MAX_RETRIES) {
+            const wait = TELEGRAM_LAUNCH_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+            console.warn(`[telegram:${userId}] 409 attempt ${attempt}/${TELEGRAM_LAUNCH_MAX_RETRIES}, retry in ${wait}ms`);
+            await sleep(wait);
+            continue;
+          }
+          console.error(`[telegram:${userId}] launch (attempt ${attempt})`, e);
+          entry.state = 'stopped';
+          return;
+        }
+      }
+    };
+    entry.launchPromise = launchWithRetry();
     console.log(`[telegram:${userId}] started`);
   })();
 
