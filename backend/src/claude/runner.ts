@@ -71,6 +71,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
       env: { ...process.env, POLPO_BRAIN_USER_ID: String(userId) },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
     const timer = setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs ?? 120_000);
