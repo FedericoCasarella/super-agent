@@ -39,6 +39,48 @@ async function startBotForUser(userId: number) {
 
   // Explicit /start handler — Telegraf treats /start as a command and may
   // bypass generic on('message') depending on update type / entities.
+  // /agents command — show active sub-agents
+  bot.command('agents', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { listActive } = await import('../sub_agents/index.js');
+      const active = await listActive(userId);
+      if (!active.length) { await ctx.reply('Nessun sub-agent in esecuzione.'); return; }
+      const lines = active.map((s, i) => `${i + 1}. **${s.title}** — ${s.status === 'running' ? '⚡ in corso' : '⏳ in coda'}\n   _${(s.brief ?? '').slice(0, 120)}_`);
+      await ctx.reply(`🤖 ${active.length} agent${active.length > 1 ? 'i' : 'e'} attivo${active.length > 1 ? 'i' : ''}:\n\n${lines.join('\n\n')}`, { parse_mode: 'Markdown' as any });
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 160)}`);
+    }
+  });
+
+  // Inline keyboard callback — approve/deny proposals
+  bot.on('callback_query', async (ctx) => {
+    const cq: any = ctx.callbackQuery;
+    const data: string = cq?.data ?? '';
+    const m = data.match(/^proposal:(\d+):(approve|deny)$/);
+    if (!m) { await ctx.answerCbQuery('Unknown action'); return; }
+    const proposalId = Number(m[1]);
+    const action = m[2];
+    try {
+      const subAgents = await import('../sub_agents/index.js');
+      if (action === 'approve') {
+        const spawned = await subAgents.approveProposal(userId, proposalId);
+        await ctx.answerCbQuery(`✅ ${spawned.length} agent lanciat${spawned.length > 1 ? 'i' : 'o'}`);
+        try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+        try { await ctx.editMessageText(`✅ Approvato. ${spawned.length} agent in esecuzione.`); } catch {}
+      } else {
+        await subAgents.denyProposal(userId, proposalId);
+        await ctx.answerCbQuery('❌ Rifiutato');
+        try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+        try { await ctx.editMessageText('❌ Rifiutato.'); } catch {}
+      }
+    } catch (e: any) {
+      await ctx.answerCbQuery(`Errore: ${String(e?.message ?? e).slice(0, 100)}`);
+    }
+  });
+
   bot.start(async (ctx) => {
     const chatId = ctx.chat.id;
     const cur = await getSetting<any>(userId, 'telegram');
@@ -171,6 +213,39 @@ export async function sendTelegram(userId: number, text: string) {
       await entry.bot.telegram.sendMessage(cfg.chatId, p.replace(/\*\*|__|`/g, ''));
     }
     await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+export async function sendProposalKeyboard(userId: number, proposal: { id: number; title: string; reason: string | null; proposals: { title: string; brief: string }[] }): Promise<{ message_id: number; chat_id: number } | null> {
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return null;
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return null;
+  const chatId = cfg.chatId;
+  const body = [
+    `🤖 *${proposal.title}*`,
+    proposal.reason ? `\n${proposal.reason}` : '',
+    '',
+    'Vorrei lanciare in parallelo:',
+    ...proposal.proposals.map((p, i) => `${i + 1}. *${p.title}* — ${p.brief}`),
+    '',
+    'Procedo?',
+  ].filter(Boolean).join('\n');
+  try {
+    const sent = await entry.bot.telegram.sendMessage(chatId, body, {
+      parse_mode: 'Markdown' as any,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ Sì, procedi', callback_data: `proposal:${proposal.id}:approve` },
+          { text: '❌ No', callback_data: `proposal:${proposal.id}:deny` },
+        ]],
+      },
+    });
+    return { message_id: (sent as any).message_id, chat_id: chatId };
+  } catch (e: any) {
+    console.error('[telegram] proposal send failed', e?.message ?? e);
+    return null;
   }
 }
 

@@ -2,6 +2,7 @@ import type { Connector } from '../../types.js';
 import { getSetting, setSetting } from '../../../db/index.js';
 import { readNote, writeNote } from '../../../brain/vault.js';
 import * as net from '../../../network/index.js';
+import * as subAgents from '../../../sub_agents/index.js';
 
 const ROADMAP_PATH = 'meta/business-roadmap.md';
 
@@ -237,6 +238,49 @@ const connector: Connector = {
         required: ['request_id'], additionalProperties: false,
       },
       handler: async (ctx, { request_id, reason }) => net.denyShareRequest(ctx.userId, request_id, reason),
+    },
+    {
+      name: 'propose_agents',
+      description: 'Propose to spawn one or more sub-agents in parallel. Sends a yes/no Telegram prompt to the user. Each agent gets a complete self-contained prompt (no shared memory). USE THIS instead of doing big async work yourself when: (a) the work is parallelizable, (b) you can let the user offload it, (c) tasks > 30s. After approval, sub-agents run in background; user sees them in /agents portal + Telegram /agents command.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'One-line headline for the batch (e.g. "Landing + Pricing in parallelo")' },
+          reason: { type: 'string', description: 'Why you want to spawn these (1-2 lines, user-facing)' },
+          proposals: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 6,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Short label (3-6 words)' },
+                brief: { type: 'string', description: 'One-line user-facing summary' },
+                prompt: { type: 'string', description: 'Full self-contained prompt for the sub-agent. Include all context (no shared memory). Be specific about deliverable + file path.' },
+              },
+              required: ['title', 'brief', 'prompt'], additionalProperties: false,
+            },
+          },
+        },
+        required: ['title', 'proposals'], additionalProperties: false,
+      },
+      handler: async (ctx, { title, reason, proposals }) => {
+        const p = await subAgents.createProposal(ctx.userId, title, reason ?? null, proposals);
+        return { ok: true, proposalId: p.id, status: p.status, awaitingApproval: true };
+      },
+    },
+    {
+      name: 'agents_list',
+      description: 'List current sub-agents (running, done, error). Use to report state when user asks "what are you working on" or before proposing new ones.',
+      inputSchema: {
+        type: 'object',
+        properties: { status: { type: 'string', enum: ['pending', 'running', 'done', 'error', 'cancelled'] } },
+        additionalProperties: false,
+      },
+      handler: async (ctx, { status }) => {
+        const list = await subAgents.listSubAgents(ctx.userId, { status, limit: 50 });
+        return list.map((s) => ({ id: s.id, title: s.title, brief: s.brief, status: s.status, started_at: s.started_at, ended_at: s.ended_at }));
+      },
     },
     {
       name: 'roadmap_set_status',

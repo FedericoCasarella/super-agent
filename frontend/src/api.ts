@@ -74,4 +74,12 @@ export const api = {
   updateBusiness: (data: any) => req('/settings/business', { method: 'PUT', body: JSON.stringify(data) }),
   updateTelegram: (token: string) => req('/settings/telegram', { method: 'PUT', body: JSON.stringify({ token }) }),
   updateSound: (enabled: boolean) => req('/settings/sound', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  // Sub-agents
+  subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
+  subAgentsActive: () => req<any[]>('/sub-agents/active'),
+  subAgentGet: (id: number) => req<any>(`/sub-agents/${id}`),
+  subAgentCancel: (id: number) => req<any>(`/sub-agents/${id}/cancel`, { method: 'POST' }),
+  proposalsList: () => req<any[]>('/agent-proposals'),
+  proposalApprove: (id: number) => req<any>(`/agent-proposals/${id}/approve`, { method: 'POST' }),
+  proposalDeny: (id: number) => req<any>(`/agent-proposals/${id}/deny`, { method: 'POST' }),
 };

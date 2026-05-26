@@ -13,6 +13,7 @@ import Logs from './pages/Logs';
 import Tasks from './pages/Tasks';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
+import LiveAgents from './pages/LiveAgents';
 import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
 import MessageSound from './components/MessageSound';
@@ -71,6 +72,7 @@ export default function App() {
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/agents" element={<Agents />} />
             <Route path="/agents/:name" element={<AgentDetail />} />
+            <Route path="/live-agents" element={<LiveAgents />} />
             <Route path="/network" element={<Network />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/settings" element={<Settings />} />

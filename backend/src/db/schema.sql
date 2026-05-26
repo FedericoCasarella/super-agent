@@ -255,3 +255,38 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS scheduled_tasks_enabled_idx ON scheduled_tasks(enabled);
+
+-- Sub-agents (human-in-the-loop spawned by main agent)
+CREATE TABLE IF NOT EXISTS agent_proposals (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  reason TEXT,
+  proposals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','expired')),
+  telegram_message_id BIGINT,
+  telegram_chat_id BIGINT,
+  decided_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_proposals_user_idx ON agent_proposals(user_id, status);
+
+CREATE TABLE IF NOT EXISTS sub_agents (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  proposal_id BIGINT REFERENCES agent_proposals(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  brief TEXT,
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','done','error','cancelled')),
+  result TEXT,
+  error TEXT,
+  run_id BIGINT REFERENCES agent_runs(id) ON DELETE SET NULL,
+  cost_usd NUMERIC,
+  started_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sub_agents_user_status_idx ON sub_agents(user_id, status);
+CREATE INDEX IF NOT EXISTS sub_agents_user_created_idx ON sub_agents(user_id, created_at DESC);

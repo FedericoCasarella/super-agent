@@ -39,4 +39,5 @@ export function attachWs(server: Server) {
   bus.on('connector:event', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'connector', payload: m }); });
   bus.on('connectors:changed', () => { for (const c of clients) if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify({ type: 'connectors:changed' })); });
   bus.on('brain:access', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'brain:access', payload: m }); });
+  bus.on('subagent:event', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'subagent', payload: m }); });
 }

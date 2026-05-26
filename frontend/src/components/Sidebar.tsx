@@ -20,6 +20,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/roadmap', label: t('nav.roadmap'), icon: '◆' },
     { to: '/tasks', label: 'Tasks', icon: '◷' },
     { to: '/agents', label: 'Agents', icon: '◈' },
+    { to: '/live-agents', label: 'Live Agents', icon: '⚡' },
     { to: '/network', label: 'Network', icon: '⌬' },
     { to: '/logs', label: 'Logs', icon: '▤' },
     { to: '/settings', label: t('nav.settings'), icon: '⚒' },

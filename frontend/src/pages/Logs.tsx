@@ -20,8 +20,12 @@ const KIND_TONE: Record<string, 'on' | 'warn' | 'err' | 'default'> = {
 
 function fmtUsd(v: number | null | undefined) {
   if (v == null) return '—';
-  if (v < 0.01) return `$${(v * 1000).toFixed(3)}m`;
-  return `$${v.toFixed(4)}`;
+  const n = Number(v);
+  if (!isFinite(n)) return '—';
+  if (n === 0) return '$0';
+  if (n < 0.0001) return `$${n.toExponential(2)}`;
+  if (n < 1) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(2)}`;
 }
 function fmtNum(n: number | null | undefined) { return n == null ? '—' : Intl.NumberFormat().format(n); }
 

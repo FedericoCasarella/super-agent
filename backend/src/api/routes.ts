@@ -429,6 +429,44 @@ router.delete('/vaults/:id', async (req, res) => {
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// Sub-agents
+router.get('/sub-agents', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  const status = req.query.status ? String(req.query.status) : undefined;
+  res.json(await sa.listSubAgents(req.user!.id, { status }));
+});
+router.get('/sub-agents/active', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  res.json(await sa.listActive(req.user!.id));
+});
+router.get('/sub-agents/:id', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  const r = await sa.getSubAgent(req.user!.id, Number(req.params.id));
+  if (!r) return res.status(404).json({ error: 'not found' });
+  res.json(r);
+});
+router.post('/sub-agents/:id/cancel', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  await sa.cancelSubAgent(req.user!.id, Number(req.params.id));
+  res.json({ ok: true });
+});
+router.get('/agent-proposals', async (req, res) => {
+  const rows = await query(
+    `SELECT * FROM agent_proposals WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`, [req.user!.id]
+  );
+  res.json(rows);
+});
+router.post('/agent-proposals/:id/approve', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  try { res.json({ ok: true, spawned: await sa.approveProposal(req.user!.id, Number(req.params.id)) }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/agent-proposals/:id/deny', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  try { await sa.denyProposal(req.user!.id, Number(req.params.id)); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 router.get('/mcp/external', async (req, res) => {
   const { listExternalMcps, refreshExternalMcps } = await import('../claude/external_mcps.js');
   if (req.query.refresh === '1') await refreshExternalMcps();
