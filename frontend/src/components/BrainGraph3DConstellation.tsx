@@ -5,7 +5,7 @@ import { api } from '../api';
 import { useWS } from '../ws';
 
 const MRI_GREEN = '#39ff7a';
-const MRI_DURATION_MS = 4000;
+const MRI_DURATION_MS = 4200;
 
 type Node = {
   id: string;
@@ -46,8 +46,11 @@ function colorFor(node: any): string {
   return KIND_COLOR[node.kind] ?? DEFAULT_COLOR;
 }
 
-// Particles per node emitter (firing axons)
-const PER_NODE = 400;
+// Particles per node emitter (firing axons) — selectable density
+const DENSITY_PRESETS: Record<string, number> = { low: 60, med: 180, high: 400 };
+const DENSITY_LABEL: Record<string, string> = { low: 'L', med: 'M', high: 'H' };
+const DENSITY_ORDER = ['low', 'med', 'high'] as const;
+type Density = typeof DENSITY_ORDER[number];
 
 function makeLabelSprite(text: string, color: string): THREE.Sprite {
   const label = text.length > 28 ? text.slice(0, 27) + '…' : text;
@@ -101,6 +104,18 @@ export default function BrainGraph3DConstellation({
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [showLabels, setShowLabels] = useState<boolean>(() => typeof localStorage !== 'undefined' ? localStorage.getItem('brain_3d_labels') !== '0' : true);
   useEffect(() => { try { localStorage.setItem('brain_3d_labels', showLabels ? '1' : '0'); } catch {} }, [showLabels]);
+  const [showParticles, setShowParticles] = useState<boolean>(() => typeof localStorage !== 'undefined' ? localStorage.getItem('brain_3d_particles') !== '0' : true);
+  useEffect(() => { try { localStorage.setItem('brain_3d_particles', showParticles ? '1' : '0'); } catch {} }, [showParticles]);
+  const [density, setDensity] = useState<Density>(() => {
+    try { const v = localStorage.getItem('brain_3d_density') as Density; if (v && DENSITY_PRESETS[v]) return v; } catch {}
+    return 'med';
+  });
+  useEffect(() => { try { localStorage.setItem('brain_3d_density', density); } catch {} }, [density]);
+  const PER_NODE = DENSITY_PRESETS[density];
+  useEffect(() => {
+    const f = (fieldRef.current as any);
+    if (f?.points) f.points.visible = showParticles;
+  }, [showParticles]);
   const fieldRef = useRef<{
     points: THREE.Points;
     positions: Float32Array;
@@ -117,15 +132,18 @@ export default function BrainGraph3DConstellation({
   const focusIdxSetRef = useRef<Set<number> | null>(null);
   const focusDirtyRef = useRef<boolean>(false);
   const idToIdxRef = useRef<Map<string, number>>(new Map());
-  // MRI active set: nodeId → expiry ms timestamp
-  const mriRef = useRef<Map<string, number>>(new Map());
-  const [, setMriTick] = useState(0);
+  // MRI active set: nodeId → { start, end } ms timestamps for envelope animation
+  const mriRef = useRef<Map<string, { start: number; end: number }>>(new Map());
+  // Halo objects added to active node groups (for cleanup)
+  const haloRef = useRef<Map<string, THREE.Group>>(new Map());
+  const [mriTick, setMriTick] = useState(0);
   useWS((msg) => {
     if (msg?.type !== 'brain:access') return;
     const p = msg.payload ?? {};
     if (!p.vaultName || !p.rel) return;
     const id = `${p.vaultName}::${p.rel}`;
-    mriRef.current.set(id, Date.now() + MRI_DURATION_MS);
+    const now = Date.now();
+    mriRef.current.set(id, { start: now, end: now + MRI_DURATION_MS });
     focusDirtyRef.current = true;
     setMriTick((t) => t + 1);
   });
@@ -133,14 +151,11 @@ export default function BrainGraph3DConstellation({
   useEffect(() => {
     const iv = setInterval(() => {
       const now = Date.now();
-      let any = false;
-      for (const [k, exp] of mriRef.current) {
-        if (exp <= now) mriRef.current.delete(k);
-        else any = true;
+      for (const [k, v] of mriRef.current) {
+        if (v.end <= now) mriRef.current.delete(k);
       }
       setMriTick((t) => t + 1);
-      if (!any) return;
-    }, 400);
+    }, 150);
     return () => clearInterval(iv);
   }, []);
 
@@ -232,7 +247,7 @@ export default function BrainGraph3DConstellation({
         targetIdx[idx] = nbrs.length ? nbrs[Math.floor(Math.random() * nbrs.length)] : i;
         t[idx] = Math.random();
         speed[idx] = 0.18 + Math.random() * 0.32; // seconds⁻¹
-        curveAmp[idx] = 1.5 + Math.random() * 4;
+        curveAmp[idx] = 0.15 + Math.random() * 0.45;
         // random unit perpendicular axis
         const u = Math.random() * 2 - 1;
         const theta = Math.random() * Math.PI * 2;
@@ -270,7 +285,7 @@ export default function BrainGraph3DConstellation({
     idToIdxRef.current = idToIdx;
     fieldRef.current = { points, positions, colors, baseColors, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis };
     focusDirtyRef.current = true;
-  }, [data]);
+  }, [data, PER_NODE]);
 
   // Build focus index set + mark dirty whenever hover/select changes
   useEffect(() => {
@@ -325,34 +340,39 @@ export default function BrainGraph3DConstellation({
         const { positions, colors, baseColors, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis } = f;
         const nodes = data.nodes as any[];
         const totalP = sourceIdx.length;
-        // MRI: sweep expired entries; if any active, mark dirty each frame
+        // MRI: compute envelope per active node, sweep expired
         const nowMs = Date.now();
-        let mriActive = false;
+        const G = new THREE.Color(MRI_GREEN);
+        const mriEnv = new Map<number, number>(); // node idx → envelope (0..1)
         if (mriRef.current.size > 0) {
-          for (const [k, exp] of mriRef.current) {
-            if (exp <= nowMs) mriRef.current.delete(k);
-            else mriActive = true;
+          for (const [k, v] of mriRef.current) {
+            if (v.end <= nowMs) { mriRef.current.delete(k); continue; }
+            const t01 = (nowMs - v.start) / (v.end - v.start);
+            // Smooth pulse envelope: ease-in/out via sin
+            const env = Math.sin(Math.max(0, Math.min(1, t01)) * Math.PI);
+            const idx = idToIdxRef.current.get(k);
+            if (idx != null) mriEnv.set(idx, env);
           }
-          if (mriActive) focusDirtyRef.current = true;
-          else focusDirtyRef.current = true; // one extra pass after clear
+          focusDirtyRef.current = true;
         }
-        if (focusDirtyRef.current) {
+        // Recolor particles each frame when MRI active OR focus dirty
+        if (focusDirtyRef.current || mriEnv.size > 0) {
           const fset = focusIdxSetRef.current;
-          const mriIdx = new Set<number>();
-          if (mriRef.current.size) {
-            for (const id of mriRef.current.keys()) {
-              const idx = idToIdxRef.current.get(id);
-              if (idx != null) mriIdx.add(idx);
-            }
-          }
-          const G = new THREE.Color(MRI_GREEN);
           for (let i = 0; i < totalP; i++) {
             const src = sourceIdx[i];
             const tgt = targetIdx[i];
-            if (mriIdx.has(src) || mriIdx.has(tgt)) {
-              colors[i * 3]     = G.r;
-              colors[i * 3 + 1] = G.g;
-              colors[i * 3 + 2] = G.b;
+            const eS = mriEnv.get(src) ?? 0;
+            const eT = mriEnv.get(tgt) ?? 0;
+            const e = Math.max(eS, eT);
+            if (e > 0) {
+              // Lerp baseColor → green by envelope, boost brightness
+              const k = 1.0;
+              const r = baseColors[i * 3]     * (1 - e) + G.r * e;
+              const g = baseColors[i * 3 + 1] * (1 - e) + G.g * e;
+              const b = baseColors[i * 3 + 2] * (1 - e) + G.b * e;
+              colors[i * 3]     = r * k;
+              colors[i * 3 + 1] = g * k;
+              colors[i * 3 + 2] = b * k;
               continue;
             }
             const dim = fset ? (!(fset.has(src) || fset.has(tgt))) : false;
@@ -363,6 +383,110 @@ export default function BrainGraph3DConstellation({
           }
           (f.points.geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
           focusDirtyRef.current = false;
+        }
+        // Per-frame node mesh tint + halo for MRI
+        if (mriRef.current.size > 0 || haloRef.current.size > 0) {
+          const fgAny: any = fg;
+          const gd = fgAny.graphData?.() ?? null;
+          if (gd) {
+            const activeIds = new Set(mriRef.current.keys());
+            for (const n of gd.nodes) {
+              const env = mriEnv.get(idToIdxRef.current.get(n.id) ?? -1) ?? 0;
+              const obj = (n as any).__threeObj as THREE.Object3D | undefined;
+              if (!obj) continue;
+              // Mesh: hard-set green when active (library nodeColorCb also returns green); add emissive+scale
+              obj.traverse((c: any) => {
+                if (c.isMesh && c.material) {
+                  const mat: any = c.material;
+                  if (env > 0) {
+                    mat.color.copy(G);
+                    if ('emissive' in mat) {
+                      if (!mat.userData.__baseEmissive) mat.userData.__baseEmissive = mat.emissive.clone();
+                      mat.emissive.copy(G).multiplyScalar(0.8 + env * 2.5);
+                    }
+                  } else {
+                    if (mat.userData.__baseEmissive && 'emissive' in mat) mat.emissive.copy(mat.userData.__baseEmissive);
+                  }
+                }
+              });
+              obj.scale.setScalar(env > 0 ? (1 + env * 3.5) : 1);
+              // Composite halo: glow sprite + 3 concentric expanding rings
+              let halo = haloRef.current.get(n.id);
+              if (env > 0) {
+                if (!halo) {
+                  halo = new THREE.Group();
+                  // Glow sprite (radial gradient texture)
+                  const cv = document.createElement('canvas');
+                  cv.width = 128; cv.height = 128;
+                  const cx = cv.getContext('2d')!;
+                  const grd = cx.createRadialGradient(64, 64, 0, 64, 64, 64);
+                  grd.addColorStop(0, 'rgba(150,255,200,1)');
+                  grd.addColorStop(0.35, 'rgba(57,255,122,0.55)');
+                  grd.addColorStop(1, 'rgba(57,255,122,0)');
+                  cx.fillStyle = grd;
+                  cx.fillRect(0, 0, 128, 128);
+                  const tex = new THREE.CanvasTexture(cv);
+                  const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+                  const glow = new THREE.Sprite(spriteMat);
+                  glow.scale.set(40, 40, 1);
+                  glow.userData.__role = 'glow';
+                  halo.add(glow);
+                  // Inner solid green disc for unmistakable presence
+                  const coreMat = new THREE.SpriteMaterial({ color: MRI_GREEN, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+                  const core = new THREE.Sprite(coreMat);
+                  core.scale.set(8, 8, 1);
+                  core.userData.__role = 'core';
+                  halo.add(core);
+                  // 5 rings staggered
+                  for (let k = 0; k < 5; k++) {
+                    const ringGeo = new THREE.RingGeometry(3.5, 4.2, 64);
+                    const ringMat = new THREE.MeshBasicMaterial({ color: MRI_GREEN, transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+                    const ring = new THREE.Mesh(ringGeo, ringMat);
+                    ring.userData.__role = 'ring';
+                    ring.userData.__phase = k / 5;
+                    halo.add(ring);
+                  }
+                  obj.add(halo);
+                  haloRef.current.set(n.id, halo);
+                }
+                // Animate children
+                try {
+                  const camPos = fg.camera().position;
+                  for (const child of halo.children) {
+                    if (child.userData.__role === 'glow') {
+                      const s = 14 + env * 60;
+                      (child as THREE.Sprite).scale.set(s, s, 1);
+                      ((child as THREE.Sprite).material as THREE.SpriteMaterial).opacity = Math.min(1, env * 1.4);
+                    } else if (child.userData.__role === 'core') {
+                      const s = 3 + env * 12;
+                      (child as THREE.Sprite).scale.set(s, s, 1);
+                      ((child as THREE.Sprite).material as THREE.SpriteMaterial).opacity = Math.min(1, env * 1.5);
+                    } else if (child.userData.__role === 'ring') {
+                      child.lookAt(camPos);
+                      const phase = (env + child.userData.__phase) % 1;
+                      const grow = 1 + phase * 11;
+                      child.scale.setScalar(grow);
+                      ((child as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = (1 - phase) * env;
+                    }
+                  }
+                } catch {}
+              } else if (halo) {
+                obj.remove(halo);
+                halo.traverse((c: any) => { if (c.geometry) c.geometry.dispose(); if (c.material) { if (c.material.map) c.material.map.dispose(); c.material.dispose(); } });
+                haloRef.current.delete(n.id);
+              }
+              activeIds.delete(n.id);
+            }
+            // Cleanup halos whose node disappeared
+            for (const stale of activeIds) {
+              const halo = haloRef.current.get(stale);
+              if (halo) {
+                halo.parent?.remove(halo);
+                halo.traverse((c: any) => { if (c.geometry) c.geometry.dispose(); if (c.material) { if (c.material.map) c.material.map.dispose(); c.material.dispose(); } });
+                haloRef.current.delete(stale);
+              }
+            }
+          }
         }
         for (let i = 0; i < totalP; i++) {
           t[i] += speed[i] * dt;
@@ -375,7 +499,7 @@ export default function BrainGraph3DConstellation({
             targetIdx[i] = newTgt;
             t[i] = 0;
             speed[i] = 0.18 + Math.random() * 0.32;
-            curveAmp[i] = 1.5 + Math.random() * 4;
+            curveAmp[i] = 0.15 + Math.random() * 0.45;
             const u = Math.random() * 2 - 1;
             const th = Math.random() * Math.PI * 2;
             const m = Math.sqrt(1 - u * u);
@@ -476,19 +600,41 @@ export default function BrainGraph3DConstellation({
   }, [labelThreshold, showLabels]);
 
   const nodeColorCb = useCallback((n: any) => {
-    const exp = mriRef.current.get(n.id);
-    if (exp && exp > Date.now()) return MRI_GREEN;
+    const v = mriRef.current.get(n.id);
+    if (v && v.end > Date.now()) return MRI_GREEN;
     const base = colorFor(n);
     if (!focusSet) return base;
     return focusSet.has(n.id) ? base : '#181a24';
-  }, [focusSet]);
+    // mriTick keeps this callback identity refreshing while MRI active
+  }, [focusSet, mriTick]);
+
+  // Force library re-application of nodeColor on focus or MRI change
+  useEffect(() => {
+    const fg: any = fgRef.current;
+    try { fg?.refresh?.(); } catch {}
+  }, [hover, selected, mriTick]);
 
   const linkColor = useCallback((l: any) => {
     const focus = hover ?? selected;
-    if (!focus) return 'rgba(0,0,0,0)';
+    const sNode0: any = typeof l.source === 'object' ? l.source : null;
+    const tNode0: any = typeof l.target === 'object' ? l.target : null;
+    if (!focus) {
+      if (showParticles) return 'rgba(0,0,0,0)';
+      // Line mode: tint by source node base color
+      const ref = sNode0 ?? tNode0;
+      if (!ref) return 'rgba(170,180,210,0.35)';
+      const c = new THREE.Color(colorFor(ref));
+      return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.55)`;
+    }
     const s = typeof l.source === 'object' ? l.source.id : l.source;
     const t = typeof l.target === 'object' ? l.target.id : l.target;
-    if (s !== focus && t !== focus) return 'rgba(0,0,0,0)';
+    if (s !== focus && t !== focus) {
+      if (showParticles) return 'rgba(0,0,0,0)';
+      const ref = sNode0 ?? tNode0;
+      if (!ref) return 'rgba(120,130,160,0.22)';
+      const c = new THREE.Color(colorFor(ref));
+      return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.30)`;
+    }
     // hot link tinted by the other endpoint (neighbor) — vivid, not grey
     const sNode: any = typeof l.source === 'object' ? l.source : null;
     const tNode: any = typeof l.target === 'object' ? l.target : null;
@@ -497,14 +643,46 @@ export default function BrainGraph3DConstellation({
     // convert hex → rgba w/ moderate alpha so particles overlay reads as glow
     const c = new THREE.Color(base);
     return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.55)`;
-  }, [hover, selected]);
+  }, [hover, selected, showParticles]);
   const linkWidthCb = useCallback((l: any) => {
     const focus = hover ?? selected;
-    if (!focus) return 0;
+    if (!focus) return showParticles ? 0 : 0.25;
     const s = typeof l.source === 'object' ? l.source.id : l.source;
     const t = typeof l.target === 'object' ? l.target.id : l.target;
-    return (s === focus || t === focus) ? 0.6 : 0;
-  }, [hover, selected]);
+    if (s === focus || t === focus) return 0.6;
+    return showParticles ? 0 : 0.18;
+  }, [hover, selected, showParticles]);
+
+  function triggerMriDemo() {
+    if (data.nodes.length === 0) return;
+    // Simulate agent traversing brain: random walk along edges, MRI hops node→node
+    let cur = 0, bestDeg = -1;
+    for (let i = 0; i < data.nodes.length; i++) {
+      const deg = (neighborsRef.current.get(i) ?? []).length;
+      if (deg > bestDeg) { bestDeg = deg; cur = i; }
+    }
+    const walkLen = 8;
+    const stepMs = 900; // gap between successive node activations
+    const now = Date.now();
+    const visited = new Set<number>();
+    visited.add(cur);
+    let prev = -1;
+    for (let s = 0; s < walkLen; s++) {
+      const node = data.nodes[cur];
+      const off = s * stepMs;
+      mriRef.current.set(node.id, { start: now + off, end: now + off + MRI_DURATION_MS });
+      // Pick next: prefer unvisited neighbor, fallback random neighbor
+      const nbrs = neighborsRef.current.get(cur) ?? [];
+      if (nbrs.length === 0) break;
+      const fresh = nbrs.filter((i) => !visited.has(i) && i !== prev);
+      const pool = fresh.length ? fresh : nbrs;
+      prev = cur;
+      cur = pool[Math.floor(Math.random() * pool.length)];
+      visited.add(cur);
+    }
+    focusDirtyRef.current = true;
+    setMriTick((t) => t + 1);
+  }
 
   function zoom(factor: number) {
     const fg: any = fgRef.current;
@@ -541,6 +719,30 @@ export default function BrainGraph3DConstellation({
           }`}
           title={showLabels ? 'Nascondi nomi' : 'Mostra nomi'}
         >Aa</button>
+        <button
+          onClick={() => setShowParticles((v) => !v)}
+          className={`w-10 h-10 rounded-xl border backdrop-blur transition flex items-center justify-center text-xs font-semibold ${
+            !showParticles
+              ? 'bg-accent/20 border-accent/60 text-accent'
+              : 'bg-surface2/70 border-border text-muted hover:border-accent/50'
+          }`}
+          title={showParticles ? 'Solo righe (no particelle)' : 'Mostra particelle'}
+        >{showParticles ? '≈' : '╱'}</button>
+        <button
+          onClick={() => setDensity((d) => DENSITY_ORDER[(DENSITY_ORDER.indexOf(d) + 1) % DENSITY_ORDER.length])}
+          disabled={!showParticles}
+          className={`w-10 h-10 rounded-xl border backdrop-blur transition flex items-center justify-center text-xs font-semibold ${
+            !showParticles
+              ? 'bg-surface2/40 border-border text-muted/50 cursor-not-allowed'
+              : 'bg-surface2/70 border-border text-text hover:border-accent/50'
+          }`}
+          title={`Densità particelle: ${density.toUpperCase()} (${DENSITY_PRESETS[density]}/nodo). Clicca per cambiare.`}
+        >{DENSITY_LABEL[density]}</button>
+        <button
+          onClick={triggerMriDemo}
+          className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/60 text-emerald-300 hover:bg-emerald-500/30 backdrop-blur transition flex items-center justify-center text-xs font-semibold"
+          title="Demo MRI animation"
+        >MRI</button>
       </div>
       {size && (
         <ForceGraph3D
