@@ -206,6 +206,78 @@ router.get('/brain/note', async (req, res) => {
   res.json(note);
 });
 
+router.get('/brain/stats', async (req, res) => {
+  const userId = req.user!.id;
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const { listVaults } = await import('../brain/vaults.js');
+  const vaults = await listVaults(userId);
+
+  async function dirSize(root: string): Promise<{ bytes: number; files: number }> {
+    let bytes = 0, files = 0;
+    async function walk(p: string) {
+      let entries: any[] = [];
+      try { entries = await fs.readdir(p, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const full = path.join(p, e.name);
+        if (e.isDirectory()) { await walk(full); continue; }
+        try {
+          const st = await fs.stat(full);
+          bytes += st.size;
+          files += 1;
+        } catch {}
+      }
+    }
+    await walk(root);
+    return { bytes, files };
+  }
+
+  const vaultStats = await Promise.all(vaults.map(async (v: any) => {
+    const sz = await dirSize(v.path);
+    return { name: v.name, path: v.path, is_primary: v.is_primary, bytes: sz.bytes, files: sz.files };
+  }));
+
+  const byKind = await query<{ kind: string; n: number }>(
+    `SELECT kind, count(*)::int AS n FROM brain_index WHERE user_id=$1 GROUP BY kind ORDER BY n DESC`, [userId]
+  );
+  const byVis = await query<{ visibility: string | null; n: number }>(
+    `SELECT visibility, count(*)::int AS n FROM brain_index WHERE user_id=$1 GROUP BY visibility`, [userId]
+  );
+  const byOrigin = await query<{ origin_email: string | null; n: number }>(
+    `SELECT u.email AS origin_email, count(*)::int AS n
+     FROM brain_index bi LEFT JOIN users u ON u.id = bi.origin_user_id
+     WHERE bi.user_id=$1 AND bi.origin_user_id IS NOT NULL
+     GROUP BY u.email`, [userId]
+  );
+  const totalNotes = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM brain_index WHERE user_id=$1`, [userId]
+  );
+  const lastUpdate = await query<{ ts: string | null }>(
+    `SELECT max(updated_at) AS ts FROM brain_index WHERE user_id=$1`, [userId]
+  );
+  const last7 = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM brain_index WHERE user_id=$1 AND updated_at > now() - interval '7 days'`, [userId]
+  );
+
+  const totalBytes = vaultStats.reduce((a, v) => a + v.bytes, 0);
+  const totalFiles = vaultStats.reduce((a, v) => a + v.files, 0);
+
+  res.json({
+    totals: {
+      notes: totalNotes[0]?.n ?? 0,
+      files: totalFiles,
+      bytes: totalBytes,
+      vaults: vaults.length,
+      updatedLast7Days: last7[0]?.n ?? 0,
+      lastUpdate: lastUpdate[0]?.ts ?? null,
+    },
+    vaults: vaultStats,
+    byKind,
+    byVisibility: byVis,
+    byOrigin: byOrigin.filter((o) => o.origin_email),
+  });
+});
+
 router.get('/brain/index', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
   const where = filter === 'all' ? '' : ' AND visibility=$2';

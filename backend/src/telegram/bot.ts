@@ -110,6 +110,35 @@ async function startBotForUser(userId: number) {
     }
     const msg: any = ctx.message;
 
+    // Photo path (Telegram delivers msg.photo[] sized array) — pick largest, archive, give Claude absolute path
+    const photos = Array.isArray(msg.photo) ? msg.photo : null;
+    if (photos && photos.length > 0) {
+      try {
+        await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+        const best = photos.reduce((a: any, b: any) => ((b.file_size ?? 0) > (a.file_size ?? 0) ? b : a));
+        const link = await ctx.telegram.getFileLink(best.file_id);
+        const pres = await fetch(link.href);
+        if (!pres.ok) throw new Error(`download ${pres.status}`);
+        const buf = Buffer.from(await pres.arrayBuffer());
+        const mime = 'image/jpeg';
+        const filename = `photo-${Date.now()}.jpg`;
+        const { archiveAttachment } = await import('../brain/extract.js');
+        const a = await archiveAttachment(userId, filename, buf, mime);
+        const sizeKb = (buf.length / 1024).toFixed(1);
+        const caption = (msg.caption ?? '').toString();
+        await ctx.reply(`🖼 ${filename} (${sizeKb}KB)${caption ? ` — "${caption.slice(0, 80)}"` : ''}. Sto analizzando…`).catch(() => {});
+        const userPayload = `[Immagine ricevuta: ${filename} · ${best.width}x${best.height} · ${buf.length}B]
+Raw file (assoluto): \`${a.rawAbsPath}\`
+${caption ? `\nCaption utente: "${caption}"\n` : ''}
+Usa lo strumento Read sul percorso assoluto per vedere l'immagine (Claude Code supporta immagini PNG/JPG nativamente). Descrivi cosa vedi, estrai testo se presente, collegala a note esistenti se rilevante, e dimmi cosa farne.`;
+        bus.emit('telegram:incoming', { userId, chatId, text: userPayload });
+      } catch (e: any) {
+        console.error('[telegram] photo error', e);
+        await ctx.reply(`⚠️ Errore elaborando l'immagine: ${String(e?.message ?? e).slice(0, 160)}`);
+      }
+      return;
+    }
+
     // Document path (pdf, docx, txt, …) — save raw, let Claude read via Read tool
     const doc = msg.document;
     if (doc?.file_id) {

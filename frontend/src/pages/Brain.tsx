@@ -4,6 +4,7 @@ import { Button, Card, Chip, Input, Modal, Field, useToast } from '../components
 import BrainGraph3D from '../components/BrainGraph3D';
 import BrainGraph3DConstellation from '../components/BrainGraph3DConstellation';
 import MarkdownView from '../components/MarkdownView';
+import BrainOverview from '../components/BrainOverview';
 import { useI18n } from '../i18n';
 import { api as apiX } from '../api';
 
@@ -138,10 +139,7 @@ export default function Brain() {
           </Card>
           <Card className="h-[78vh] overflow-y-auto">
             {!note ? (
-              <div className="text-muted text-sm">
-                <p>Click a node to inspect the note.</p>
-                <p className="mt-3 text-xs">◇ cyan = public · ◆ fuchsia = protected (managed by the Brain Classifier agent).</p>
-              </div>
+              <BrainOverview />
             ) : (
               <div>
                 <div className="text-xs text-muted font-mono mb-2 flex items-center gap-2">

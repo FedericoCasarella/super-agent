@@ -310,7 +310,7 @@ export default function BrainGraph3DConstellation({
     if (!fg) return;
     // OrbitControls autoRotate as fallback (library may pause after cooldown)
     const ctrls0: any = fg.controls?.();
-    if (ctrls0) { ctrls0.autoRotate = true; ctrls0.autoRotateSpeed = 0.4; }
+    if (ctrls0) { ctrls0.autoRotate = true; ctrls0.autoRotateSpeed = 0.12; }
 
     // Track user interaction to pause manual orbit
     const lastInteractRef = { current: 0 };
@@ -536,7 +536,7 @@ export default function BrainGraph3DConstellation({
           const dz = cam.position.z - target.z;
           const r = Math.hypot(dx, dz);
           if (r > 0.01) {
-            const ang = Math.atan2(dz, dx) + 0.12 * dt;
+            const ang = Math.atan2(dz, dx) + 0.035 * dt;
             cam.position.x = target.x + Math.cos(ang) * r;
             cam.position.z = target.z + Math.sin(ang) * r;
             cam.lookAt(target);

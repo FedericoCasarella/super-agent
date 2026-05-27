@@ -40,7 +40,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     args.push('--mcp-config', MCP_CONFIG_PATH);
   }
   const allowed = opts.allowedTools ?? [
-    'Read', 'Write', 'Edit', 'Glob', 'Grep',
+    'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash',
     `mcp__${MCP_SERVER_NAME}`,
     ...externalMcpAllowEntries(),
   ];
