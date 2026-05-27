@@ -70,9 +70,10 @@ export default function App() {
             <Route path="/brain" element={<Brain />} />
             <Route path="/roadmap" element={<Roadmap />} />
             <Route path="/tasks" element={<Tasks />} />
-            <Route path="/agents" element={<Agents />} />
-            <Route path="/agents/:name" element={<AgentDetail />} />
-            <Route path="/live-agents" element={<LiveAgents />} />
+            <Route path="/perks" element={<Agents />} />
+            <Route path="/perks/:name" element={<AgentDetail />} />
+            <Route path="/agents" element={<LiveAgents />} />
+            <Route path="/live-agents" element={<Navigate to="/agents" replace />} />
             <Route path="/network" element={<Network />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/settings" element={<Settings />} />

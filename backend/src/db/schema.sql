@@ -290,3 +290,17 @@ CREATE TABLE IF NOT EXISTS sub_agents (
 );
 CREATE INDEX IF NOT EXISTS sub_agents_user_status_idx ON sub_agents(user_id, status);
 CREATE INDEX IF NOT EXISTS sub_agents_user_created_idx ON sub_agents(user_id, created_at DESC);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sub_agents' AND column_name='actions') THEN
+    ALTER TABLE sub_agents ADD COLUMN actions JSONB NOT NULL DEFAULT '[]'::jsonb;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sub_agents' AND column_name='input_tokens') THEN
+    ALTER TABLE sub_agents ADD COLUMN input_tokens INTEGER;
+    ALTER TABLE sub_agents ADD COLUMN output_tokens INTEGER;
+    ALTER TABLE sub_agents ADD COLUMN num_turns INTEGER;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;

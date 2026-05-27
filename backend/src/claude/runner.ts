@@ -29,6 +29,7 @@ export type ClaudeResult = {
   numTurns?: number;
   durationMs?: number;
   runId?: number;
+  toolCalls?: Array<{ name: string; brief: string; ts: number }>;
 };
 
 export async function runClaude(userId: number, prompt: string, opts: ClaudeRunOptions = {}): Promise<ClaudeResult> {
@@ -61,6 +62,21 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     return null;
   }
 
+  const toolCalls: Array<{ name: string; brief: string; ts: number }> = [];
+  function briefForTool(name: string, input: any): string {
+    if (!input || typeof input !== 'object') return '';
+    if (name === 'Read' || name === 'Write' || name === 'Edit') return String(input.file_path ?? '').slice(0, 200);
+    if (name === 'Grep') return `${input.pattern ?? ''} ${input.path ? `in ${input.path}` : ''}`.slice(0, 200);
+    if (name === 'Glob') return String(input.pattern ?? input.path ?? '').slice(0, 200);
+    if (name === 'Bash') return String(input.command ?? '').slice(0, 200);
+    if (name === 'WebFetch' || name === 'WebSearch') return String(input.url ?? input.query ?? '').slice(0, 200);
+    // MCP tools — surface first string-like arg
+    for (const k of Object.keys(input)) {
+      const v = input[k];
+      if (typeof v === 'string' && v.length) return `${k}: ${v.slice(0, 180)}`;
+    }
+    return '';
+  }
   const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null }>((resolve) => {
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
@@ -87,6 +103,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
               if (block?.type !== 'tool_use') continue;
               const name = block.name as string;
               const input = block.input ?? {};
+              toolCalls.push({ name, brief: briefForTool(name, input), ts: Date.now() });
               const candidatePaths: string[] = [];
               if (name === 'Read' || name === 'Write' || name === 'Edit') {
                 if (input.file_path) candidatePaths.push(input.file_path);
@@ -128,6 +145,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     cacheCreationTokens: usage.cache_creation_input_tokens,
     cacheReadTokens: usage.cache_read_input_tokens,
     numTurns: parsed?.num_turns,
+    toolCalls,
     durationMs,
   };
 

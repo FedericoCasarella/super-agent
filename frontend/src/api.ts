@@ -78,6 +78,7 @@ export const api = {
   // Sub-agents
   subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
   subAgentsActive: () => req<any[]>('/sub-agents/active'),
+  subAgentsStats: () => req<any>('/sub-agents/stats'),
   subAgentGet: (id: number) => req<any>(`/sub-agents/${id}`),
   subAgentCancel: (id: number) => req<any>(`/sub-agents/${id}/cancel`, { method: 'POST' }),
   proposalsList: () => req<any[]>('/agent-proposals'),

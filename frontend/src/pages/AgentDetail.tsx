@@ -25,7 +25,7 @@ export default function AgentDetail() {
   async function load() {
     const all = await api.internalAgents();
     const a = all.find((x: any) => x.name === name);
-    if (!a) { nav('/agents'); return; }
+    if (!a) { nav('/perks'); return; }
     setAgent(a); setHour(a.hour); setMinute(a.minute);
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [name]);
@@ -71,7 +71,7 @@ export default function AgentDetail() {
   return (
     <div className="space-y-6 max-w-4xl">
       <div className="flex items-center gap-3 text-sm">
-        <button onClick={() => nav('/agents')} className="text-muted hover:text-text transition">← {t('agents.title')}</button>
+        <button onClick={() => nav('/perks')} className="text-muted hover:text-text transition">← {t('agents.title')}</button>
         <span className="text-muted">/</span>
         <span>{agent.title}</span>
       </div>

@@ -507,6 +507,33 @@ router.get('/sub-agents', async (req, res) => {
   const status = req.query.status ? String(req.query.status) : undefined;
   res.json(await sa.listSubAgents(req.user!.id, { status }));
 });
+router.get('/sub-agents/stats', async (req, res) => {
+  const userId = req.user!.id;
+  const totals = await query<any>(
+    `SELECT count(*)::int AS n,
+            coalesce(sum(cost_usd),0)::float8 AS cost,
+            coalesce(sum(input_tokens),0)::int AS in_tok,
+            coalesce(sum(output_tokens),0)::int AS out_tok,
+            coalesce(sum(num_turns),0)::int AS turns
+     FROM sub_agents WHERE user_id=$1`, [userId]
+  );
+  const byStatus = await query<any>(
+    `SELECT status, count(*)::int AS n FROM sub_agents WHERE user_id=$1 GROUP BY status`, [userId]
+  );
+  const byDay = await query<any>(
+    `SELECT date_trunc('day', created_at) AS day, count(*)::int AS n,
+            coalesce(sum(cost_usd),0)::float8 AS cost
+     FROM sub_agents WHERE user_id=$1 AND created_at > now() - interval '14 days'
+     GROUP BY 1 ORDER BY 1 DESC`, [userId]
+  );
+  const topTools = await query<any>(
+    `SELECT tool->>'name' AS name, count(*)::int AS n
+     FROM sub_agents, jsonb_array_elements(actions) AS tool
+     WHERE user_id=$1
+     GROUP BY 1 ORDER BY 2 DESC LIMIT 15`, [userId]
+  );
+  res.json({ totals: totals[0], byStatus, byDay, topTools });
+});
 router.get('/sub-agents/active', async (req, res) => {
   const sa = await import('../sub_agents/index.js');
   res.json(await sa.listActive(req.user!.id));

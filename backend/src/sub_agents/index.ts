@@ -31,6 +31,10 @@ export type SubAgent = {
   error: string | null;
   run_id: number | null;
   cost_usd: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  num_turns: number | null;
+  actions: Array<{ name: string; brief: string; ts: number }>;
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
@@ -130,18 +134,19 @@ async function runSubAgent(id: number): Promise<void> {
       timeoutMs: 600_000,
       meta: { sub_agent_id: id, title: sa.title },
     });
+    const actions = JSON.stringify(result.toolCalls ?? []);
     if (!result.ok) {
       await query(
-        `UPDATE sub_agents SET status='error', error=$2, run_id=$3, cost_usd=$4, ended_at=now(), updated_at=now() WHERE id=$1`,
-        [id, (result.stderr || 'failed').slice(0, 2000), result.runId ?? null, result.costUsd ?? null],
+        `UPDATE sub_agents SET status='error', error=$2, run_id=$3, cost_usd=$4, input_tokens=$5, output_tokens=$6, num_turns=$7, actions=$8::jsonb, ended_at=now(), updated_at=now() WHERE id=$1`,
+        [id, (result.stderr || 'failed').slice(0, 2000), result.runId ?? null, result.costUsd ?? null, result.inputTokens ?? null, result.outputTokens ?? null, result.numTurns ?? null, actions],
       );
       emit(sa.user_id, 'subagent:done', { id, status: 'error' });
       await notifyDone(sa.user_id, sa, 'error', result.stderr ?? 'failed').catch(() => {});
       return;
     }
     await query(
-      `UPDATE sub_agents SET status='done', result=$2, run_id=$3, cost_usd=$4, ended_at=now(), updated_at=now() WHERE id=$1`,
-      [id, result.text.slice(0, 16_000), result.runId ?? null, result.costUsd ?? null],
+      `UPDATE sub_agents SET status='done', result=$2, run_id=$3, cost_usd=$4, input_tokens=$5, output_tokens=$6, num_turns=$7, actions=$8::jsonb, ended_at=now(), updated_at=now() WHERE id=$1`,
+      [id, result.text.slice(0, 16_000), result.runId ?? null, result.costUsd ?? null, result.inputTokens ?? null, result.outputTokens ?? null, result.numTurns ?? null, actions],
     );
     emit(sa.user_id, 'subagent:done', { id, status: 'done' });
     await notifyDone(sa.user_id, sa, 'done', result.text).catch(() => {});
