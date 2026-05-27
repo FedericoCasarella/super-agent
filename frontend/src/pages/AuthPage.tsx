@@ -33,7 +33,9 @@ export default function AuthPage() {
         <div className="text-center mb-8 flex flex-col items-center gap-3 animate-slide-up">
           <div className="relative">
             <div className="absolute inset-0 rounded-3xl bg-accent/40 blur-2xl animate-soft-pulse" />
-            <div aria-label="Polpo Brain" className="relative w-20 h-20 rounded-3xl ring-1 ring-white/10 shadow-2xl flex items-center justify-center text-5xl bg-gradient-to-br from-accent/20 to-accent2/20">🐙</div>
+            <div aria-label="Polpo Brain" className="relative w-20 h-20 rounded-3xl ring-1 ring-white/10 shadow-2xl overflow-hidden bg-gradient-to-br from-accent/20 to-accent2/20">
+              <img src="/polpo_brain_avatar.png" alt="Polpo Brain" className="w-full h-full object-cover" />
+            </div>
           </div>
           <div>
             <div className="text-3xl font-semibold text-gradient">Polpo Brain</div>
