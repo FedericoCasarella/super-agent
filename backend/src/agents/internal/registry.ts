@@ -97,8 +97,36 @@ export async function updateAgentSchedule(userId: number, name: string, p: { hou
   );
 }
 
+// Catch-up: if scheduled time today passed and last_run_at < that time → fire now.
+// Survives app downtime — daily agents will fire on next boot.
+async function catchUpInternalAgents() {
+  const users = await listActiveUsers();
+  const now = new Date();
+  for (const u of users) {
+    await ensureUserAgentRows(u.id);
+    const rows = await query<{ name: string; enabled: boolean; hour: number; minute: number; last_run_at: string | null }>(
+      `SELECT name, enabled, hour, minute, last_run_at FROM internal_agents WHERE user_id=$1`,
+      [u.id],
+    );
+    for (const r of rows) {
+      if (!r.enabled) continue;
+      const sched = new Date(now);
+      sched.setHours(r.hour, r.minute, 0, 0);
+      const passed = now >= sched;
+      const lastRun = r.last_run_at ? new Date(r.last_run_at) : null;
+      const missedToday = passed && (!lastRun || lastRun < sched);
+      if (missedToday) {
+        const ageH = lastRun ? Math.floor((now.getTime() - lastRun.getTime()) / 3_600_000) : null;
+        console.log(`[internal-agents:u${u.id}:${r.name}] catch-up: scheduled ${r.hour}:${String(r.minute).padStart(2,'0')}, last_run ${ageH != null ? `${ageH}h ago` : 'never'} → firing`);
+        setTimeout(() => runInternalAgent(u.id, r.name).catch((e) => console.error('[internal-agents:catchup]', e)), 4000 + Math.random() * 3000);
+      }
+    }
+  }
+}
+
 // Daily 1-minute tick — fires any user-agent whose hour/minute match current time
 export function startInternalAgentsScheduler() {
+  catchUpInternalAgents().catch((e) => console.error('[internal-agents] catch-up failed', e));
   cron.schedule('* * * * *', async () => {
     const now = new Date();
     const h = now.getHours();

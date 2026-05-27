@@ -75,6 +75,7 @@ export async function startScheduler() {
     connectorTasks.set(`*:${conn.manifest.name}`, task);
   }
 
+  bus.removeAllListeners('connector:event');
   bus.on('connector:event', onConnectorEvent);
 
   let reflecting = false;

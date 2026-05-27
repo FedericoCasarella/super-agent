@@ -49,8 +49,10 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
 
   // Pre-load vault paths for brain:access mapping
   const vaults = await listVaults(userId).catch(() => []);
+  const claudeCwd = opts.cwd ?? process.cwd();
   function mapBrainAccess(filePath: string): { vaultName: string; rel: string } | null {
-    const norm = path.resolve(filePath);
+    // Resolve against Claude CLI's cwd (vault root), not node process cwd.
+    const norm = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(claudeCwd, filePath);
     for (const v of vaults) {
       const vp = path.resolve(v.path);
       if (norm === vp || norm.startsWith(vp + path.sep)) {

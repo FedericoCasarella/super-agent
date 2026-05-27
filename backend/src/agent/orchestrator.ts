@@ -6,6 +6,8 @@ import { sendTelegram, startTyping } from '../telegram/bot.js';
 import { getVaultRoot } from '../brain/vault.js';
 
 export function startOrchestrator() {
+  // Remove any stale listener (tsx-watch hot-reload, module re-eval) to avoid duplicate replies
+  bus.removeAllListeners('telegram:incoming');
   bus.on('telegram:incoming', handleIncoming);
 }
 
