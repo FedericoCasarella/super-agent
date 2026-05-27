@@ -1,7 +1,12 @@
 # 🐙 Polpo Brain — Fork Operating Manual
 
+<p align="center">
+  <img src="assets/polpo_brain_identity.png" alt="Polpo Brain · Personal AI · Sovereign Mind" width="320" />
+</p>
+
 > **Branch `polpo-fork`** — rebrand identitario + bug fix sopra `super-agent` upstream (Federico Casarella).
 > Forked sess.2282 (26 mag 2026) — `lo facciamo nostro, aggiorna il branding`.
+> Identity asset canonical sess.2636 (27 mag 2026) — Bot Family rosso glossy 3D, prop 2 cervelli pink + terzo occhio glyph.
 
 ## Cosa è questo branch
 
@@ -62,8 +67,19 @@ Tool names che usi nel Claude system prompt diventano `mcp__polpo_brain__roadmap
 - `accent`: `#00d4aa` (teal canonical, era purple `#c084fc`)
 - `accent2`: `#ff6b9d` (Polpo pink, era cyan `#22d3ee`)
 - Body gradients: teal+pink radial
-- Logo: `🐙` emoji inline + gradient (no asset PNG dipendenza)
+- Logo: `🐙` emoji inline + gradient (per heading copy)
+- Favicon + OG image: `frontend/public/polpo_brain_avatar.png` (640×640, sess.2636)
+- Identity master asset: `assets/polpo_brain_identity.png` (1024×1024 Bot Family rosso 3D)
 - Header copy: "Polpo Brain · sovereign mind"
+
+## Identity Asset (sess.2636)
+
+Asset visivo canonical generato via `fal-ai/flux-pro/v1.1` (NON LoRA viola — vedi cicatrice doctrine: i bot Polpo Telegram appartengono alla famiglia rosso glossy 3D, non al LoRA brutalist). Prop semantico distintivo: 2 cervelli pink-purple translucenti luminosi tenuti in tentacoli + terzo occhio bianco glyph sulla fronte.
+
+Applicato a:
+- Telegram bot [@polpo_brain_bot](https://t.me/polpo_brain_bot) (avatar + name + description + 6 cmd menu)
+- Vite frontend favicon + apple-touch-icon + og:image
+- README hero image (sopra)
 
 ## Persona AI (system prompt)
 
