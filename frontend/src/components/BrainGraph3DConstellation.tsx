@@ -155,7 +155,7 @@ export default function BrainGraph3DConstellation({
         if (v.end <= now) mriRef.current.delete(k);
       }
       setMriTick((t) => t + 1);
-    }, 150);
+    }, 100);
     return () => clearInterval(iv);
   }, []);
 
@@ -614,10 +614,24 @@ export default function BrainGraph3DConstellation({
     try { fg?.refresh?.(); } catch {}
   }, [hover, selected, mriTick]);
 
+  function mriEnvForLink(l: any): number {
+    const sId = typeof l.source === 'object' ? l.source.id : l.source;
+    const tId = typeof l.target === 'object' ? l.target.id : l.target;
+    const now = Date.now();
+    function env(id: string): number {
+      const v = mriRef.current.get(id);
+      if (!v || v.end <= now) return 0;
+      const t01 = (now - v.start) / (v.end - v.start);
+      return Math.sin(Math.max(0, Math.min(1, t01)) * Math.PI);
+    }
+    return Math.max(env(sId), env(tId));
+  }
   const linkColor = useCallback((l: any) => {
     const focus = hover ?? selected;
     const sNode0: any = typeof l.source === 'object' ? l.source : null;
     const tNode0: any = typeof l.target === 'object' ? l.target : null;
+    const mriEnv = mriEnvForLink(l);
+    if (mriEnv > 0) return `rgba(57,255,122,${(0.95 * mriEnv).toFixed(3)})`;
     if (!focus) {
       if (showParticles) return 'rgba(0,0,0,0)';
       // Line mode: tint by source node base color
@@ -643,15 +657,18 @@ export default function BrainGraph3DConstellation({
     // convert hex → rgba w/ moderate alpha so particles overlay reads as glow
     const c = new THREE.Color(base);
     return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.55)`;
-  }, [hover, selected, showParticles]);
+  }, [hover, selected, showParticles, mriTick]);
   const linkWidthCb = useCallback((l: any) => {
     const focus = hover ?? selected;
-    if (!focus) return showParticles ? 0 : 0.25;
-    const s = typeof l.source === 'object' ? l.source.id : l.source;
-    const t = typeof l.target === 'object' ? l.target.id : l.target;
-    if (s === focus || t === focus) return 0.6;
-    return showParticles ? 0 : 0.18;
-  }, [hover, selected, showParticles]);
+    const sId = typeof l.source === 'object' ? l.source.id : l.source;
+    const tId = typeof l.target === 'object' ? l.target.id : l.target;
+    const mriEnv = mriEnvForLink(l);
+    const baseW = !focus ? (showParticles ? 0 : 0.25)
+      : (sId === focus || tId === focus) ? 0.6
+      : (showParticles ? 0 : 0.18);
+    if (mriEnv > 0) return baseW + (1.8 - baseW) * mriEnv; // lerp base → 1.8
+    return baseW;
+  }, [hover, selected, showParticles, mriTick]);
 
   function triggerMriDemo() {
     if (data.nodes.length === 0) return;
@@ -765,27 +782,45 @@ export default function BrainGraph3DConstellation({
           linkWidth={linkWidthCb}
           linkDirectionalParticles={(l: any) => {
             const focus = hover ?? selected;
+            const sId = typeof l.source === 'object' ? l.source.id : l.source;
+            const tId = typeof l.target === 'object' ? l.target.id : l.target;
+            const now = Date.now();
+            const mriS = mriRef.current.get(sId);
+            const mriT = mriRef.current.get(tId);
+            if ((mriS && mriS.end > now) || (mriT && mriT.end > now)) return 14;
             if (!focus) return 0;
-            const s = typeof l.source === 'object' ? l.source.id : l.source;
-            const t = typeof l.target === 'object' ? l.target.id : l.target;
-            return (s === focus || t === focus) ? 10 : 0;
+            return (sId === focus || tId === focus) ? 10 : 0;
           }}
           linkDirectionalParticleSpeed={(l: any) => {
             const focus = hover ?? selected;
+            const sId = typeof l.source === 'object' ? l.source.id : l.source;
+            const tId = typeof l.target === 'object' ? l.target.id : l.target;
+            const now = Date.now();
+            const mriS = mriRef.current.get(sId);
+            const mriT = mriRef.current.get(tId);
+            if ((mriS && mriS.end > now) || (mriT && mriT.end > now)) return 0.014;
             if (!focus) return 0;
-            const s = typeof l.source === 'object' ? l.source.id : l.source;
-            const t = typeof l.target === 'object' ? l.target.id : l.target;
-            return (s === focus || t === focus) ? 0.011 : 0;
+            return (sId === focus || tId === focus) ? 0.011 : 0;
           }}
           linkDirectionalParticleWidth={(l: any) => {
             const focus = hover ?? selected;
+            const sId = typeof l.source === 'object' ? l.source.id : l.source;
+            const tId = typeof l.target === 'object' ? l.target.id : l.target;
+            const now = Date.now();
+            const mriS = mriRef.current.get(sId);
+            const mriT = mriRef.current.get(tId);
+            if ((mriS && mriS.end > now) || (mriT && mriT.end > now)) return 3.2;
             if (!focus) return 0;
-            const s = typeof l.source === 'object' ? l.source.id : l.source;
-            const t = typeof l.target === 'object' ? l.target.id : l.target;
-            return (s === focus || t === focus) ? 2.6 : 0;
+            return (sId === focus || tId === focus) ? 2.6 : 0;
           }}
           linkDirectionalParticleColor={(l: any) => {
             const focus = hover ?? selected;
+            const sId = typeof l.source === 'object' ? l.source.id : l.source;
+            const tId = typeof l.target === 'object' ? l.target.id : l.target;
+            const now = Date.now();
+            const mriS = mriRef.current.get(sId);
+            const mriT = mriRef.current.get(tId);
+            if ((mriS && mriS.end > now) || (mriT && mriT.end > now)) return MRI_GREEN;
             if (!focus) return '#ffffff';
             const sNode: any = typeof l.source === 'object' ? l.source : null;
             const tNode: any = typeof l.target === 'object' ? l.target : null;
