@@ -83,6 +83,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
       env: { ...process.env, SUPER_AGENT_USER_ID: String(userId) },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
     let buf = '';

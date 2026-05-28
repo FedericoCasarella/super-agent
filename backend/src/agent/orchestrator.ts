@@ -27,7 +27,7 @@ async function handleIncoming({ userId, text }: { userId: number; chatId: number
     stopTyping();
   }
   const reply = res.ok ? res.text.trim() : `(error: ${res.stderr.slice(0, 200)})`;
-  if (!reply) return;
+  if (!reply || reply === 'SKIP') return;
   try {
     await sendTelegram(userId, reply);
     await logMessage(userId, 'out', 'telegram', reply);

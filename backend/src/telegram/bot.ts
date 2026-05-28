@@ -105,7 +105,9 @@ async function startBotForUser(userId: number) {
     }
     const text = 'text' in ctx.message ? ctx.message.text : '';
     if (text) {
-      bus.emit('telegram:incoming', { userId, chatId, text });
+      const messageId = (ctx.message as any).message_id;
+      try { await setSetting(userId, 'telegram_last_incoming', { chatId, messageId, ts: Date.now() }); } catch {}
+      bus.emit('telegram:incoming', { userId, chatId, text, messageId });
       return;
     }
     const msg: any = ctx.message;
@@ -242,6 +244,28 @@ export async function sendTelegram(userId: number, text: string) {
       await entry.bot.telegram.sendMessage(cfg.chatId, p.replace(/\*\*|__|`/g, ''));
     }
     await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+// Allowed Telegram reaction emojis (free for bots, no premium)
+const TG_REACTIONS = new Set(['👍','👎','❤','🔥','🥰','👏','😁','🤔','🤯','😱','🤬','😢','🎉','🤩','🤮','💩','🙏','👌','🕊','🤡','🥱','🥴','😍','🐳','❤‍🔥','🌚','🌭','💯','🤣','⚡','🍌','🏆','💔','🤨','😐','🍓','🍾','💋','🖕','😈','😴','😭','🤓','👻','👨‍💻','👀','🎃','🙈','😇','😨','🤝','✍','🤗','🫡','🎅','🎄','☃','💅','🤪','🗿','🆒','💘','🙉','🦄','😘','💊','🙊','😎','👾','🤷‍♂','🤷','🤷‍♀','😡']);
+
+export async function sendReaction(userId: number, chatId: number, messageId: number, emoji: string): Promise<boolean> {
+  if (!TG_REACTIONS.has(emoji)) throw new Error(`emoji not allowed: ${emoji}`);
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) throw new Error(`telegram bot init failed for user ${userId}`);
+  try {
+    await entry.bot.telegram.callApi('setMessageReaction' as any, {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{ type: 'emoji', emoji }],
+      is_big: false,
+    });
+    return true;
+  } catch (e: any) {
+    console.error('[telegram] setMessageReaction failed', e?.message ?? e);
+    return false;
   }
 }
 

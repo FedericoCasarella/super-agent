@@ -240,6 +240,27 @@ const connector: Connector = {
       handler: async (ctx, { request_id, reason }) => net.denyShareRequest(ctx.userId, request_id, reason),
     },
     {
+      name: 'telegram_react',
+      description: 'React with an emoji to the last incoming Telegram message (or a specific message_id). Use SPARINGLY — only when reaction is more appropriate than a text reply: acknowledgment of a small update ("ok 👍"), agreement (❤️/🔥), celebration (🎉), comprehension (🤔). Do NOT react to every message. If reacting, you can SKIP the text reply (return empty string).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          emoji: { type: 'string', description: 'One emoji. Allowed: 👍 ❤ 🔥 🎉 👌 🙏 🤔 👏 😁 🤯 😱 😢 🤩 💯 ⚡ 🏆 ✍ 🫡 👀 😇 🤝 🆒' },
+          messageId: { type: 'number', description: 'Optional explicit Telegram message_id. Defaults to last incoming.' },
+        },
+        required: ['emoji'], additionalProperties: false,
+      },
+      handler: async (ctx, { emoji, messageId }) => {
+        const last = await getSetting<{ chatId: number; messageId: number }>(ctx.userId, 'telegram_last_incoming');
+        if (!last?.chatId) return { ok: false, error: 'no telegram chat known' };
+        const mid = messageId ?? last.messageId;
+        if (!mid) return { ok: false, error: 'no message_id' };
+        const { sendReaction } = await import('../../../telegram/bot.js');
+        const ok = await sendReaction(ctx.userId, last.chatId, mid, emoji);
+        return { ok, emoji, messageId: mid };
+      },
+    },
+    {
       name: 'propose_agents',
       description: 'Propose to spawn one or more sub-agents in parallel. Sends a yes/no Telegram prompt to the user. Each agent gets a complete self-contained prompt (no shared memory). USE THIS instead of doing big async work yourself when: (a) the work is parallelizable, (b) you can let the user offload it, (c) tasks > 30s. After approval, sub-agents run in background; user sees them in /agents portal + Telegram /agents command.',
       inputSchema: {

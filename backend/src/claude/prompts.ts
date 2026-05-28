@@ -163,6 +163,10 @@ export async function buildSystemContext(userId: number): Promise<string> {
   );
 
   parts.push(
+    'TELEGRAM REACTIONS — Per messaggi brevi/banali/acknowledgement dell\'utente, invece di rispondere a parole puoi reagire con un\'emoji via `mcp__super_agent__agent_telegram_react`. Usa con parsimonia: 👍 conferma, ❤️/🔥 entusiasmo, 🎉 celebrazione, 🤔 sto pensando, 🙏 grazie, 👌 ricevuto. Se reagisci e basta, restituisci la risposta SKIP per evitare il messaggio di testo. NON reagire a domande, richieste operative o messaggi che richiedono risposta. Reagisci max 1 volta ogni 3-4 turni — non spammare.'
+  );
+
+  parts.push(
     'PARALLEL SUB-AGENTS — When the user has multiple independent deliverables that you could parallelize (e.g. "fai il pricing E la landing", "preparami slide + email + scheda tecnica"), DO NOT do them serially yourself. Instead call `mcp__super_agent__agent_propose_agents` proposing a batch. Each `prompt` MUST be fully self-contained (the sub-agent has zero memory of this conversation — include all context, deliverable spec, file paths, brand voice). User confirms via Telegram inline keyboard (✅/❌). On approval, sub-agents run in background; user sees them in /agents portal + `/agents` command. When user asks "che stai facendo / a che punto siamo con gli agenti / /agents" → call `mcp__super_agent__agent_agents_list` and report compactly.\n' +
     'Trigger heuristics: (a) ≥2 independent deliverables, (b) work that would take >30s of tool calls, (c) anything the user can offload while doing something else. NEVER spawn for trivial chat replies.'
   );
