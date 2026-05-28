@@ -1,8 +1,27 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { countUsers, createUser, getUserByEmail, getUserById, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken } from './index.js';
 import { config } from '../config.js';
 
 export const authRouter = Router();
+
+// Rate-limit auth endpoints to prevent bruteforce and mass-account abuse.
+// Per-IP window 15min. bcrypt(10) already caps online attempts to ~10/s per
+// connection; this layer adds the global ceiling and registration throttle.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many login attempts, retry in 15 minutes' },
+});
+const registerLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many register attempts, retry in 15 minutes' },
+});
 
 authRouter.get('/me', async (req, res) => {
   const token = (req as any).cookies?.[config.cookieName];
@@ -18,10 +37,13 @@ authRouter.get('/bootstrap', async (_req, res) => {
   res.json({ usersExist: c > 0, count: c });
 });
 
-authRouter.post('/register', async (req, res) => {
+authRouter.post('/register', registerLimiter, async (req, res) => {
   const { email, password, name } = req.body ?? {};
   if (!email || !password) return res.status(400).json({ error: 'email + password required' });
-  if (password.length < 6) return res.status(400).json({ error: 'password too short (>= 6)' });
+  // App holds persistent secrets (Telegram tokens, IMAP credentials, GHL keys).
+  // Account password is the gate over the whole bundle: 8+ char minimum.
+  if (password.length < 8) return res.status(400).json({ error: 'password too short (>= 8)' });
+  if (password.length > 128) return res.status(400).json({ error: 'password too long (<= 128)' });
   const existing = await getUserByEmail(email);
   if (existing) return res.status(409).json({ error: 'email already registered' });
   const isFirst = (await countUsers()) === 0;
@@ -38,7 +60,7 @@ authRouter.post('/register', async (req, res) => {
   res.json({ user, claimedOrphans: isFirst });
 });
 
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body ?? {};
   if (!email || !password) return res.status(400).json({ error: 'email + password required' });
   const u = await getUserByEmail(email);
