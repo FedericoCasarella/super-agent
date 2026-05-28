@@ -22,11 +22,20 @@ const isProduction = process.env.NODE_ENV === 'production';
 // onboarding-once instead. Default OFF → token auth stays fully intact for remote /
 // shared deploys (Federico, student forks). A personal AI on your own machine has no
 // "other" to lock out — see vault neuron "Sovereign Mode — Auth per AI Personale vs SaaS".
+// FAIL-CLOSED to loopback: refuse to boot if armed on a network-exposed host —
+// otherwise sovereign mode would be an auth bypass for anyone who can reach the port.
+const host = process.env.HOST ?? '127.0.0.1';
+const LOOPBACK_HOSTS = ['127.0.0.1', '::1', 'localhost'];
 const sovereign = process.env.POLPO_SOVEREIGN === '1';
+if (sovereign && !LOOPBACK_HOSTS.includes(host)) {
+  throw new Error(
+    `POLPO_SOVEREIGN=1 requires a loopback HOST (got '${host}'). Refusing to disable auth on a network interface.`
+  );
+}
 
 export const config = {
   port: Number(process.env.PORT ?? 8787),
-  host: process.env.HOST ?? '127.0.0.1',
+  host,
   databaseUrl: process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/polpo_brain',
   claudeBin: process.env.CLAUDE_BIN ?? 'claude',
   claudeModel: process.env.CLAUDE_MODEL ?? 'claude-sonnet-4-6',

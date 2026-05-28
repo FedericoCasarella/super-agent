@@ -60,6 +60,27 @@ export async function getOwner(): Promise<User | null> {
   return rows[0] ?? null;
 }
 
+// Sovereign Mode trust gate (defence-in-depth, sess.2839 sec-review). ALL must hold
+// before authenticating as the owner without a token:
+//  1. config.sovereign — flag armed (itself fail-closed to a loopback HOST at boot).
+//  2. loopback connection peer — blocks remote / reverse-proxied callers.
+//  3. loopback Host header — blocks DNS-rebinding (browser tricked into hitting
+//     localhost under an attacker hostname still carries the attacker's Host).
+//  4. Origin (if present) == frontendOrigin — blocks cross-site CSRF; absent Origin =
+//     non-browser caller (curl/native) → allowed.
+const LOOPBACK_PEERS = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
+const LOOPBACK_HOSTNAMES = ['127.0.0.1', '::1', 'localhost'];
+export function sovereignTrusted(req: Request): boolean {
+  if (!config.sovereign) return false;
+  const peer = req.socket?.remoteAddress ?? '';
+  if (!LOOPBACK_PEERS.includes(peer)) return false;
+  const hostname = (req.headers.host ?? '').split(':')[0];
+  if (!LOOPBACK_HOSTNAMES.includes(hostname)) return false;
+  const origin = req.headers.origin;
+  if (origin && origin !== config.frontendOrigin) return false;
+  return true;
+}
+
 export async function createUser(email: string, password: string, name: string | null): Promise<User> {
   const hash = await hashPassword(password);
   const rows = await query<User>(
@@ -77,10 +98,10 @@ export async function claimOrphanData(userId: number): Promise<void> {
 }
 
 export async function requireUser(req: Request, res: Response, next: NextFunction) {
-  // Sovereign Mode (sess.2839) — local-trust: recognize the owner without a token.
-  // Gated by POLPO_SOVEREIGN=1 (default OFF). If no owner exists yet, fall through to
-  // the normal flow so onboarding can create one. Remote/shared deploys keep token auth.
-  if (config.sovereign) {
+  // Sovereign Mode (sess.2839) — local-trust: recognize the owner without a token, but
+  // only when every trust gate holds (flag + loopback peer + loopback Host + same-origin).
+  // No owner yet → fall through to normal auth so onboarding can create one.
+  if (sovereignTrusted(req)) {
     const owner = await getOwner();
     if (owner) { req.user = owner; return next(); }
   }
