@@ -236,16 +236,19 @@ Confidence: 85%
 
 ### 🟡 HIGH — block prima di onboarding allievi Brain Training
 
-#### H1 — No rate limiting su `/login` e `/register` (`auth/routes.ts:21-46`)
-Confermato: nessun `express-rate-limit` / `express-slow-down` nel repo. bcrypt 10 rounds → ~100ms/attempt → ~10 attempts/s per connessione, insufficiente vs attacchi distribuiti. `/register` può creare account illimitati.
+#### H1 — Rate limiting `/login` e `/register` ✅ CLOSED sess.2818
+~~`/login` e `/register` senza throttling~~ → **risolto** via `express-rate-limit@8.5.2`:
+- `/login`: 20 attempts / 15min per IP (bcrypt 10 rounds + cap = bruteforce ~impossibile)
+- `/register`: 5 attempts / 15min per IP (mass-account prevention)
+- Standard headers RFC `draft-7` per client awareness
 
-**Fix**:
 ```ts
-import rateLimit from 'express-rate-limit';
-authRouter.post('/login',  rateLimit({ windowMs: 15*60_000, max: 20 }), ...);
-authRouter.post('/register', rateLimit({ windowMs: 15*60_000, max: 5 }), ...);
+// auth/routes.ts:9-23 (sess.2818)
+const loginLimiter = rateLimit({ windowMs: 15*60_000, max: 20, ... });
+const registerLimiter = rateLimit({ windowMs: 15*60_000, max: 5, ... });
+authRouter.post('/register', registerLimiter, ...);
+authRouter.post('/login', loginLimiter, ...);
 ```
-Confidence: 92%
 
 #### H2 — `/api/tools` GET unauthenticated dal bridge (`mcp/bridge.ts:15`)
 ```ts
@@ -270,8 +273,8 @@ Chiunque mandi `/start` per primo si binda permanentemente al `chatId` di un use
 
 Confidence: 83%
 
-#### H4 — IDOR audit globale endpoint API
-Generale: ogni endpoint che accetta `user_id` da request body/query (vs auth context) è vulnerabile. Verificare in audit follow-up tutti i route handlers.
+#### H4 — IDOR audit globale endpoint API ✅ VERIFIED CLEAN sess.2818
+Audit completo `backend/src/`: **zero match** su pattern `req.body.user_id`, `req.query.user_id`, `req.body.userId`, `req.query.userId`. Tutti i 60+ riferimenti a `user_id` in `api/routes.ts` derivano da `req.user!.id` (auth context). Architettura IDOR-safe by construction grazie a `router.use(requireUser)` globale + `req.user!.id` come unica fonte autoritativa. Nessun fix necessario.
 
 ### 🟢 MEDIUM — technical debt, non blocker
 
@@ -290,13 +293,24 @@ Generale: ogni endpoint che accetta `user_id` da request body/query (vs auth con
 - ✅ Zod disponibile (verificare uso pervasivo nei route handlers)
 - ✅ Stress test storico: 100 concurrent users, 0 failures (`STRESS_TEST_REPORT_sess2282.md`)
 
-### 🎯 Top 3 blockers prima di onboarding Brain Training students
+### 🎯 Hardening status (post sess.2818)
 
-1. **C1 — JWT_SECRET fallback hardcoded** — qualsiasi studente che dimentica `.env` runs con secret pubblico noto
-2. **C2 — Header `x-polpo-brain-user` IDOR** — impersonation totale via singolo header passato lato HTTP
-3. **H1 — Zero rate limiting** — bruteforce login trivial su qualunque deploy public
+| Finding | Severity | Status | File |
+|---|---|---|---|
+| C1 — JWT_SECRET fail-fast | 🔴 Critical | ✅ closed | `config.ts:17` |
+| C2 — `x-polpo-brain-user` IDOR | 🔴 Critical | ✅ closed | `api/routes.ts:118` |
+| C3 — Cookie secure conditional | 🔴 Critical | ✅ closed | `auth/index.ts:70` |
+| H1 — Rate limit login/register | 🟡 High | ✅ closed | `auth/routes.ts:9` |
+| H4 — IDOR audit globale | 🟡 High | ✅ clean by construction | (audit only) |
+| H2 — `/api/tools` service auth | 🟡 High | ⏳ pending | `mcp/bridge.ts:15` |
+| H3 — Telegram binding race | 🟡 High | ⏳ pending | `telegram/bot.ts:70` |
+| M1 — Password policy ≥6 | 🟢 Medium | ⏳ pending | `auth/routes.ts:42` |
+| M2 — JWT revocation server-side | 🟢 Medium | ⏳ pending | `auth/index.ts:21` |
+| M3 — Scheduler error swallow | 🟢 Medium | ⏳ pending | `scheduler/index.ts:109` |
 
-**Stima effort hardening completo P0** (C1+C2+C3+H1+H3): ~3-4h focused.
+**Maturità**: 5/10 → **~7.5/10** (4 di 7 vulnerabilità chiuse, IDOR clean, multi-user trusted gated solo su H2+H3).
+
+**Stima effort residuo per Brain Training student onboarding**: H2 (15 min) + H3 (30-60 min) = **~1h focused**.
 
 ---
 
@@ -450,16 +464,26 @@ Verificato sess.2282 + ricontrollato sess.2623:
 
 ## 📋 TODO (refresh sess.2818)
 
-### Robustness hardening P0 (block prima di Brain Training students)
-- [ ] **C1** `config.ts:17` — fail-fast su `JWT_SECRET` mancante o `<32 char` (5 min)
-- [ ] **C2** `api/routes.ts:118-127` — validare `headerUid === req.user!.id` per chiudere IDOR `x-polpo-brain-user` (15 min minimo, 1-2h fix completo via service JWT)
-- [ ] **C3** `auth/index.ts:70` — `secure: process.env.NODE_ENV === 'production'` + warn at startup (5 min)
-- [ ] **H1** `auth/routes.ts` — `express-rate-limit` su `/login` (20/15min) e `/register` (5/15min) (10 min)
+### Robustness hardening — status
+
+**P0 closed sess.2818** (commit `d9b3e74` + commit corrente):
+- [x] **C1** `config.ts:17` — JWT_SECRET fail-fast ≥32 char ✅
+- [x] **C2** `api/routes.ts:118` — `x-polpo-brain-user` IDOR closed ✅
+- [x] **C3** `auth/index.ts:70` — cookie `secure: isProduction` ✅
+- [x] **H1** `auth/routes.ts:9` — rate limit /login + /register (express-rate-limit 8.5.2) ✅
+- [x] **H4** Audit IDOR globale — zero IDOR found, architecture clean ✅
+
+**P0 residuo (1h effort)**:
 - [ ] **H2** `mcp/bridge.ts:15` — service token o IP-check `127.0.0.1` su `/api/tools` (15 min)
-- [ ] **H3** `telegram/bot.ts:70` — one-time verification code per binding chatId + API `unlink` (30-60 min)
-- [ ] **Audit IDOR globale** — verificare ogni endpoint API usi `req.user!.id` da JWT, mai `req.body.user_id` (30 min)
+- [ ] **H3** `telegram/bot.ts:70` — one-time verification code binding chatId + unlink API (30-60 min)
+
+**Tech debt P1**:
+- [ ] **M1** Password policy 8-12 char + complexity (`auth/routes.ts:24`)
+- [ ] **M2** JWT revocation server-side (token blacklist o `iat > password_changed_at`)
+- [ ] **M3** `scheduler/index.ts:109` — log error invece di `catch {}` silenzioso
 - [ ] Refactor `Server` → `McpServer` deprecato in `backend/src/mcp/bridge.ts` (1-2h, non security-critical)
 - [ ] Verificare uso zod pervasivo su tutti i route handler
+- [ ] `npm audit fix --force` su `uuid` via `node-cron` (richiede coord con Federico, breaking change)
 
 ### Robustness hardening P1 (medium)
 - [ ] Password policy 8-12 char + complexity check (`auth/routes.ts:24`)
