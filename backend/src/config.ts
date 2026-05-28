@@ -17,6 +17,13 @@ if (!jwtSecret || jwtSecret.length < 32) {
 
 const isProduction = process.env.NODE_ENV === 'production';
 
+// Sovereign Mode (sess.2839) — local-trust auth for the sovereign owner.
+// When ON, requireUser recognizes the instance owner WITHOUT a token: no login wall,
+// onboarding-once instead. Default OFF → token auth stays fully intact for remote /
+// shared deploys (Federico, student forks). A personal AI on your own machine has no
+// "other" to lock out — see vault neuron "Sovereign Mode — Auth per AI Personale vs SaaS".
+const sovereign = process.env.POLPO_SOVEREIGN === '1';
+
 export const config = {
   port: Number(process.env.PORT ?? 8787),
   host: process.env.HOST ?? '127.0.0.1',
@@ -27,6 +34,7 @@ export const config = {
   rootDir: path.resolve(process.cwd()),
   jwtSecret,
   isProduction,
+  sovereign,
   cookieName: 'polpo_brain_session',
   appName: 'Polpo Brain',
 };

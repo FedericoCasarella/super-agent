@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { countUsers, createUser, getUserByEmail, getUserById, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken, bumpTokenVersion } from './index.js';
+import { countUsers, createUser, getUserByEmail, getUserById, getOwner, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken, bumpTokenVersion } from './index.js';
 import { config } from '../config.js';
 
 export const authRouter = Router();
@@ -28,6 +28,12 @@ const initializeLimiter = rateLimit({
 });
 
 authRouter.get('/me', async (req, res) => {
+  // Sovereign Mode (sess.2839) — the owner is always "logged in" on their own machine.
+  // Frontend sees user != null → enters the app, never renders the login wall.
+  if (config.sovereign) {
+    const owner = await getOwner();
+    return res.json({ user: owner });
+  }
   const token = (req as any).cookies?.[config.cookieName];
   if (!token) return res.json({ user: null });
   const data = verifyToken(token);
@@ -38,7 +44,8 @@ authRouter.get('/me', async (req, res) => {
 
 authRouter.get('/bootstrap', async (_req, res) => {
   const c = await countUsers();
-  res.json({ usersExist: c > 0, count: c });
+  // sovereign flag surfaced so the frontend gate knows local-trust mode is active.
+  res.json({ usersExist: c > 0, count: c, sovereign: config.sovereign });
 });
 
 // One-shot initialization for fresh Polpo Brain instance. Single-user per instance

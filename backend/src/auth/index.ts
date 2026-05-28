@@ -53,6 +53,13 @@ export async function countUsers(): Promise<number> {
   return rows[0]?.c ?? 0;
 }
 
+// Sovereign Mode (sess.2839) — the instance owner is the first user (lowest id).
+// The single-user-per-instance invariant (users_singleton index) makes this unambiguous.
+export async function getOwner(): Promise<User | null> {
+  const rows = await query<User>('SELECT id::int, email, name, token_version::int AS token_version FROM users ORDER BY id ASC LIMIT 1');
+  return rows[0] ?? null;
+}
+
 export async function createUser(email: string, password: string, name: string | null): Promise<User> {
   const hash = await hashPassword(password);
   const rows = await query<User>(
@@ -70,6 +77,13 @@ export async function claimOrphanData(userId: number): Promise<void> {
 }
 
 export async function requireUser(req: Request, res: Response, next: NextFunction) {
+  // Sovereign Mode (sess.2839) — local-trust: recognize the owner without a token.
+  // Gated by POLPO_SOVEREIGN=1 (default OFF). If no owner exists yet, fall through to
+  // the normal flow so onboarding can create one. Remote/shared deploys keep token auth.
+  if (config.sovereign) {
+    const owner = await getOwner();
+    if (owner) { req.user = owner; return next(); }
+  }
   const token = (req as any).cookies?.[config.cookieName];
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
   const data = verifyToken(token);
