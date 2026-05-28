@@ -89,7 +89,13 @@ Polpo Brain è il prodotto di una collaborazione a tre layer:
 
 ## License
 
-Polpo Brain segue la licenza upstream di `super-agent`. Per uso commerciale: contattare Mattia Calastri.
+Il repository upstream [`super-agent`](https://github.com/FedericoCasarella/super-agent) non ha attualmente una licenza esplicita pubblicata, il che significa che — per default di GitHub — tutti i diritti sono riservati ai rispettivi autori.
+
+Per uso, redistribuzione, fork derivati o impiego commerciale del codice contenuto in `polpo-fork`, contattare:
+- **Mattia Calastri** (mattia.calastri@gmail.com) — per la parte Polpo Brain / Astra Digital / AI Coach Italia
+- **Federico Casarella** ([@FedericoCasarella](https://github.com/FedericoCasarella)) — per il codice upstream `super-agent`
+
+Una licenza open source esplicita (MIT, Apache 2.0, BSD-3-Clause sono candidati naturali) è auspicabile in futuro per facilitare il contributo open della community.
 
 ---
 
