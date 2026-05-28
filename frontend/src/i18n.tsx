@@ -105,8 +105,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'onboarding.linkedTo': '✓ Collegato a chat',
     'onboarding.saveToken': 'Salva token',
     // Agents
-    'agents.title': 'Agenti',
-    'agents.subtitle': 'Agenti interni in background. Ognuno gira una volta al giorno all\'orario scelto. Clicca una card per i dettagli.',
+    'agents.title': 'Perks',
+    'agents.subtitle': 'I perks giornalieri del tuo agente — micro-routine in background che girano una volta al giorno: classificano note, intrecciano collegamenti, tengono il second brain in ordine. Clicca una card per configurare orario e notifiche.',
     'agents.openDetail': 'Apri dettagli',
     'agents.runNow': 'Esegui ora',
     'agents.viewReport': 'Vedi report',
@@ -343,8 +343,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'onboarding.linkedTo': '✓ Linked to chat',
     'onboarding.saveToken': 'Save token',
     // Agents
-    'agents.title': 'Agents',
-    'agents.subtitle': 'Internal background agents. Each runs once per day at the chosen time. Click a card for details.',
+    'agents.title': 'Perks',
+    'agents.subtitle': 'Daily perks of your agent — background micro-routines that run once a day: classify notes, weave links, keep your second brain tidy. Click a card to configure schedule and notifications.',
     'agents.openDetail': 'Open detail',
     'agents.runNow': 'Run now',
     'agents.viewReport': 'View report',

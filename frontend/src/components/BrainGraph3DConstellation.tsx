@@ -102,15 +102,35 @@ export default function BrainGraph3DConstellation({
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
-  const [showLabels, setShowLabels] = useState<boolean>(() => typeof localStorage !== 'undefined' ? localStorage.getItem('brain_3d_labels') !== '0' : true);
-  useEffect(() => { try { localStorage.setItem('brain_3d_labels', showLabels ? '1' : '0'); } catch {} }, [showLabels]);
-  const [showParticles, setShowParticles] = useState<boolean>(() => typeof localStorage !== 'undefined' ? localStorage.getItem('brain_3d_particles') !== '0' : true);
-  useEffect(() => { try { localStorage.setItem('brain_3d_particles', showParticles ? '1' : '0'); } catch {} }, [showParticles]);
-  const [density, setDensity] = useState<Density>(() => {
-    try { const v = localStorage.getItem('brain_3d_density') as Density; if (v && DENSITY_PRESETS[v]) return v; } catch {}
-    return 'med';
+  const LS_READ = (k: string, d: string): string => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+  const LS_WRITE = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch {} };
+  const [showLabels, setShowLabelsState] = useState<boolean>(() => LS_READ('brain_3d_labels', '1') !== '0');
+  const setShowLabels = (next: boolean | ((v: boolean) => boolean)) => {
+    setShowLabelsState((prev) => {
+      const v = typeof next === 'function' ? (next as (v: boolean) => boolean)(prev) : next;
+      LS_WRITE('brain_3d_labels', v ? '1' : '0');
+      return v;
+    });
+  };
+  const [showParticles, setShowParticlesState] = useState<boolean>(() => LS_READ('brain_3d_particles', '1') !== '0');
+  const setShowParticles = (next: boolean | ((v: boolean) => boolean)) => {
+    setShowParticlesState((prev) => {
+      const v = typeof next === 'function' ? (next as (v: boolean) => boolean)(prev) : next;
+      LS_WRITE('brain_3d_particles', v ? '1' : '0');
+      return v;
+    });
+  };
+  const [density, setDensityState] = useState<Density>(() => {
+    const v = LS_READ('brain_3d_density', 'med') as Density;
+    return DENSITY_PRESETS[v] ? v : 'med';
   });
-  useEffect(() => { try { localStorage.setItem('brain_3d_density', density); } catch {} }, [density]);
+  const setDensity = (next: Density | ((v: Density) => Density)) => {
+    setDensityState((prev) => {
+      const v = typeof next === 'function' ? (next as (v: Density) => Density)(prev) : next;
+      LS_WRITE('brain_3d_density', v);
+      return v;
+    });
+  };
   const PER_NODE = DENSITY_PRESETS[density];
   useEffect(() => {
     const f = (fieldRef.current as any);

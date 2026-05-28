@@ -14,13 +14,22 @@ type Filter = 'all' | 'public' | 'protected';
 
 export default function Brain() {
   const { t } = useI18n();
-  const [tab, setTab] = useState<Tab>('graph');
-  const [view, setView] = useState<View>(() => (typeof localStorage !== 'undefined' && localStorage.getItem('brain_view') === '3d' ? '3d' : '2d'));
-  useEffect(() => { try { localStorage.setItem('brain_view', view); } catch {} }, [view]);
-  const [filter, setFilter] = useState<Filter>('all');
-  const [originFilter, setOriginFilter] = useState<string>('all');
+  const lsGet = (k: string, d: string) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+  const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch {} };
+  const [tab, setTab] = useState<Tab>(() => (lsGet('brain_tab', 'graph') === 'list' ? 'list' : 'graph'));
+  useEffect(() => { lsSet('brain_tab', tab); }, [tab]);
+  const [view, setView] = useState<View>(() => (lsGet('brain_view', '2d') === '3d' ? '3d' : '2d'));
+  useEffect(() => { lsSet('brain_view', view); }, [view]);
+  const [filter, setFilter] = useState<Filter>(() => {
+    const v = lsGet('brain_filter', 'all');
+    return (v === 'public' || v === 'protected' || v === 'all') ? v : 'all';
+  });
+  useEffect(() => { lsSet('brain_filter', filter); }, [filter]);
+  const [originFilter, setOriginFilter] = useState<string>(() => lsGet('brain_origin', 'all'));
+  useEffect(() => { lsSet('brain_origin', originFilter); }, [originFilter]);
   const [origins, setOrigins] = useState<string[]>([]);
-  const [vaultFilter, setVaultFilter] = useState<string>('all');
+  const [vaultFilter, setVaultFilter] = useState<string>(() => lsGet('brain_vault', 'all'));
+  useEffect(() => { lsSet('brain_vault', vaultFilter); }, [vaultFilter]);
   const [vaults, setVaults] = useState<string[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [graphKey, setGraphKey] = useState(0);
