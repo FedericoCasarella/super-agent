@@ -5,6 +5,62 @@ import { bus } from '../bus.js';
 type BotEntry = { bot: Telegraf; token: string };
 const bots = new Map<number, BotEntry>(); // userId → bot
 
+// Rate-limit /link CODE attempts per (user, chat) to block online guessing
+// during the 10min code TTL. In-memory is fine: process restart wipes the
+// table, and the codespace (~1.07B) × TTL × 5-attempt cap makes brute-force
+// mathematically unviable.
+const linkAttempts = new Map<string, { count: number; windowStart: number }>();
+const LINK_WINDOW_MS = 15 * 60_000;
+const LINK_MAX_ATTEMPTS = 5;
+
+function takeLinkAttempt(key: string): boolean {
+  const now = Date.now();
+  const entry = linkAttempts.get(key);
+  if (!entry || now - entry.windowStart > LINK_WINDOW_MS) {
+    linkAttempts.set(key, { count: 1, windowStart: now });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= LINK_MAX_ATTEMPTS;
+}
+
+// Verify chatId binding: returns 'bound' on success, 'denied' on failure
+// (caller should NOT proceed with handler logic). Closes the first-contact
+// race vulnerability where any chat sending /start first would win the
+// binding to a leaked bot token.
+type LinkResult =
+  | { kind: 'already_bound_same_chat' }
+  | { kind: 'denied'; reason: string }
+  | { kind: 'newly_bound' }
+  | { kind: 'needs_code'; message: string };
+
+async function attemptChatLink(userId: number, chatId: number, text: string): Promise<LinkResult> {
+  const cur = await getSetting<any>(userId, 'telegram');
+  if (cur?.chatId) {
+    if (cur.chatId === chatId) return { kind: 'already_bound_same_chat' };
+    return { kind: 'denied', reason: 'Not authorized.' };
+  }
+  // Binding flow: require explicit /link CODE
+  const linkMatch = text.match(/^\/link\s+([A-Z0-9]{4,8})\s*$/i);
+  if (!linkMatch) {
+    return {
+      kind: 'needs_code',
+      message: '🔒 To link this chat, generate a code in the web UI (POST /api/telegram/link-code) and send: /link <CODE>',
+    };
+  }
+  if (!takeLinkAttempt(`${userId}:${chatId}`)) {
+    return { kind: 'denied', reason: '🚧 Too many link attempts. Wait 15 minutes and try again.' };
+  }
+  const code = linkMatch[1].toUpperCase();
+  const pending = await getSetting<{ code: string; expires_at: string }>(userId, 'telegram_link_pending');
+  if (!pending) return { kind: 'denied', reason: '⚠️ No link code pending. Generate one in the web UI first.' };
+  if (new Date(pending.expires_at) < new Date()) return { kind: 'denied', reason: '⏰ Code expired. Generate a fresh one.' };
+  if (pending.code !== code) return { kind: 'denied', reason: '❌ Invalid code.' };
+  await setSetting(userId, 'telegram', { ...cur, chatId });
+  await setSetting(userId, 'telegram_link_pending', null);
+  return { kind: 'newly_bound' };
+}
+
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -83,27 +139,20 @@ async function startBotForUser(userId: number) {
 
   bot.start(async (ctx) => {
     const chatId = ctx.chat.id;
-    const cur = await getSetting<any>(userId, 'telegram');
-    if (!cur?.chatId) {
-      await setSetting(userId, 'telegram', { ...cur, chatId });
-    } else if (cur.chatId !== chatId) {
-      await ctx.reply('Not authorized.');
-      return;
-    }
+    const result = await attemptChatLink(userId, chatId, '/start');
+    if (result.kind === 'needs_code') { await ctx.reply(result.message); return; }
+    if (result.kind === 'denied') { await ctx.reply(result.reason); return; }
     await ctx.reply("Linked. I'm online.");
   });
 
   bot.on('message', async (ctx) => {
     const chatId = ctx.chat.id;
-    const cur = await getSetting<any>(userId, 'telegram');
-    if (!cur?.chatId) {
-      await setSetting(userId, 'telegram', { ...cur, chatId });
-      await ctx.reply("Linked. I'm online.");
-    } else if (cur.chatId !== chatId) {
-      await ctx.reply('Not authorized.');
-      return;
-    }
     const text = 'text' in ctx.message ? ctx.message.text : '';
+    const link = await attemptChatLink(userId, chatId, text);
+    if (link.kind === 'needs_code') { await ctx.reply(link.message); return; }
+    if (link.kind === 'denied') { await ctx.reply(link.reason); return; }
+    if (link.kind === 'newly_bound') { await ctx.reply("✅ Chat linked. I'm online."); return; }
+    // kind === 'already_bound_same_chat' → fall through to normal handling
     if (text) {
       const messageId = (ctx.message as any).message_id;
       try { await setSetting(userId, 'telegram_last_incoming', { chatId, messageId, ts: Date.now() }); } catch {}
