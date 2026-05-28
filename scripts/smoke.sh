@@ -203,10 +203,12 @@ assert_http       "me-noauth"      GET  "/api/auth/me"        "200"  # returns {
 echo
 step "verifying rate-limit headers on /login"
 headers=$(curl -s -i -X POST "${BASE}/api/auth/login" -H 'content-type: application/json' -d '{"email":"x@x","password":"x"}' | tr -d '\r')
-if echo "${headers}" | grep -qi '^ratelimit-limit:'; then
-  ok "ratelimit-limit header present"
+# Match RFC draft-7 (`RateLimit-*`), legacy (`X-RateLimit-*`), and lowercase
+# variants. `-i` should suffice but be defensive against header normalization.
+if echo "${headers}" | grep -qiE '^(x-)?ratelimit'; then
+  ok "rate-limit headers present"
 else
-  warn "ratelimit-limit header missing (express-rate-limit may need standardHeaders set)"
+  warn "rate-limit headers missing (express-rate-limit may need standardHeaders set)"
 fi
 
 # ─── Summary ─────────────────────────────────────────────────────────────────

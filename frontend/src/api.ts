@@ -13,8 +13,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const auth = {
   me: () => req<{ user: { id: number; email: string; name: string | null } | null }>('/auth/me'),
   bootstrap: () => req<{ usersExist: boolean; count: number }>('/auth/bootstrap'),
-  register: (email: string, password: string, name?: string) =>
-    req<{ user: any; claimedOrphans?: boolean }>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
+  initialize: (email: string, password: string, name?: string) =>
+    req<{ user: any; claimedOrphans?: boolean }>('/auth/initialize', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
   login: (email: string, password: string) =>
     req<{ user: any }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   logout: () => req('/auth/logout', { method: 'POST' }),
@@ -45,7 +45,12 @@ export const api = {
   updateInternalAgent: (name: string, data: any) => req(`/internal-agents/${name}`, { method: 'PUT', body: JSON.stringify(data) }),
   runInternalAgent: (name: string) => req<{ status: string; report: any }>(`/internal-agents/${name}/run`, { method: 'POST' }),
   brainIndexFiltered: (visibility: 'all' | 'public' | 'protected') => req<any[]>(`/brain/index?visibility=${visibility}`),
-  brainGraphFiltered: (visibility: 'all' | 'public' | 'protected') => req<{ nodes: any[]; links: any[] }>(`/brain/graph?visibility=${visibility}`),
+  // Multi-vault drift shim (sess.2818): upstream Federico has originFilter +
+  // returns origins[]/vaults[]; polpo-fork backend ignores extra args. The
+  // optional 2nd parameter and union return type unblock tsc on consumers
+  // (BrainGraph3DConstellation) until we integrate the multi-vault feature.
+  brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', _originFilter?: string) =>
+    req<{ nodes: any[]; links: any[]; origins?: string[]; vaults?: any[] }>(`/brain/graph?visibility=${visibility}`),
   tasks: () => req<any[]>('/tasks'),
   taskCreate: (data: any) => req('/tasks', { method: 'POST', body: JSON.stringify(data) }),
   taskUpdate: (id: number, data: any) => req(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
