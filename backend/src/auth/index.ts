@@ -38,6 +38,33 @@ export async function countUsers(): Promise<number> {
   return rows[0]?.c ?? 0;
 }
 
+// Sovereign Mode — the instance owner is the first user (lowest id).
+export async function getOwner(): Promise<User | null> {
+  const rows = await query<User>('SELECT id::int, email, name FROM users ORDER BY id ASC LIMIT 1');
+  return rows[0] ?? null;
+}
+
+// Sovereign Mode trust gate (defence-in-depth). ALL of these must hold before we
+// authenticate as the owner without a token:
+//  1. config.sovereign — the flag is armed (itself fail-closed to a loopback HOST).
+//  2. loopback connection peer — blocks remote and reverse-proxied callers.
+//  3. loopback Host header — blocks DNS-rebinding (a browser tricked into hitting
+//     localhost under an attacker hostname still carries the attacker's Host).
+//  4. Origin (if present) matches the trusted frontend — blocks cross-site CSRF from
+//     other web pages; absent Origin = non-browser caller (curl, native) → allowed.
+const LOOPBACK_PEERS = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
+const LOOPBACK_HOSTNAMES = ['127.0.0.1', '::1', 'localhost'];
+export function sovereignTrusted(req: Request): boolean {
+  if (!config.sovereign) return false;
+  const peer = req.socket?.remoteAddress ?? '';
+  if (!LOOPBACK_PEERS.includes(peer)) return false;
+  const hostname = (req.headers.host ?? '').split(':')[0];
+  if (!LOOPBACK_HOSTNAMES.includes(hostname)) return false;
+  const origin = req.headers.origin;
+  if (origin && origin !== config.frontendOrigin) return false;
+  return true;
+}
+
 export async function createUser(email: string, password: string, name: string | null): Promise<User> {
   const hash = await hashPassword(password);
   const rows = await query<User>(
@@ -55,6 +82,13 @@ export async function claimOrphanData(userId: number): Promise<void> {
 }
 
 export async function requireUser(req: Request, res: Response, next: NextFunction) {
+  // Sovereign Mode — local-trust: authenticate as the owner without a token, but only
+  // when every trust gate holds (flag + loopback peer + loopback Host + same-origin).
+  // No owner yet → fall through to normal auth so onboarding can create one.
+  if (sovereignTrusted(req)) {
+    const owner = await getOwner();
+    if (owner) { req.user = owner; return next(); }
+  }
   const token = (req as any).cookies?.[config.cookieName];
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
   const data = verifyToken(token);
