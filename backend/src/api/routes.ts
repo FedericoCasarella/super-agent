@@ -11,6 +11,16 @@ import { requireUser } from '../auth/index.js';
 
 export const router = Router();
 
+// The `x-super-agent-user` service header lets the local MCP bridge act as a
+// user without a cookie. It must only be trusted from loopback — otherwise any
+// remote caller can set the header to an arbitrary user id and invoke that
+// user's tools (IDOR / impersonation). The local bridge always connects over
+// loopback, so this preserves its behaviour while closing the hole.
+function isLoopbackReq(req: any): boolean {
+  const ip = String(req.ip || req.socket?.remoteAddress || '');
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
 // ===== MCP bridge endpoints — auth via service header `x-super-agent-user`.
 // These MUST be mounted BEFORE requireUser middleware so the local MCP bridge
 // (which has no cookie) can still list/invoke tools.
@@ -21,8 +31,9 @@ router.get('/tools', (_req, res) => {
 });
 router.post('/tools/:name', async (req, res) => {
   const headerUid = Number(req.header('x-super-agent-user') || '');
-  // Prefer header (bridge call) — fall back to cookie session if present
-  let userId = Number.isFinite(headerUid) && headerUid > 0 ? headerUid : NaN;
+  // Trust the service header ONLY from loopback (local MCP bridge). A remote
+  // caller setting this header would otherwise impersonate any user (IDOR).
+  let userId = (isLoopbackReq(req) && Number.isFinite(headerUid) && headerUid > 0) ? headerUid : NaN;
   if (!userId) {
     // Try cookie auth manually
     const { verifyToken } = await import('../auth/index.js');
