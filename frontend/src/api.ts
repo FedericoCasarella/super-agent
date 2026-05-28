@@ -58,4 +58,7 @@ export const api = {
   updateBusiness: (data: any) => req('/settings/business', { method: 'PUT', body: JSON.stringify(data) }),
   updateTelegram: (token: string) => req('/settings/telegram', { method: 'PUT', body: JSON.stringify({ token }) }),
   updateSound: (enabled: boolean) => req('/settings/sound', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  // H3 (sess.2818) — Telegram chatId binding via one-time code
+  telegramLinkCode: () => req<{ code: string; expires_at: string; instructions: string }>('/telegram/link-code', { method: 'POST' }),
+  telegramUnlink: () => req<{ ok: boolean }>('/telegram/unlink', { method: 'POST' }),
 };
