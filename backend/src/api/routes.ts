@@ -11,6 +11,15 @@ import { requireUser } from '../auth/index.js';
 
 export const router = Router();
 
+// Path-traversal precheck for /brain/note: reject absolute paths, Windows drive
+// prefixes, and any '..' segment before resolving against the vault root.
+function isUnsafeRelPath(rel: string): boolean {
+  if (!rel) return true;
+  if (rel.startsWith('/') || rel.startsWith('\\')) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(rel)) return true;
+  return rel.split(/[\\/]/).some((s) => s === '..');
+}
+
 // ===== MCP bridge endpoints — auth via service header `x-super-agent-user`.
 // These MUST be mounted BEFORE requireUser middleware so the local MCP bridge
 // (which has no cookie) can still list/invoke tools.
@@ -185,12 +194,24 @@ router.get('/brain/note', async (req, res) => {
     const vs = await listVaults(userId);
     const v = vs.find((x) => x.name === vaultName);
     if (!v) return res.status(404).json({ error: 'vault not found' });
+    // Path traversal guard: `rel` is client-controlled. Without containment,
+    // rel='../../../etc/passwd' would escape the vault via path.join + readFile.
+    // Fast precheck rejects absolute / drive / '..' paths; realpath then asserts
+    // the resolved file is contained within the vault and is a .md note.
+    if (isUnsafeRelPath(rel)) return res.status(400).json({ error: 'invalid path' });
     try {
       const fs = await import('node:fs/promises');
       const path = await import('node:path');
       const matter = (await import('gray-matter')).default;
-      const fullPath = path.join(v.path, rel);
-      const txt = await fs.readFile(fullPath, 'utf8');
+      const vaultReal = await fs.realpath(v.path);
+      const candidate = path.resolve(vaultReal, rel);
+      let fullReal: string;
+      try { fullReal = await fs.realpath(candidate); } catch { return res.status(404).json({ error: 'not found' }); }
+      if (fullReal !== vaultReal && !fullReal.startsWith(vaultReal + path.sep)) {
+        return res.status(400).json({ error: 'invalid path' });
+      }
+      if (!fullReal.toLowerCase().endsWith('.md')) return res.status(400).json({ error: 'invalid file' });
+      const txt = await fs.readFile(fullReal, 'utf8');
       const parsed = matter(txt);
       return res.json({
         path: raw,
