@@ -1,10 +1,15 @@
 import { Router } from 'express';
-import { countUsers, createUser, getUserByEmail, getUserById, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken } from './index.js';
+import { countUsers, createUser, getUserByEmail, getUserById, getOwner, sovereignTrusted, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken } from './index.js';
 import { config } from '../config.js';
 
 export const authRouter = Router();
 
 authRouter.get('/me', async (req, res) => {
+  // Sovereign Mode — the owner is "logged in" on their own machine (all trust gates checked).
+  if (sovereignTrusted(req)) {
+    const owner = await getOwner();
+    return res.json({ user: owner });
+  }
   const token = (req as any).cookies?.[config.cookieName];
   if (!token) return res.json({ user: null });
   const data = verifyToken(token);
@@ -13,9 +18,11 @@ authRouter.get('/me', async (req, res) => {
   res.json({ user });
 });
 
-authRouter.get('/bootstrap', async (_req, res) => {
+authRouter.get('/bootstrap', async (req, res) => {
   const c = await countUsers();
-  res.json({ usersExist: c > 0, count: c });
+  // `sovereign` reflects whether local-trust mode is active for THIS caller (gates checked),
+  // so the frontend can adapt its gate (skip the login wall when true).
+  res.json({ usersExist: c > 0, count: c, sovereign: sovereignTrusted(req) });
 });
 
 authRouter.post('/register', async (req, res) => {
