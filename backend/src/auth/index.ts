@@ -18,7 +18,10 @@ export async function verifyPassword(pw: string, hash: string): Promise<boolean>
 }
 
 export function signToken(user: User): string {
-  return jwt.sign({ uid: user.id, email: user.email }, config.jwtSecret, { expiresIn: '30d' });
+  // Sess.2817 — Polpo Brain is single-user per instance + local-trust device.
+  // 365d TTL: Mattia's master instance and student forks should not see /login
+  // friction across normal usage. Cookie httpOnly + sameSite still protect from XSS/CSRF.
+  return jwt.sign({ uid: user.id, email: user.email }, config.jwtSecret, { expiresIn: '365d' });
 }
 export function verifyToken(token: string): { uid: number; email: string } | null {
   try { return jwt.verify(token, config.jwtSecret) as any; } catch { return null; }
@@ -72,7 +75,7 @@ export function setAuthCookie(res: Response, token: string) {
     httpOnly: true,
     sameSite: 'lax',
     secure: config.isProduction,
-    maxAge: 30 * 24 * 60 * 60_000,
+    maxAge: 365 * 24 * 60 * 60_000,  // 1 year — sess.2817 single-user persistent login
     path: '/',
   });
 }

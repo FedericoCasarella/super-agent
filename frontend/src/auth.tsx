@@ -7,7 +7,7 @@ type Ctx = {
   loading: boolean;
   usersExist: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name?: string) => Promise<{ claimedOrphans?: boolean }>;
+  initialize: (email: string, password: string, name?: string) => Promise<{ claimedOrphans?: boolean }>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       user, loading, usersExist,
       async login(email, password) { const r = await auth.login(email, password); setUser(r.user); await refresh(); },
-      async register(email, password, name) { const r = await auth.register(email, password, name); setUser(r.user); await refresh(); return { claimedOrphans: r.claimedOrphans }; },
+      async initialize(email, password, name) { const r = await auth.initialize(email, password, name); setUser(r.user); await refresh(); return { claimedOrphans: r.claimedOrphans }; },
       async logout() { await auth.logout(); setUser(null); await refresh(); },
       refresh,
     }}>{children}</AuthContext.Provider>
