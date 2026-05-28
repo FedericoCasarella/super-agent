@@ -67,7 +67,11 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
 
 export function setAuthCookie(res: Response, token: string) {
   res.cookie(config.cookieName, token, {
-    httpOnly: true, sameSite: 'lax', secure: false,
+    // C3 (sess.2818) — secure flag gated on NODE_ENV=production.
+    // In dev (HTTP localhost) secure:true would prevent cookie set entirely.
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: config.isProduction,
     maxAge: 30 * 24 * 60 * 60_000,
     path: '/',
   });

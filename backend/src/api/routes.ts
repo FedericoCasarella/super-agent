@@ -114,10 +114,17 @@ router.get('/tools', (_req, res) => {
   })));
 });
 
-// Tool invocation: prefer header from MCP bridge, fallback to authed cookie user
+// Tool invocation. Authoritative user_id from auth context only.
+// C2 (sess.2818) — x-polpo-brain-user header now ASSERTS intent and must match
+// the authenticated user. Header-based impersonation (any authed user could
+// override user_id) is closed. The MCP bridge subprocess must run with a
+// cookie that matches its POLPO_BRAIN_USER_ID env.
 router.post('/tools/:name', async (req, res) => {
   const headerUid = Number(req.header('x-polpo-brain-user') || '');
-  const userId = Number.isFinite(headerUid) && headerUid > 0 ? headerUid : req.user!.id;
+  if (Number.isFinite(headerUid) && headerUid > 0 && headerUid !== req.user!.id) {
+    return res.status(403).json({ ok: false, error: 'x-polpo-brain-user header mismatch with auth context' });
+  }
+  const userId = req.user!.id;
   try {
     const out = await invokeTool(userId, req.params.name, req.body ?? {});
     res.json({ ok: true, result: out });
