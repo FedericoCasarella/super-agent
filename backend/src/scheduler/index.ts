@@ -110,7 +110,13 @@ export async function runTick(userId: number, name: string) {
       const cur = await query<{ state: any }>('SELECT state FROM connectors WHERE user_id=$1 AND name=$2', [userId, name]);
       const merged = { ...(cur[0]?.state ?? {}), lastTickAt: new Date().toISOString() };
       await query('UPDATE connectors SET state=$1::jsonb, updated_at=now() WHERE user_id=$2 AND name=$3', [JSON.stringify(merged), userId, name]);
-    } catch {}
+    } catch (e) {
+      // State-persistence failure was previously swallowed. The visible symptom
+      // is that catchUpOnBoot re-fires "missed" ticks for connectors whose
+      // lastTickAt never advanced — looking like the connector missed runs
+      // when it actually executed fine. Log loudly to surface the DB issue.
+      console.error(`[scheduler:u${userId}:${name}] lastTickAt persistence failed`, e);
+    }
   }
 }
 
