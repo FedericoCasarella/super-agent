@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomInt } from 'node:crypto';
 import { query, getSetting, setSetting } from '../db/index.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
 import { buildGraph } from '../brain/graph.js';
@@ -21,17 +22,41 @@ router.get('/tools', (_req, res) => {
 });
 router.post('/tools/:name', async (req, res) => {
   const headerUid = Number(req.header('x-super-agent-user') || '');
-  // Prefer header (bridge call) — fall back to cookie session if present
-  let userId = Number.isFinite(headerUid) && headerUid > 0 ? headerUid : NaN;
-  if (!userId) {
-    // Try cookie auth manually
-    const { verifyToken } = await import('../auth/index.js');
-    const { config } = await import('../config.js');
-    const tok = (req as any).cookies?.[config.cookieName];
-    const d = tok ? verifyToken(tok) : null;
-    if (d) userId = d.uid;
+
+  // Resolve cookie identity (if any) so we can validate header assertion.
+  const { verifyToken } = await import('../auth/index.js');
+  const { config } = await import('../config.js');
+  const tok = (req as any).cookies?.[config.cookieName];
+  const cookieData = tok ? verifyToken(tok) : null;
+  const cookieUid = cookieData?.uid;
+
+  let userId: number;
+  if (Number.isFinite(headerUid) && headerUid > 0) {
+    // Header-asserted identity (MCP bridge subprocess). Two constraints:
+    //   1. If a cookie session is also present, the header MUST agree —
+    //      otherwise any authenticated user could pass an arbitrary header
+    //      and impersonate another user (IDOR on the entire tool surface
+    //      including IMAP credentials, GHL contacts, vault notes).
+    //   2. If no cookie, accept only from loopback (the bridge runs as a
+    //      subprocess on 127.0.0.1; a public reverse-proxy must not be able
+    //      to assert identity by header alone).
+    if (cookieUid && cookieUid !== headerUid) {
+      return res.status(403).json({ ok: false, error: 'x-super-agent-user header mismatch with cookie session' });
+    }
+    if (!cookieUid) {
+      const ip = req.ip ?? '';
+      const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip.startsWith('::ffff:127.');
+      if (!isLoopback) {
+        return res.status(401).json({ ok: false, error: 'x-super-agent-user header without cookie accepted only from loopback' });
+      }
+    }
+    userId = headerUid;
+  } else if (cookieUid) {
+    userId = cookieUid;
+  } else {
+    return res.status(401).json({ ok: false, error: 'missing user id (header or cookie)' });
   }
-  if (!userId) return res.status(401).json({ ok: false, error: 'missing user id (header or cookie)' });
+
   try {
     const out = await invokeTool(userId, req.params.name, req.body ?? {});
     res.json({ ok: true, result: out });
@@ -77,7 +102,29 @@ router.post('/onboarding/telegram', async (req, res) => {
   const cur = await getSetting<any>(req.user!.id, 'telegram') ?? {};
   await setSetting(req.user!.id, 'telegram', { ...cur, token });
   await restartTelegramForUser(req.user!.id);
-  res.json({ ok: true, message: 'Bot started. Open Telegram and send /start to link this chat.' });
+  res.json({ ok: true, message: 'Bot started. Generate a link code (POST /api/telegram/link-code) and send "/link CODE" from your chat to bind it.' });
+});
+
+// Generate one-time link code for Telegram chatId binding (CSPRNG-backed).
+// Closes the first-contact race: previously, any chat sending /start first
+// would win the binding to a leaked bot token. Now: code must be generated
+// here (authenticated) and sent via "/link CODE" to the bot within TTL.
+router.post('/telegram/link-code', async (req, res) => {
+  // 32-symbol alphabet (O/0/I/1 omitted for readability) × 6 chars = ~1.07B
+  // combinations; combined with 10min TTL and bot-side rate-limit, online
+  // bruteforce is mathematically unviable.
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const code = Array.from({ length: 6 }, () => chars[randomInt(0, chars.length)]).join('');
+  const expires_at = new Date(Date.now() + 10 * 60_000).toISOString();
+  await setSetting(req.user!.id, 'telegram_link_pending', { code, expires_at });
+  res.json({ code, expires_at, instructions: `Send "/link ${code}" to your bot within 10 minutes.` });
+});
+
+// Emergency unlink for compromised chatId binding.
+router.post('/telegram/unlink', async (req, res) => {
+  const cur = await getSetting<any>(req.user!.id, 'telegram') ?? {};
+  await setSetting(req.user!.id, 'telegram', { ...cur, chatId: null });
+  res.json({ ok: true });
 });
 
 router.get('/messages', async (req, res) => {

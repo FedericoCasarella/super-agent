@@ -67,7 +67,12 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
 
 export function setAuthCookie(res: Response, token: string) {
   res.cookie(config.cookieName, token, {
-    httpOnly: true, sameSite: 'lax', secure: false,
+    // secure flag must follow NODE_ENV: dev (HTTP localhost) requires
+    // secure:false (browser drops Secure cookies on plain HTTP), production
+    // requires secure:true (no cleartext session transmission).
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: config.isProduction,
     maxAge: 30 * 24 * 60 * 60_000,
     path: '/',
   });
