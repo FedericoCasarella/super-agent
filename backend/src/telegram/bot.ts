@@ -70,14 +70,41 @@ async function startBotForUser(userId: number): Promise<void> {
     bot.on('message', async (ctx) => {
       const chatId = ctx.chat.id;
       const cur = await getSetting<any>(userId, 'telegram');
+      const text = 'text' in ctx.message ? ctx.message.text : '';
+
+      // H3 (sess.2818) — chatId binding requires one-time verification code.
+      // Previously: first /start from ANY chat won the binding (race vulnerability
+      // for leaked tokens). Now: code must be generated server-side via
+      // POST /api/telegram/link-code (authed) and sent via /link CODE here.
       if (!cur?.chatId) {
+        const linkMatch = text.match(/^\/link\s+([A-Z0-9]{4,8})\s*$/i);
+        if (!linkMatch) {
+          await ctx.reply('🔒 To link this chat, generate a code in the web UI (Settings → Telegram → Generate link code) and send: /link <CODE>');
+          return;
+        }
+        const code = linkMatch[1].toUpperCase();
+        const pending = await getSetting<{ code: string; expires_at: string }>(userId, 'telegram_link_pending');
+        if (!pending) {
+          await ctx.reply('⚠️ No link code pending. Generate one in the web UI first.');
+          return;
+        }
+        if (new Date(pending.expires_at) < new Date()) {
+          await ctx.reply('⏰ Code expired. Generate a fresh one in the web UI.');
+          return;
+        }
+        if (pending.code !== code) {
+          await ctx.reply('❌ Invalid code.');
+          return;
+        }
         await setSetting(userId, 'telegram', { ...cur, chatId });
-        await ctx.reply("Linked. I'm online.");
+        await setSetting(userId, 'telegram_link_pending', null);
+        await ctx.reply("✅ Chat linked. I'm online.");
+        return;
       } else if (cur.chatId !== chatId) {
         await ctx.reply('Not authorized.');
         return;
       }
-      const text = 'text' in ctx.message ? ctx.message.text : '';
+
       if (text) {
         bus.emit('telegram:incoming', { userId, chatId, text });
         return;

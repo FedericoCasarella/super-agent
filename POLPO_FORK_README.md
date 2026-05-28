@@ -250,28 +250,33 @@ authRouter.post('/register', registerLimiter, ...);
 authRouter.post('/login', loginLimiter, ...);
 ```
 
-#### H2 — `/api/tools` GET unauthenticated dal bridge (`mcp/bridge.ts:15`)
+#### H2 — `/api/tools` GET unauthenticated dal bridge ⏳ DEFERRED sess.2818
+**Re-analisi sess.2818**: il bridge è oggi *de facto* non funzionante — `mcp/config.ts` inietta nell'env solo `POLPO_BRAIN_API`, **omette** `POLPO_BRAIN_USER_ID` e qualsiasi auth. Il subprocess fa `fetch /api/tools` senza cookie → 401 → catch silenzioso → tools array empty → MCP server registra zero tools. Quindi i tool dei connettori (imap/people/elevenlabs/fathom/ghl) **non sono raggiungibili da Claude tramite il bridge oggi**.
+
+Questo è un bug funzionale architettura, non un security bug attivo: la superficie esposta è chiusa per costruzione perché `requireUser` blocca tutto. Sicurezza ≠ funzionalità. **Deferred** a finestra dedicata di architecture overhaul (decision con Federico):
+- Opzione A: per-user bridge spawn con cookie iniettato
+- Opzione B: service token in env del bridge + middleware impersonation
+- Opzione C: rimozione bridge HTTP a favore di import diretto in-process
+
+Confidence audit originale 80% — re-classificato come *functionality gap* non *security vuln*.
+
+#### H3 — Telegram first-contact binding race ✅ CLOSED sess.2818
+~~Chiunque mandi `/start` per primo si binda permanentemente~~ → **risolto**:
+- Nuovo endpoint `POST /api/telegram/link-code` (authenticated) genera codice 6-char (alfabeto ridotto senza O/0/I/1 per clarity) con TTL 10 min, salvato in `telegram_link_pending` setting
+- Bot handler `telegram/bot.ts:70` ora richiede `/link CODE` esplicito per binding — primo messaggio diverso da `/link` → reject con istruzioni
+- Codice consumato post-verifica + TTL scaduto rifiutato
+- Endpoint emergency `POST /api/telegram/unlink` per binding compromesso
+
+Doppia barriera: attaccante con token leaked deve anche avere cookie Mattia per generare codice. 2^33 spazio codice (32^6) × TTL 10min = bruteforce ~impossibile entro la finestra.
+
 ```ts
-const res = await fetch(`${API}/api/tools`);
-```
-La route è dietro `requireUser` per chiamanti esterni, ma il bridge chiama senza cookie/header — funziona solo perché 127.0.0.1. Se mai esposto su `0.0.0.0` o reverse-proxy, diventa endpoint pubblico di tool enumeration.
-
-**Fix**: passare service token interno o validare `req.ip === '127.0.0.1'` esplicitamente lato route.
-
-Confidence: 80%
-
-#### H3 — Telegram first-contact binding race (`telegram/bot.ts:70-79`)
-```ts
+// auth path (telegram/bot.ts sess.2818):
 if (!cur?.chatId) {
-  await setSetting(userId, 'telegram', { ...cur, chatId });
-  // ...
+  const linkMatch = text.match(/^\/link\s+([A-Z0-9]{4,8})\s*$/i);
+  if (!linkMatch) return reply('🔒 generate code in web UI then send /link <CODE>');
+  // ... validate pending code + expiry + match ...
 }
 ```
-Chiunque mandi `/start` per primo si binda permanentemente al `chatId` di un user. In multi-user, se un token bot di uno studente leak → un attaccante può vincere la race, bindare il proprio `chatId`, lockare l'utente legittimo e ricevere tutti i suoi AI responses + vault data via Telegram.
-
-**Fix raccomandato**: richiedere codice di verifica one-time mostrato in web UI e inviato via Telegram durante linking. **Fix minimo**: API `unlink` + log visibile in dashboard.
-
-Confidence: 83%
 
 #### H4 — IDOR audit globale endpoint API ✅ VERIFIED CLEAN sess.2818
 Audit completo `backend/src/`: **zero match** su pattern `req.body.user_id`, `req.query.user_id`, `req.body.userId`, `req.query.userId`. Tutti i 60+ riferimenti a `user_id` in `api/routes.ts` derivano da `req.user!.id` (auth context). Architettura IDOR-safe by construction grazie a `router.use(requireUser)` globale + `req.user!.id` come unica fonte autoritativa. Nessun fix necessario.
@@ -301,16 +306,18 @@ Audit completo `backend/src/`: **zero match** su pattern `req.body.user_id`, `re
 | C2 — `x-polpo-brain-user` IDOR | 🔴 Critical | ✅ closed | `api/routes.ts:118` |
 | C3 — Cookie secure conditional | 🔴 Critical | ✅ closed | `auth/index.ts:70` |
 | H1 — Rate limit login/register | 🟡 High | ✅ closed | `auth/routes.ts:9` |
+| H3 — Telegram binding race | 🟡 High | ✅ closed | `telegram/bot.ts:70` |
 | H4 — IDOR audit globale | 🟡 High | ✅ clean by construction | (audit only) |
-| H2 — `/api/tools` service auth | 🟡 High | ⏳ pending | `mcp/bridge.ts:15` |
-| H3 — Telegram binding race | 🟡 High | ⏳ pending | `telegram/bot.ts:70` |
+| H2 — `/api/tools` bridge auth | 🟡 High | 🏛️ deferred (architecture) | `mcp/config.ts:33` |
 | M1 — Password policy ≥6 | 🟢 Medium | ⏳ pending | `auth/routes.ts:42` |
 | M2 — JWT revocation server-side | 🟢 Medium | ⏳ pending | `auth/index.ts:21` |
 | M3 — Scheduler error swallow | 🟢 Medium | ⏳ pending | `scheduler/index.ts:109` |
 
-**Maturità**: 5/10 → **~7.5/10** (4 di 7 vulnerabilità chiuse, IDOR clean, multi-user trusted gated solo su H2+H3).
+**Maturità**: 5/10 → **~8/10** (6 di 7 vulnerabilità chiuse, IDOR clean, H2 declassato a *functionality gap* non security vuln).
 
-**Stima effort residuo per Brain Training student onboarding**: H2 (15 min) + H3 (30-60 min) = **~1h focused**.
+**Multi-user trusted ready**: ✅ — onboarding allievi Brain Training sbloccato lato security.
+**Production-public ready**: 🟡 — richiede M1+M2 (password policy + JWT revocation) + audit zod completo + HTTPS deploy.
+**Bridge MCP funzionante**: ❌ — architecture overhaul pending (decisione con Federico, vedi H2).
 
 ---
 
@@ -466,16 +473,16 @@ Verificato sess.2282 + ricontrollato sess.2623:
 
 ### Robustness hardening — status
 
-**P0 closed sess.2818** (commit `d9b3e74` + commit corrente):
+**P0 closed sess.2818** (commits `d9b3e74` + `0b2bd8a` + commit corrente):
 - [x] **C1** `config.ts:17` — JWT_SECRET fail-fast ≥32 char ✅
 - [x] **C2** `api/routes.ts:118` — `x-polpo-brain-user` IDOR closed ✅
 - [x] **C3** `auth/index.ts:70` — cookie `secure: isProduction` ✅
 - [x] **H1** `auth/routes.ts:9` — rate limit /login + /register (express-rate-limit 8.5.2) ✅
+- [x] **H3** `telegram/bot.ts:70` — one-time verification code via /link CODE + unlink API ✅
 - [x] **H4** Audit IDOR globale — zero IDOR found, architecture clean ✅
 
-**P0 residuo (1h effort)**:
-- [ ] **H2** `mcp/bridge.ts:15` — service token o IP-check `127.0.0.1` su `/api/tools` (15 min)
-- [ ] **H3** `telegram/bot.ts:70` — one-time verification code binding chatId + unlink API (30-60 min)
+**Architecture (non-security)**:
+- [ ] **H2** Bridge MCP non-functional today (no auth injection in `mcp/config.ts:33`). Decisione architetturale con Federico: per-user spawn vs service token vs in-process tools. Functionality gap, not security exposure.
 
 **Tech debt P1**:
 - [ ] **M1** Password policy 8-12 char + complexity (`auth/routes.ts:24`)

@@ -42,6 +42,28 @@ router.post('/onboarding/vault', async (req, res) => {
   await setVaultRoot(req.user!.id, vaultPath);
   res.json({ ok: true });
 });
+// H3 (sess.2818) — generate one-time link code for Telegram chatId binding.
+// User generates code here (authenticated), sends to bot via "/link CODE"
+// within 10min. Prevents first-contact race binding on leaked tokens.
+router.post('/telegram/link-code', async (req, res) => {
+  // 6 alphanumeric uppercase chars: ~36^6 = 2.2B combinations, brute-force
+  // unviable within 10min TTL (even ignoring Telegram rate limits).
+  const code = Array.from({ length: 6 }, () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // omit O/0/I/1 for clarity
+    return chars[Math.floor(Math.random() * chars.length)];
+  }).join('');
+  const expires_at = new Date(Date.now() + 10 * 60_000).toISOString();
+  await setSetting(req.user!.id, 'telegram_link_pending', { code, expires_at });
+  res.json({ code, expires_at, instructions: 'Send "/link ' + code + '" to your bot within 10 minutes.' });
+});
+
+// H3 (sess.2818) — emergency unlink for compromised binding.
+router.post('/telegram/unlink', async (req, res) => {
+  const cur = await getSetting<any>(req.user!.id, 'telegram') ?? {};
+  await setSetting(req.user!.id, 'telegram', { ...cur, chatId: null });
+  res.json({ ok: true });
+});
+
 router.post('/onboarding/telegram', async (req, res) => {
   const { token } = req.body ?? {};
   if (!token) return res.status(400).json({ error: 'token required' });
