@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomInt } from 'node:crypto';
 import { query, getSetting, setSetting } from '../db/index.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
 import { buildGraph } from '../brain/graph.js';
@@ -45,13 +46,13 @@ router.post('/onboarding/vault', async (req, res) => {
 // H3 (sess.2818) — generate one-time link code for Telegram chatId binding.
 // User generates code here (authenticated), sends to bot via "/link CODE"
 // within 10min. Prevents first-contact race binding on leaked tokens.
+// H3+ (sess.2818, post-review) — CSPRNG via crypto.randomInt instead of
+// Math.random (predictable PRNG, not safe for security-sensitive tokens).
 router.post('/telegram/link-code', async (req, res) => {
-  // 6 alphanumeric uppercase chars: ~36^6 = 2.2B combinations, brute-force
-  // unviable within 10min TTL (even ignoring Telegram rate limits).
-  const code = Array.from({ length: 6 }, () => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // omit O/0/I/1 for clarity
-    return chars[Math.floor(Math.random() * chars.length)];
-  }).join('');
+  // 6 chars from 32-symbol alphabet (O/0/I/1 omitted for readability):
+  // ~32^6 = 1.07B combinations, brute-force unviable within 10min TTL.
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const code = Array.from({ length: 6 }, () => chars[randomInt(0, chars.length)]).join('');
   const expires_at = new Date(Date.now() + 10 * 60_000).toISOString();
   await setSetting(req.user!.id, 'telegram_link_pending', { code, expires_at });
   res.json({ code, expires_at, instructions: 'Send "/link ' + code + '" to your bot within 10 minutes.' });

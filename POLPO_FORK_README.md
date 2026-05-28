@@ -267,7 +267,9 @@ Confidence audit originale 80% — re-classificato come *functionality gap* non 
 - Codice consumato post-verifica + TTL scaduto rifiutato
 - Endpoint emergency `POST /api/telegram/unlink` per binding compromesso
 
-Doppia barriera: attaccante con token leaked deve anche avere cookie Mattia per generare codice. 2^33 spazio codice (32^6) × TTL 10min = bruteforce ~impossibile entro la finestra.
+Doppia barriera: attaccante con token leaked deve anche avere cookie Mattia per generare codice. 2^30 spazio codice (32^6 = 1.07B) × TTL 10min = bruteforce ~impossibile entro la finestra.
+
+**Crypto-grade RNG**: codice generato via `crypto.randomInt` (CSPRNG `node:crypto`), non `Math.random` (PRNG predicibile inadatto a token security-sensitive — sess.2818 post-review hardening).
 
 ```ts
 // auth path (telegram/bot.ts sess.2818):
@@ -488,6 +490,7 @@ Verificato sess.2282 + ricontrollato sess.2623:
 - [ ] **M1** Password policy 8-12 char + complexity (`auth/routes.ts:24`)
 - [ ] **M2** JWT revocation server-side (token blacklist o `iat > password_changed_at`)
 - [ ] **M3** `scheduler/index.ts:109` — log error invece di `catch {}` silenzioso
+- [ ] **M4** Rate-limit `/link CODE` attempts on Telegram bot (counter per-chat, lockout dopo 5 tentativi/15min) — flagged by post-review sess.2818
 - [ ] Refactor `Server` → `McpServer` deprecato in `backend/src/mcp/bridge.ts` (1-2h, non security-critical)
 - [ ] Verificare uso zod pervasivo su tutti i route handler
 - [ ] `npm audit fix --force` su `uuid` via `node-cron` (richiede coord con Federico, breaking change)
