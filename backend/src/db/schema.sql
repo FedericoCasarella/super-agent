@@ -187,6 +187,60 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 ALTER TABLE internal_agents ALTER COLUMN notify_on_run SET DEFAULT true;
 
+-- P2P Brain Network
+CREATE TABLE IF NOT EXISTS user_connections (
+  id BIGSERIAL PRIMARY KEY,
+  a_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  b_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('pending','accepted','blocked')) DEFAULT 'pending',
+  initiator_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at TIMESTAMPTZ,
+  CONSTRAINT user_connections_pair_uniq UNIQUE (a_user_id, b_user_id),
+  CONSTRAINT user_connections_order CHECK (a_user_id < b_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS brain_share_requests (
+  id BIGSERIAL PRIMARY KEY,
+  requester_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  query_text TEXT NOT NULL,
+  agent_review JSONB,
+  approved_items JSONB,
+  status TEXT NOT NULL CHECK (status IN ('pending','reviewed','approved','denied','delivered','expired')) DEFAULT 'pending',
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS brain_share_requests_target_idx ON brain_share_requests(target_user_id, status);
+CREATE INDEX IF NOT EXISTS brain_share_requests_requester_idx ON brain_share_requests(requester_user_id, status);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='brain_index' AND column_name='origin_user_id') THEN
+    ALTER TABLE brain_index ADD COLUMN origin_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS brain_index_origin_idx ON brain_index(origin_user_id);
+
+-- Multi-vault support
+CREATE TABLE IF NOT EXISTS vaults (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  path TEXT NOT NULL,
+  is_primary BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS vaults_user_name_uniq ON vaults(user_id, name);
+CREATE INDEX IF NOT EXISTS vaults_user_primary_idx ON vaults(user_id, is_primary);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='brain_index' AND column_name='vault_id') THEN
+    ALTER TABLE brain_index ADD COLUMN vault_id BIGINT REFERENCES vaults(id) ON DELETE CASCADE;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS brain_index_vault_idx ON brain_index(vault_id);
+
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='brain_index' AND column_name='visibility') THEN
     ALTER TABLE brain_index ADD COLUMN visibility TEXT;
@@ -227,5 +281,55 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_singleton ON users ((TRUE));
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='token_version') THEN
     ALTER TABLE users ADD COLUMN token_version BIGINT NOT NULL DEFAULT 0;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+-- merge sess.2938: tabelle sub-agent di Federico preservate accanto alla nostra security (union, non override).
+-- Sub-agents (human-in-the-loop spawned by main agent)
+CREATE TABLE IF NOT EXISTS agent_proposals (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  reason TEXT,
+  proposals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','expired')),
+  telegram_message_id BIGINT,
+  telegram_chat_id BIGINT,
+  decided_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_proposals_user_idx ON agent_proposals(user_id, status);
+
+CREATE TABLE IF NOT EXISTS sub_agents (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  proposal_id BIGINT REFERENCES agent_proposals(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  brief TEXT,
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','done','error','cancelled')),
+  result TEXT,
+  error TEXT,
+  run_id BIGINT REFERENCES agent_runs(id) ON DELETE SET NULL,
+  cost_usd NUMERIC,
+  started_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sub_agents_user_status_idx ON sub_agents(user_id, status);
+CREATE INDEX IF NOT EXISTS sub_agents_user_created_idx ON sub_agents(user_id, created_at DESC);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sub_agents' AND column_name='actions') THEN
+    ALTER TABLE sub_agents ADD COLUMN actions JSONB NOT NULL DEFAULT '[]'::jsonb;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sub_agents' AND column_name='input_tokens') THEN
+    ALTER TABLE sub_agents ADD COLUMN input_tokens INTEGER;
+    ALTER TABLE sub_agents ADD COLUMN output_tokens INTEGER;
+    ALTER TABLE sub_agents ADD COLUMN num_turns INTEGER;
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;

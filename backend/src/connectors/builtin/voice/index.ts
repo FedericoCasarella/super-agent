@@ -81,7 +81,7 @@ export async function transcribeBuffer(
     try {
       await query(
         `INSERT INTO agent_runs(user_id,kind,status,model,duration_ms,cost_usd,result,meta,error)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`,
         [
           userId,
           'voice_transcribe',
@@ -90,7 +90,7 @@ export async function transcribeBuffer(
           durationMs,
           cost,
           text.slice(0, 8000) || null,
-          { provider, baseUrl, audioSeconds: audioSeconds ?? null, bytes: buf.length, filename, mime },
+          JSON.stringify({ provider, baseUrl, audioSeconds: audioSeconds ?? null, bytes: buf.length, filename, mime }),
           ok ? null : errMsg,
         ]
       );

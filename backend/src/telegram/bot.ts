@@ -67,6 +67,48 @@ async function startBotForUser(userId: number): Promise<void> {
     const entry: BotEntry = { bot, token: cfg.token, state: 'starting', launchPromise: Promise.resolve() };
     bots.set(userId, entry);
 
+    // merge sess.2938: /agents command (Federico) — mostra sub-agent attivi.
+    bot.command('agents', async (ctx) => {
+      const chatId = ctx.chat.id;
+      const cur = await getSetting<any>(userId, 'telegram');
+      if (cur?.chatId !== chatId) return;
+      try {
+        const { listActive } = await import('../sub_agents/index.js');
+        const active = await listActive(userId);
+        if (!active.length) { await ctx.reply('Nessun sub-agent in esecuzione.'); return; }
+        const lines = active.map((s, i) => `${i + 1}. **${s.title}** — ${s.status === 'running' ? '⚡ in corso' : '⏳ in coda'}\n   _${(s.brief ?? '').slice(0, 120)}_`);
+        await ctx.reply(`🤖 ${active.length} agent${active.length > 1 ? 'i' : 'e'} attivo${active.length > 1 ? 'i' : ''}:\n\n${lines.join('\n\n')}`, { parse_mode: 'Markdown' as any });
+      } catch (e: any) {
+        await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 160)}`);
+      }
+    });
+
+    // merge sess.2938: callback_query (Federico) — approve/deny proposte sub-agent via inline keyboard.
+    bot.on('callback_query', async (ctx) => {
+      const cq: any = ctx.callbackQuery;
+      const data: string = cq?.data ?? '';
+      const m = data.match(/^proposal:(\d+):(approve|deny)$/);
+      if (!m) { await ctx.answerCbQuery('Unknown action'); return; }
+      const proposalId = Number(m[1]);
+      const action = m[2];
+      try {
+        const subAgents = await import('../sub_agents/index.js');
+        if (action === 'approve') {
+          const spawned = await subAgents.approveProposal(userId, proposalId);
+          await ctx.answerCbQuery(`✅ ${spawned.length} agent lanciat${spawned.length > 1 ? 'i' : 'o'}`);
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText(`✅ Approvato. ${spawned.length} agent in esecuzione.`); } catch {}
+        } else {
+          await subAgents.denyProposal(userId, proposalId);
+          await ctx.answerCbQuery('❌ Rifiutato');
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText('❌ Rifiutato.'); } catch {}
+        }
+      } catch (e: any) {
+        await ctx.answerCbQuery(`Errore: ${String(e?.message ?? e).slice(0, 100)}`);
+      }
+    });
+
     bot.on('message', async (ctx) => {
       const chatId = ctx.chat.id;
       const cur = await getSetting<any>(userId, 'telegram');
@@ -106,10 +148,42 @@ async function startBotForUser(userId: number): Promise<void> {
       }
 
       if (text) {
-        bus.emit('telegram:incoming', { userId, chatId, text });
+        // merge sess.2938: messageId tracking (Federico) per reaction/reply targeting.
+        const messageId = (ctx.message as any).message_id;
+        try { await setSetting(userId, 'telegram_last_incoming', { chatId, messageId, ts: Date.now() }); } catch {}
+        bus.emit('telegram:incoming', { userId, chatId, text, messageId });
         return;
       }
       const msg: any = ctx.message;
+
+      // merge sess.2938: Photo path (Federico) — archivia immagine, dà a Claude il path assoluto.
+      const photos = Array.isArray(msg.photo) ? msg.photo : null;
+      if (photos && photos.length > 0) {
+        try {
+          await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+          const best = photos.reduce((a: any, b: any) => ((b.file_size ?? 0) > (a.file_size ?? 0) ? b : a));
+          const link = await ctx.telegram.getFileLink(best.file_id);
+          const pres = await fetch(link.href);
+          if (!pres.ok) throw new Error(`download ${pres.status}`);
+          const buf = Buffer.from(await pres.arrayBuffer());
+          const mime = 'image/jpeg';
+          const filename = `photo-${Date.now()}.jpg`;
+          const { archiveAttachment } = await import('../brain/extract.js');
+          const a = await archiveAttachment(userId, filename, buf, mime);
+          const sizeKb = (buf.length / 1024).toFixed(1);
+          const caption = (msg.caption ?? '').toString();
+          await ctx.reply(`🖼 ${filename} (${sizeKb}KB)${caption ? ` — "${caption.slice(0, 80)}"` : ''}. Sto analizzando…`).catch(() => {});
+          const userPayload = `[Immagine ricevuta: ${filename} · ${best.width}x${best.height} · ${buf.length}B]
+Raw file (assoluto): \`${a.rawAbsPath}\`
+${caption ? `\nCaption utente: "${caption}"\n` : ''}
+Usa lo strumento Read sul percorso assoluto per vedere l'immagine (Claude Code supporta immagini PNG/JPG nativamente). Descrivi cosa vedi, estrai testo se presente, collegala a note esistenti se rilevante, e dimmi cosa farne.`;
+          bus.emit('telegram:incoming', { userId, chatId, text: userPayload });
+        } catch (e: any) {
+          console.error('[telegram] photo error', e);
+          await ctx.reply(`⚠️ Errore elaborando l'immagine: ${String(e?.message ?? e).slice(0, 160)}`);
+        }
+        return;
+      }
 
       // Document path (pdf, docx, txt, …) — save raw, let Claude read via Read tool.
       // Cherry-picked from upstream 02bfc31 sess.2379. Integrated above voice/audio path.

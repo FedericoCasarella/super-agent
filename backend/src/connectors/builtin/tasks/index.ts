@@ -30,8 +30,8 @@ const connector: Connector = {
         if (!cron.validate(expr)) throw new Error(`invalid cron: ${expr}`);
         const rows = await query<{ id: number }>(
           `INSERT INTO scheduled_tasks(user_id,name,cron,action_type,action_payload,enabled)
-           VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
-          [ctx.userId, name, expr, action_type, action_payload, enabled]
+           VALUES($1,$2,$3,$4,$5::jsonb,$6) RETURNING id`,
+          [ctx.userId, name, expr, action_type, JSON.stringify(action_payload), enabled]
         );
         await refreshTasks();
         return { ok: true, id: rows[0]?.id };

@@ -70,7 +70,7 @@ export default function Agents() {
               {/* Icon: banner top on mobile, full-height side on md+ */}
               <div
                 className="relative shrink-0 overflow-hidden md:self-stretch md:w-44 h-40 md:h-auto"
-                onClick={() => nav(`/agents/${a.name}`)}
+                onClick={() => nav(`/perks/${a.name}`)}
               >
                 <div className="absolute inset-0 bg-accent/25 blur-2xl animate-soft-pulse" />
                 <img
@@ -89,7 +89,7 @@ export default function Agents() {
 
               {/* Content column */}
               <div className="flex-1 min-w-0 p-5 flex flex-col">
-                <div onClick={() => nav(`/agents/${a.name}`)} className="flex items-start justify-between gap-3">
+                <div onClick={() => nav(`/perks/${a.name}`)} className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <h3 className="text-lg sm:text-xl font-semibold text-gradient">{a.title}</h3>
                     <p className="text-sm text-muted line-clamp-2 mt-1">{a.description}</p>
@@ -110,7 +110,7 @@ export default function Agents() {
                   </div>
                 )}
                 <div className="mt-auto pt-4 flex gap-2 flex-wrap">
-                  <Button variant="ghost" size="sm" onClick={() => nav(`/agents/${a.name}`)}>{t('agents.openDetail')}</Button>
+                  <Button variant="ghost" size="sm" onClick={() => nav(`/perks/${a.name}`)}>{t('agents.openDetail')}</Button>
                   <Button variant="ghost" size="sm" onClick={(e) => run(a, e)} disabled={busy === a.name}>{busy === a.name ? '…' : t('agents.runNow')}</Button>
                 </div>
               </div>

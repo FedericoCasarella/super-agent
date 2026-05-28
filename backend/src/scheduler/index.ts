@@ -9,6 +9,8 @@ import { getVaultRoot } from '../brain/vault.js';
 import { runReflectionForUser, runReflectionAllUsers } from '../agent/reflection.js';
 import { refreshTasks as refreshScheduledTasks } from './tasks.js';
 import { startInternalAgentsScheduler } from '../agents/internal/registry.js';
+// seedDefaultTasksAllUsers removed from boot — re-seeded deleted/disabled user tasks.
+// Defaults now seeded ONLY at register time (auth/routes.ts).
 
 function cronIntervalMinutes(expr: string): number {
   const m = expr.trim().match(/^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/);
@@ -73,6 +75,7 @@ export async function startScheduler() {
     connectorTasks.set(`*:${conn.manifest.name}`, task);
   }
 
+  bus.removeAllListeners('connector:event');
   bus.on('connector:event', onConnectorEvent);
 
   let reflecting = false;
@@ -89,6 +92,7 @@ export async function startScheduler() {
   startInternalAgentsScheduler();
 
   await catchUpOnBoot();
+
 }
 
 export async function runTick(userId: number, name: string) {
@@ -105,7 +109,7 @@ export async function runTick(userId: number, name: string) {
     try {
       const cur = await query<{ state: any }>('SELECT state FROM connectors WHERE user_id=$1 AND name=$2', [userId, name]);
       const merged = { ...(cur[0]?.state ?? {}), lastTickAt: new Date().toISOString() };
-      await query('UPDATE connectors SET state=$1, updated_at=now() WHERE user_id=$2 AND name=$3', [merged, userId, name]);
+      await query('UPDATE connectors SET state=$1::jsonb, updated_at=now() WHERE user_id=$2 AND name=$3', [JSON.stringify(merged), userId, name]);
     } catch {}
   }
 }

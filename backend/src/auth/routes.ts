@@ -69,6 +69,14 @@ authRouter.post('/initialize', initializeLimiter, async (req, res) => {
   try {
     const user = await createUser(email, password, name ?? null);
     await claimOrphanData(user.id);
+    // merge sess.2938: adotta il seed default tasks di Federico (kickoff + evening commit)
+    // dentro il nostro /initialize single-shot. Scartata la logica register (ridondante:
+    // countUsers fast-path + 23505 catch garantiscono già single-user).
+    try {
+      const { seedDefaultTasksForUser } = await import('../scheduler/seed_tasks.js');
+      const { refreshTasks } = await import('../scheduler/tasks.js');
+      if (await seedDefaultTasksForUser(user.id)) await refreshTasks();
+    } catch (e) { console.error('[initialize] seed tasks', e); }
     const token = signToken(user);
     setAuthCookie(res, token);
     res.json({ user, claimedOrphans: true });
@@ -100,6 +108,28 @@ authRouter.post('/logout', requireUser, async (req, res) => {
   // (e.g. cookie copied to another device) is invalidated server-side.
   // Closes long-lived cookie revocation hole flagged by security-review.
   if (req.user) await bumpTokenVersion(req.user.id);
+  clearAuthCookie(res);
+  res.json({ ok: true });
+});
+
+authRouter.delete('/me', requireUser, async (req, res) => {
+  const { password } = req.body ?? {};
+  if (!password) return res.status(400).json({ error: 'password required' });
+  const { getUserByEmail, verifyPassword } = await import('./index.js');
+  const me = req.user!;
+  const full = await getUserByEmail(me.email);
+  if (!full) return res.status(404).json({ error: 'user not found' });
+  const ok = await verifyPassword(password, full.pass_hash);
+  if (!ok) return res.status(401).json({ error: 'wrong password' });
+
+  // Stop Telegram bot before destroying DB rows
+  try {
+    const { stopBotForUser } = await import('../telegram/bot.js');
+    await stopBotForUser(me.id);
+  } catch {}
+
+  const { query } = await import('../db/index.js');
+  await query('DELETE FROM users WHERE id=$1', [me.id]);
   clearAuthCookie(res);
   res.json({ ok: true });
 });

@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { config } from '../config.js';
 import { MCP_CONFIG_PATH, MCP_SERVER_NAME } from '../mcp/config.js';
 import { query } from '../db/index.js';
 import { externalMcpAllowEntries } from './external_mcps.js';
+import { listVaults } from '../brain/vaults.js';
+import { bus } from '../bus.js';
 
 export type ClaudeKind = 'reflection' | 'chat_turn' | 'chitchat' | 'proactive' | 'scheduled' | 'turn' | string;
 
@@ -49,6 +52,7 @@ export type ClaudeResult = {
   numTurns?: number;
   durationMs?: number;
   runId?: number;
+  toolCalls?: Array<{ name: string; brief: string; ts: number }>;
 };
 
 export async function runClaude(userId: number, prompt: string, opts: ClaudeRunOptions = {}): Promise<ClaudeResult> {
@@ -56,36 +60,111 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   const kind = opts.kind ?? 'turn';
   const model = pickModel(opts);
 
-  const args = ['-p', prompt, '--output-format', 'json', '--model', model];
+  // merge sess.2938: adotta stream-json+verbose di Federico (abilita toolCalls tracking)
+  // ma mantieni il nostro `model` = pickModel(opts) — rispetta l'override per-call.
+  const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--model', model];
   if (opts.useMcp !== false) {
     args.push('--mcp-config', MCP_CONFIG_PATH);
   }
   const allowed = opts.allowedTools ?? [
-    'Read', 'Write', 'Edit', 'Glob', 'Grep',
+    'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash',
     `mcp__${MCP_SERVER_NAME}`,
     ...externalMcpAllowEntries(),
   ];
   args.push('--allowed-tools', allowed.join(','));
 
-  const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
+  // Pre-load vault paths for brain:access mapping
+  const vaults = await listVaults(userId).catch(() => []);
+  const claudeCwd = opts.cwd ?? process.cwd();
+  function mapBrainAccess(filePath: string): { vaultName: string; rel: string } | null {
+    // Resolve against Claude CLI's cwd (vault root), not node process cwd.
+    const norm = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(claudeCwd, filePath);
+    for (const v of vaults) {
+      const vp = path.resolve(v.path);
+      if (norm === vp || norm.startsWith(vp + path.sep)) {
+        const rel = norm === vp ? '' : norm.slice(vp.length + 1);
+        if (!rel.toLowerCase().endsWith('.md')) return null;
+        return { vaultName: v.name, rel };
+      }
+    }
+    return null;
+  }
+
+  const toolCalls: Array<{ name: string; brief: string; ts: number }> = [];
+  function briefForTool(name: string, input: any): string {
+    if (!input || typeof input !== 'object') return '';
+    if (name === 'Read' || name === 'Write' || name === 'Edit') return String(input.file_path ?? '').slice(0, 200);
+    if (name === 'Grep') return `${input.pattern ?? ''} ${input.path ? `in ${input.path}` : ''}`.slice(0, 200);
+    if (name === 'Glob') return String(input.pattern ?? input.path ?? '').slice(0, 200);
+    if (name === 'Bash') return String(input.command ?? '').slice(0, 200);
+    if (name === 'WebFetch' || name === 'WebSearch') return String(input.url ?? input.query ?? '').slice(0, 200);
+    // MCP tools — surface first string-like arg
+    for (const k of Object.keys(input)) {
+      const v = input[k];
+      if (typeof v === 'string' && v.length) return `${k}: ${v.slice(0, 180)}`;
+    }
+    return '';
+  }
+  const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null }>((resolve) => {
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
-      env: { ...process.env, POLPO_BRAIN_USER_ID: String(userId) },
+      // merge sess.2938: rebrand POLPO_BRAIN_USER_ID + shim SUPER_AGENT_USER_ID
+      // così sia il nostro codice rebrandizzato sia le feature nuove di Federico leggono lo userId.
+      env: { ...process.env, POLPO_BRAIN_USER_ID: String(userId), SUPER_AGENT_USER_ID: String(userId) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
+    let buf = '';
+    let finalEvent: any = null;
     const timer = setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs ?? 120_000);
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stdout.on('data', (d) => {
+      const s = d.toString();
+      stdout += s;
+      buf += s;
+      let idx: number;
+      while ((idx = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          // Detect tool_use blocks → emit brain:access
+          if (ev?.type === 'assistant' && ev.message?.content) {
+            for (const block of ev.message.content) {
+              if (block?.type !== 'tool_use') continue;
+              const name = block.name as string;
+              const input = block.input ?? {};
+              toolCalls.push({ name, brief: briefForTool(name, input), ts: Date.now() });
+              const candidatePaths: string[] = [];
+              if (name === 'Read' || name === 'Write' || name === 'Edit') {
+                if (input.file_path) candidatePaths.push(input.file_path);
+              } else if (name === 'Grep' || name === 'Glob') {
+                if (input.path) candidatePaths.push(input.path);
+              }
+              for (const p of candidatePaths) {
+                const hit = mapBrainAccess(p);
+                if (hit) {
+                  bus.emit('brain:access', {
+                    userId, vaultName: hit.vaultName, rel: hit.rel,
+                    tool: name, ts: Date.now(),
+                  });
+                }
+              }
+            }
+          }
+          if (ev?.type === 'result') finalEvent = ev;
+        } catch {}
+      }
+    });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code }); });
-    child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code, finalEvent }); });
+    child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null }); });
   });
 
   const durationMs = Date.now() - started;
-  let parsed: any = null;
-  try { parsed = JSON.parse(result.stdout); } catch {}
+  const parsed: any = result.finalEvent;
 
-  const text = (parsed?.result ?? result.stdout).trim();
+  const text = (parsed?.result ?? '').trim();
   const usage = parsed?.usage ?? {};
   const ok = result.code === 0 && !!parsed && parsed.subtype !== 'error_during_execution';
 
@@ -97,20 +176,21 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     cacheCreationTokens: usage.cache_creation_input_tokens,
     cacheReadTokens: usage.cache_read_input_tokens,
     numTurns: parsed?.num_turns,
+    toolCalls,
     durationMs,
   };
 
   try {
     const rows = await query<{ id: number }>(
       `INSERT INTO agent_runs(user_id,kind,status,model,duration_ms,input_tokens,output_tokens,cache_creation_tokens,cache_read_tokens,cost_usd,num_turns,prompt,result,meta,error)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15) RETURNING id`,
       [
         userId, kind, ok ? 'ok' : 'error', model, durationMs,
         out.inputTokens ?? null, out.outputTokens ?? null,
         out.cacheCreationTokens ?? null, out.cacheReadTokens ?? null,
         out.costUsd ?? null, out.numTurns ?? null,
         prompt.slice(0, 8000), text.slice(0, 8000),
-        opts.meta ?? {},
+        JSON.stringify(opts.meta ?? {}),
         ok ? null : (result.stderr || `exit ${result.code}`).slice(0, 2000),
       ]
     );

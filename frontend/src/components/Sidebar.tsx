@@ -19,7 +19,9 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/brain', label: t('nav.brain'), icon: '✦' },
     { to: '/roadmap', label: t('nav.roadmap'), icon: '◆' },
     { to: '/tasks', label: 'Tasks', icon: '◷' },
-    { to: '/agents', label: 'Agents', icon: '◈' },
+    { to: '/agents', label: 'Agents', icon: '⚡' },
+    { to: '/perks', label: 'Perks', icon: '◈' },
+    { to: '/network', label: 'Network', icon: '⌬' },
     { to: '/logs', label: 'Logs', icon: '▤' },
     { to: '/settings', label: t('nav.settings'), icon: '⚒' },
   ];

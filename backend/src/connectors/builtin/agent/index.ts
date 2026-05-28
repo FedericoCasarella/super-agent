@@ -1,6 +1,8 @@
 import type { Connector } from '../../types.js';
 import { getSetting, setSetting } from '../../../db/index.js';
 import { readNote, writeNote } from '../../../brain/vault.js';
+import * as net from '../../../network/index.js';
+import * as subAgents from '../../../sub_agents/index.js';
 
 const ROADMAP_PATH = 'meta/business-roadmap.md';
 
@@ -110,6 +112,195 @@ const connector: Connector = {
       handler: async (ctx, { content }) => {
         await writeNote(ctx.userId, ROADMAP_PATH, { kind: 'roadmap', title: 'Business Roadmap', tags: ['roadmap', 'meta'], updated: new Date().toISOString() }, content);
         return { ok: true, path: ROADMAP_PATH };
+      },
+    },
+    {
+      name: 'vaults_list',
+      description: 'List the user\'s connected brains (vaults). Each has name, path, and whether it is primary.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => {
+        const m = await import('../../../brain/vaults.js');
+        return m.listVaults(ctx.userId);
+      },
+    },
+    {
+      name: 'vaults_create',
+      description: 'Create / connect a new brain (vault). `name` is a short slug. `path` is an absolute folder path. `seed` (default true) creates standard subfolders. `makePrimary` (default false) sets it as the active brain.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          path: { type: 'string' },
+          seed: { type: 'boolean', default: true },
+          makePrimary: { type: 'boolean', default: false },
+        },
+        required: ['name', 'path'], additionalProperties: false,
+      },
+      handler: async (ctx, { name, path, seed, makePrimary }) => {
+        const m = await import('../../../brain/vaults.js');
+        return m.createVault(ctx.userId, name, path, { seed: seed !== false, makePrimary: !!makePrimary });
+      },
+    },
+    {
+      name: 'vaults_set_primary',
+      description: 'Make a vault the primary brain (becomes cwd for chat turns).',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'number' } },
+        required: ['id'], additionalProperties: false,
+      },
+      handler: async (ctx, { id }) => {
+        const m = await import('../../../brain/vaults.js');
+        await m.setPrimaryVault(ctx.userId, id);
+        return { ok: true };
+      },
+    },
+    {
+      name: 'network_peers',
+      description: 'List my brain-network peers (connected users). Shows connection status and direction.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => net.listPeers(ctx.userId),
+    },
+    {
+      name: 'network_request_connection',
+      description: 'Request a brain-network connection with another user by email. They must accept before queries can flow.',
+      inputSchema: {
+        type: 'object',
+        properties: { email: { type: 'string' } },
+        required: ['email'], additionalProperties: false,
+      },
+      handler: async (ctx, { email }) => net.requestConnection(ctx.userId, email),
+    },
+    {
+      name: 'network_respond_connection',
+      description: 'Accept or block an incoming connection request.',
+      inputSchema: {
+        type: 'object',
+        properties: { connection_id: { type: 'number' }, accept: { type: 'boolean' } },
+        required: ['connection_id', 'accept'], additionalProperties: false,
+      },
+      handler: async (ctx, { connection_id, accept }) => net.respondConnection(ctx.userId, connection_id, !!accept),
+    },
+    {
+      name: 'network_query_peer',
+      description: 'Ask a connected peer\'s brain a question. `target` can be an email OR a name/surname (e.g. "Mattia", "Mattia Calastri") — matched fuzzy among your accepted peers. Triggers human-in-the-loop review.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Peer email or name/surname.' },
+          query: { type: 'string', description: 'Natural-language question to ask the peer\'s brain.' },
+        },
+        required: ['target', 'query'], additionalProperties: false,
+      },
+      handler: async (ctx, { target, query: q }) => net.createShareRequest(ctx.userId, target, q),
+    },
+    {
+      name: 'network_resolve_peer',
+      description: 'Resolve a name or email to a peer record. Use when uncertain which peer the user means.',
+      inputSchema: {
+        type: 'object',
+        properties: { identifier: { type: 'string' } },
+        required: ['identifier'], additionalProperties: false,
+      },
+      handler: async (ctx, { identifier }) => net.resolvePeer(ctx.userId, identifier),
+    },
+    {
+      name: 'network_pending_incoming',
+      description: 'List share requests waiting for my approval (other users asking my brain).',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => net.listIncomingShareRequests(ctx.userId),
+    },
+    {
+      name: 'network_pending_outgoing',
+      description: 'List share requests I sent and their status.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => net.listOutgoingShareRequests(ctx.userId),
+    },
+    {
+      name: 'network_approve_share',
+      description: 'Approve a brain-share request, picking which candidate notes to actually share.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          request_id: { type: 'number' },
+          paths: { type: 'array', items: { type: 'string' }, description: 'Subset of candidate paths to share. Empty = share nothing (use deny instead).' },
+        },
+        required: ['request_id', 'paths'], additionalProperties: false,
+      },
+      handler: async (ctx, { request_id, paths }) => net.approveShareRequest(ctx.userId, request_id, paths),
+    },
+    {
+      name: 'network_deny_share',
+      description: 'Deny a brain-share request with optional reason.',
+      inputSchema: {
+        type: 'object',
+        properties: { request_id: { type: 'number' }, reason: { type: 'string' } },
+        required: ['request_id'], additionalProperties: false,
+      },
+      handler: async (ctx, { request_id, reason }) => net.denyShareRequest(ctx.userId, request_id, reason),
+    },
+    {
+      name: 'telegram_react',
+      description: 'React with an emoji to the last incoming Telegram message (or a specific message_id). Use SPARINGLY — only when reaction is more appropriate than a text reply: acknowledgment of a small update ("ok 👍"), agreement (❤️/🔥), celebration (🎉), comprehension (🤔). Do NOT react to every message. If reacting, you can SKIP the text reply (return empty string).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          emoji: { type: 'string', description: 'One emoji. Allowed: 👍 ❤ 🔥 🎉 👌 🙏 🤔 👏 😁 🤯 😱 😢 🤩 💯 ⚡ 🏆 ✍ 🫡 👀 😇 🤝 🆒' },
+          messageId: { type: 'number', description: 'Optional explicit Telegram message_id. Defaults to last incoming.' },
+        },
+        required: ['emoji'], additionalProperties: false,
+      },
+      handler: async (ctx, { emoji, messageId }) => {
+        const last = await getSetting<{ chatId: number; messageId: number }>(ctx.userId, 'telegram_last_incoming');
+        if (!last?.chatId) return { ok: false, error: 'no telegram chat known' };
+        const mid = messageId ?? last.messageId;
+        if (!mid) return { ok: false, error: 'no message_id' };
+        const { sendReaction } = await import('../../../telegram/bot.js');
+        const ok = await sendReaction(ctx.userId, last.chatId, mid, emoji);
+        return { ok, emoji, messageId: mid };
+      },
+    },
+    {
+      name: 'propose_agents',
+      description: 'Propose to spawn one or more sub-agents in parallel. Sends a yes/no Telegram prompt to the user. Each agent gets a complete self-contained prompt (no shared memory). USE THIS instead of doing big async work yourself when: (a) the work is parallelizable, (b) you can let the user offload it, (c) tasks > 30s. After approval, sub-agents run in background; user sees them in /agents portal + Telegram /agents command.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'One-line headline for the batch (e.g. "Landing + Pricing in parallelo")' },
+          reason: { type: 'string', description: 'Why you want to spawn these (1-2 lines, user-facing)' },
+          proposals: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 6,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Short label (3-6 words)' },
+                brief: { type: 'string', description: 'One-line user-facing summary' },
+                prompt: { type: 'string', description: 'Full self-contained prompt for the sub-agent. Include all context (no shared memory). Be specific about deliverable + file path.' },
+              },
+              required: ['title', 'brief', 'prompt'], additionalProperties: false,
+            },
+          },
+        },
+        required: ['title', 'proposals'], additionalProperties: false,
+      },
+      handler: async (ctx, { title, reason, proposals }) => {
+        const p = await subAgents.createProposal(ctx.userId, title, reason ?? null, proposals);
+        return { ok: true, proposalId: p.id, status: p.status, awaitingApproval: true };
+      },
+    },
+    {
+      name: 'agents_list',
+      description: 'List current sub-agents (running, done, error). Use to report state when user asks "what are you working on" or before proposing new ones.',
+      inputSchema: {
+        type: 'object',
+        properties: { status: { type: 'string', enum: ['pending', 'running', 'done', 'error', 'cancelled'] } },
+        additionalProperties: false,
+      },
+      handler: async (ctx, { status }) => {
+        const list = await subAgents.listSubAgents(ctx.userId, { status, limit: 50 });
+        return list.map((s) => ({ id: s.id, title: s.title, brief: s.brief, status: s.status, started_at: s.started_at, ended_at: s.ended_at }));
       },
     },
     {

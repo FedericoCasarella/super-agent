@@ -18,6 +18,7 @@ export const auth = {
   login: (email: string, password: string) =>
     req<{ user: any }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   logout: () => req('/auth/logout', { method: 'POST' }),
+  deleteAccount: (password: string) => req('/auth/me', { method: 'DELETE', body: JSON.stringify({ password }) }),
 };
 
 export const api = {
@@ -45,12 +46,24 @@ export const api = {
   updateInternalAgent: (name: string, data: any) => req(`/internal-agents/${name}`, { method: 'PUT', body: JSON.stringify(data) }),
   runInternalAgent: (name: string) => req<{ status: string; report: any }>(`/internal-agents/${name}/run`, { method: 'POST' }),
   brainIndexFiltered: (visibility: 'all' | 'public' | 'protected') => req<any[]>(`/brain/index?visibility=${visibility}`),
-  // Multi-vault drift shim (sess.2818): upstream Federico has originFilter +
-  // returns origins[]/vaults[]; polpo-fork backend ignores extra args. The
-  // optional 2nd parameter and union return type unblock tsc on consumers
-  // (BrainGraph3DConstellation) until we integrate the multi-vault feature.
-  brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', _originFilter?: string) =>
-    req<{ nodes: any[]; links: any[]; origins?: string[]; vaults?: any[] }>(`/brain/graph?visibility=${visibility}`),
+  // merge sess.2938: adottato multi-vault reale di Federico (il nostro era shim placeholder).
+  brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
+    req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
+  brainStats: () => req<any>('/brain/stats'),
+  vaultsList: () => req<any[]>('/vaults'),
+  vaultsCreate: (data: { name: string; path: string; seed?: boolean; makePrimary?: boolean }) => req<any>('/vaults', { method: 'POST', body: JSON.stringify(data) }),
+  vaultsSetPrimary: (id: number) => req<any>(`/vaults/${id}/primary`, { method: 'POST' }),
+  vaultsDelete: (id: number) => req<any>(`/vaults/${id}`, { method: 'DELETE' }),
+  netDiscover: () => req<any[]>('/network/discover'),
+  netPeers: () => req<any[]>('/network/peers'),
+  netConnect: (email: string) => req<any>('/network/connect', { method: 'POST', body: JSON.stringify({ email }) }),
+  netRespondConnection: (id: number, accept: boolean) => req<any>(`/network/connection/${id}/respond`, { method: 'POST', body: JSON.stringify({ accept }) }),
+  netIncoming: () => req<any[]>('/network/share/incoming'),
+  netOutgoing: () => req<any[]>('/network/share/outgoing'),
+  netShareQuery: (email: string, query: string) => req<any>('/network/share', { method: 'POST', body: JSON.stringify({ email, query }) }),
+  netReviewShare: (id: number) => req<any>(`/network/share/${id}/review`, { method: 'POST' }),
+  netApproveShare: (id: number, paths: string[]) => req<any>(`/network/share/${id}/approve`, { method: 'POST', body: JSON.stringify({ paths }) }),
+  netDenyShare: (id: number, reason?: string) => req<any>(`/network/share/${id}/deny`, { method: 'POST', body: JSON.stringify({ reason }) }),
   tasks: () => req<any[]>('/tasks'),
   taskCreate: (data: any) => req('/tasks', { method: 'POST', body: JSON.stringify(data) }),
   taskUpdate: (id: number, data: any) => req(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
@@ -63,7 +76,17 @@ export const api = {
   updateBusiness: (data: any) => req('/settings/business', { method: 'PUT', body: JSON.stringify(data) }),
   updateTelegram: (token: string) => req('/settings/telegram', { method: 'PUT', body: JSON.stringify({ token }) }),
   updateSound: (enabled: boolean) => req('/settings/sound', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  // merge sess.2938: tieni entrambi — H3 Telegram link-code (nostro) + sub-agents/proposals (Federico).
   // H3 (sess.2818) — Telegram chatId binding via one-time code
   telegramLinkCode: () => req<{ code: string; expires_at: string; instructions: string }>('/telegram/link-code', { method: 'POST' }),
   telegramUnlink: () => req<{ ok: boolean }>('/telegram/unlink', { method: 'POST' }),
+  // Sub-agents
+  subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
+  subAgentsActive: () => req<any[]>('/sub-agents/active'),
+  subAgentsStats: () => req<any>('/sub-agents/stats'),
+  subAgentGet: (id: number) => req<any>(`/sub-agents/${id}`),
+  subAgentCancel: (id: number) => req<any>(`/sub-agents/${id}/cancel`, { method: 'POST' }),
+  proposalsList: () => req<any[]>('/agent-proposals'),
+  proposalApprove: (id: number) => req<any>(`/agent-proposals/${id}/approve`, { method: 'POST' }),
+  proposalDeny: (id: number) => req<any>(`/agent-proposals/${id}/deny`, { method: 'POST' }),
 };

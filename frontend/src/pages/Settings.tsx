@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Field, Input, Textarea, Modal, Banner, Chip, Toggle, useToast } from '../components/ui';
 import { useI18n, Lang } from '../i18n';
+import { useAuth } from '../auth';
 
 export default function Settings() {
   const [s, setS] = useState<any>(null);
@@ -26,6 +27,48 @@ export default function Settings() {
 
   const toast = useToast();
   const { t, lang, setLang } = useI18n();
+  const { deleteAccount } = useAuth();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  // ---------- Vaults ----------
+  const [vaults, setVaults] = useState<any[]>([]);
+  const [newVaultName, setNewVaultName] = useState('');
+  const [newVaultPath, setNewVaultPath] = useState('');
+  const [newVaultSeed, setNewVaultSeed] = useState(true);
+  const [newVaultPrimary, setNewVaultPrimary] = useState(false);
+  async function loadVaults() { try { setVaults(await api.vaultsList()); } catch {} }
+  useEffect(() => { loadVaults(); }, []);
+  async function createVault() {
+    try {
+      await api.vaultsCreate({ name: newVaultName, path: newVaultPath, seed: newVaultSeed, makePrimary: newVaultPrimary });
+      toast.push(t('settings.vaultCreated'), 'on');
+      setNewVaultName(''); setNewVaultPath(''); setNewVaultSeed(true); setNewVaultPrimary(false);
+      await loadVaults(); await load();
+    } catch (e: any) { toast.push(e.message, 'err'); }
+  }
+  async function setPrimaryVault(id: number) {
+    try { await api.vaultsSetPrimary(id); toast.push(t('settings.vaultPrimarySet'), 'on'); await loadVaults(); await load(); }
+    catch (e: any) { toast.push(e.message, 'err'); }
+  }
+  async function removeVault(v: any) {
+    if (!confirm(t('settings.confirmRemoveVault').replace('{name}', v.name))) return;
+    try { await api.vaultsDelete(v.id); toast.push(t('settings.vaultRemoved'), 'warn'); await loadVaults(); await load(); }
+    catch (e: any) { toast.push(e.message, 'err'); }
+  }
+
+  async function doDeleteAccount() {
+    if (!deletePassword) return;
+    setDeleting(true);
+    try {
+      await deleteAccount(deletePassword);
+      toast.push(lang === 'it' ? 'Account eliminato' : 'Account deleted', 'on');
+    } catch (e: any) {
+      toast.push(e.message, 'err');
+      setDeleting(false);
+    }
+  }
 
   async function changeVault() {
     try {
@@ -126,6 +169,47 @@ export default function Settings() {
       </Card>
 
       <Card>
+        <h2 className="text-lg font-semibold mb-1">{t('settings.vaults')}</h2>
+        <p className="text-sm text-muted mb-4">{t('settings.vaultsDesc')}</p>
+        {vaults.length > 0 && (
+          <ul className="space-y-2 mb-4">
+            {vaults.map((v) => (
+              <li key={v.id} className="flex items-center justify-between gap-3 border border-border rounded-2xl p-3 bg-surface2/40">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{v.name}</span>
+                    {v.is_primary && <Chip tone="on">{t('settings.vaultPrimary')}</Chip>}
+                  </div>
+                  <div className="text-xs text-muted font-mono truncate">{v.path}</div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  {!v.is_primary && <Button size="sm" variant="ghost" onClick={() => setPrimaryVault(v.id)}>{t('settings.vaultSetPrimary')}</Button>}
+                  <Button size="sm" variant="danger" onClick={() => removeVault(v)} disabled={vaults.length === 1}>{t('settings.vaultRemove')}</Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="space-y-3 border-t border-border pt-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label={t('settings.vaultName')}><Input value={newVaultName} onChange={(e) => setNewVaultName(e.target.value)} placeholder="work / personal / …" /></Field>
+            <Field label={t('settings.vaultNewPath')}><Input className="font-mono" value={newVaultPath} onChange={(e) => setNewVaultPath(e.target.value)} placeholder="/Users/you/brain-work" /></Field>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={newVaultSeed} onChange={(e) => setNewVaultSeed(e.target.checked)} />
+            {t('settings.vaultSeed')}
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={newVaultPrimary} onChange={(e) => setNewVaultPrimary(e.target.checked)} />
+            {t('settings.vaultPrimary')}
+          </label>
+          <div className="flex justify-end">
+            <Button onClick={createVault} disabled={!newVaultName || !newVaultPath}>{t('settings.vaultCreate')}</Button>
+          </div>
+        </div>
+      </Card>
+
+      <Card>
         <h2 className="text-lg font-semibold mb-1">{t('settings.vault')}</h2>
         <p className="text-sm text-muted mb-4">{t('settings.vaultDesc')}</p>
         <Field label={t('settings.vaultPath')}>
@@ -204,6 +288,43 @@ export default function Settings() {
         <Field label={t('settings.replaceToken')}><Input className="font-mono" placeholder="123456:ABC-…" value={token} onChange={(e) => setToken(e.target.value)} /></Field>
         <div className="mt-4 flex justify-end"><Button onClick={saveToken} disabled={!token}>{t('settings.updateToken')}</Button></div>
       </Card>
+
+      <Card className="border-err/40">
+        <h2 className="text-lg font-semibold mb-1 text-err">{lang === 'it' ? 'Zona pericolo' : 'Danger zone'}</h2>
+        <p className="text-sm text-muted mb-4">
+          {lang === 'it'
+            ? 'Eliminare l\'account rimuove tutti i tuoi dati dal database (settings, messaggi, brain index, persone, agent runs, task, richieste network). I file del vault sul filesystem restano dove sono — eliminali manualmente se vuoi.'
+            : 'Deleting your account wipes all your data from the database (settings, messages, brain index, people, agent runs, tasks, network requests). Vault files on disk stay where they are — remove them manually if you want.'}
+        </p>
+        <div className="flex justify-end">
+          <Button variant="danger" onClick={() => setDeleteOpen(true)}>
+            {lang === 'it' ? 'Elimina account' : 'Delete account'}
+          </Button>
+        </div>
+      </Card>
+
+      <Modal
+        open={deleteOpen}
+        title={lang === 'it' ? 'Confermi eliminazione account?' : 'Confirm account deletion?'}
+        onClose={() => { setDeleteOpen(false); setDeletePassword(''); }}
+        footer={<>
+          <Button variant="ghost" onClick={() => { setDeleteOpen(false); setDeletePassword(''); }}>{t('common.cancel')}</Button>
+          <Button variant="danger" onClick={doDeleteAccount} disabled={!deletePassword || deleting}>
+            {deleting ? '…' : (lang === 'it' ? 'Sì, elimina definitivamente' : 'Yes, delete permanently')}
+          </Button>
+        </>}
+      >
+        <Banner tone="err">
+          {lang === 'it'
+            ? 'Operazione irreversibile. Tutti i dati associati al tuo account verranno cancellati immediatamente. Verrai disconnesso.'
+            : 'This is irreversible. All data tied to your account will be wiped immediately. You will be logged out.'}
+        </Banner>
+        <div className="mt-4">
+          <Field label={lang === 'it' ? 'Conferma con la tua password' : 'Confirm with your password'}>
+            <Input type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} autoComplete="current-password" />
+          </Field>
+        </div>
+      </Modal>
 
       <Modal
         open={confirmOpen}

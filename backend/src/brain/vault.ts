@@ -12,6 +12,12 @@ export type VaultNote = {
 };
 
 export async function getVaultRoot(userId: number): Promise<string | null> {
+  // Prefer primary vault from the vaults table; fall back to legacy setting.
+  try {
+    const { getPrimaryVault } = await import('./vaults.js');
+    const v = await getPrimaryVault(userId);
+    if (v?.path) return v.path;
+  } catch {}
   const s = await getSetting<{ vaultPath: string }>(userId, 'vault');
   return s?.vaultPath ?? null;
 }
@@ -22,6 +28,17 @@ export async function setVaultRoot(userId: number, vaultPath: string): Promise<v
     await fs.mkdir(path.join(vaultPath, sub), { recursive: true });
   }
   await setSetting(userId, 'vault', { vaultPath });
+  // Mirror into the vaults table — keep onboarding/setting flow working.
+  try {
+    const { listVaults, createVault, setPrimaryVault } = await import('./vaults.js');
+    const existing = await listVaults(userId);
+    const match = existing.find((v) => v.path === vaultPath);
+    if (match) {
+      if (!match.is_primary) await setPrimaryVault(userId, match.id);
+    } else {
+      await createVault(userId, existing.length === 0 ? 'main' : `extra-${Date.now()}`, vaultPath, { seed: false, makePrimary: true });
+    }
+  } catch (e) { console.error('[vault] mirror to vaults table failed', e); }
 }
 
 export async function writeNote(userId: number, relPath: string, frontmatter: Record<string, any>, body: string): Promise<string> {
@@ -101,7 +118,7 @@ export async function searchNotes(userId: number, q: string, limit = 20): Promis
 async function indexNote(userId: number, relPath: string, fm: Record<string, any>, content: string) {
   await query(
     `INSERT INTO brain_index(user_id,path,kind,title,tags,summary,refs,visibility,updated_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,now())
+     VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,now())
      ON CONFLICT(user_id,path) DO UPDATE SET kind=EXCLUDED.kind, title=EXCLUDED.title,
        tags=EXCLUDED.tags, summary=EXCLUDED.summary, refs=EXCLUDED.refs,
        visibility=COALESCE(EXCLUDED.visibility, brain_index.visibility), updated_at=now()`,
@@ -112,7 +129,7 @@ async function indexNote(userId: number, relPath: string, fm: Record<string, any
       fm.title ?? null,
       fm.tags ?? [],
       content.slice(0, 280),
-      fm.refs ?? {},
+      JSON.stringify(fm.refs ?? {}),
       fm.visibility ?? null,
     ]
   );

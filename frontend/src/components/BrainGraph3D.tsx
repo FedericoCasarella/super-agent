@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import ForceGraph2D, { ForceGraphMethods } from 'react-force-graph-2d';
 import { api } from '../api';
 
-type Node = { id: string; title: string; kind: string; tags: string[]; size: number; visibility?: 'protected' | 'public' | null; x?: number; y?: number };
+type Node = { id: string; title: string; kind: string; tags: string[]; size: number; visibility?: 'protected' | 'public' | null; origin_email?: string | null; x?: number; y?: number };
 type Link = { source: string | Node; target: string | Node };
 
 // Theme gradient stops (inner-bright → outer-deep), tuned to software palette
@@ -26,7 +26,56 @@ const SYNAPSE    = '#7dd3fc';
 const LABEL = 'rgba(220, 220, 230, 0.85)';
 const LABEL_DIM = 'rgba(180, 180, 200, 0.45)';
 
-export default function BrainGraph3D({ onSelect, onDeselect, visibilityFilter = 'all' }: { onSelect: (id: string) => void; onDeselect?: () => void; visibilityFilter?: 'all' | 'public' | 'protected' }) {
+// Stable hue per origin email
+function hashHue(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
+}
+function originColor(email: string): string {
+  return `hsl(${hashHue(email)}, 70%, 62%)`;
+}
+
+// Lucide `brain` icon — paths only. Stroke recolored per peer hue. No background.
+const BRAIN_PATHS = [
+  'M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z',
+  'M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z',
+  'M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4',
+  'M17.599 6.5a3 3 0 0 0 .399-1.375',
+  'M6.003 5.125A3 3 0 0 0 6.401 6.5',
+  'M3.477 10.896a4 4 0 0 1 .585-.396',
+  'M19.938 10.5a4 4 0 0 1 .585.396',
+  'M6 18a4 4 0 0 1-1.967-.516',
+  'M19.967 17.484A4 4 0 0 1 18 18',
+];
+const brainImgCache = new Map<string, HTMLImageElement>();
+function brainImageFor(color: string): HTMLImageElement {
+  let img = brainImgCache.get(color);
+  if (img) return img;
+  const paths = BRAIN_PATHS.map((d) => `<path d="${d}"/>`).join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  img = new Image();
+  img.src = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  brainImgCache.set(color, img);
+  return img;
+}
+
+export default function BrainGraph3D({
+  onSelect, onDeselect,
+  visibilityFilter = 'all',
+  originFilter = 'all',
+  vaultFilter = 'all',
+  onOriginsChange,
+  onVaultsChange,
+}: {
+  onSelect: (id: string) => void;
+  onDeselect?: () => void;
+  visibilityFilter?: 'all' | 'public' | 'protected';
+  originFilter?: string;
+  vaultFilter?: string;
+  onOriginsChange?: (origins: string[]) => void;
+  onVaultsChange?: (vaults: string[]) => void;
+}) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
   const [hover, setHover] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -34,7 +83,13 @@ export default function BrainGraph3D({ onSelect, onDeselect, visibilityFilter = 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
 
-  useEffect(() => { api.brainGraphFiltered(visibilityFilter).then(setData).catch(() => {}); }, [visibilityFilter]);
+  useEffect(() => {
+    api.brainGraphFiltered(visibilityFilter, originFilter, vaultFilter).then((g) => {
+      setData(g);
+      if (onOriginsChange) onOriginsChange(g.origins ?? []);
+      if (onVaultsChange) onVaultsChange((g as any).vaults ?? []);
+    }).catch(() => {});
+  }, [visibilityFilter, originFilter, vaultFilter]);
 
   // Spread nodes further apart and add collision so they don't overlap
   useEffect(() => {
@@ -104,28 +159,47 @@ export default function BrainGraph3D({ onSelect, onDeselect, visibilityFilter = 
 
   const nodePaint = useCallback((node: any, ctx: CanvasRenderingContext2D, scale: number) => {
     if (node.x == null || node.y == null) return;
+    // Foreign-origin nodes override theme color with a per-user hue
+    const isForeign = !!node.origin_email;
     const stops: GradStops =
       node.visibility === 'protected' ? VIS_PROTECTED_GRAD
       : node.visibility === 'public'  ? VIS_PUBLIC_GRAD
       : (KIND_GRAD[node.kind] ?? DEFAULT_GRAD);
-    const color = stops[1]; // mid tone = signature color
-    const darkRim = stops[2];
-    const r = 4 + Math.sqrt(node.size) * 1.6;
+    const color = isForeign ? originColor(node.origin_email) : stops[1];
+    const darkRim = isForeign ? `hsl(${hashHue(node.origin_email)}, 70%, 35%)` : stops[2];
+    const r = (isForeign ? 5 : 4) + Math.sqrt(node.size) * 1.6;
     const dim = hi && !hi.has(node.id);
 
     ctx.save();
     ctx.globalAlpha = dim ? 0.3 : 1;
 
-    // Solid filled disc — flat theme color
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Crisp darker rim
-    ctx.strokeStyle = darkRim;
-    ctx.lineWidth = 1.2 / scale;
-    ctx.stroke();
+    if (isForeign) {
+      // Foreign brain: lucide brain icon stroked in peer hue, NO background
+      const img = brainImageFor(color);
+      const size = r * 2.4;
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, node.x - size / 2, node.y - size / 2, size, size);
+      } else {
+        // First-paint fallback while SVG loads — small dot so node is visible
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        // Trigger repaint when image is ready
+        img.onload = () => {
+          /* canvas-graph redraws on next sim tick; nothing else needed */
+        };
+      }
+    } else {
+      // Native: solid disc
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = darkRim;
+      ctx.lineWidth = 1.2 / scale;
+      ctx.stroke();
+    }
 
     // Selection / hover ring
     if (selected === node.id || hover === node.id) {

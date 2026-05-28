@@ -1,8 +1,9 @@
 import cron, { ScheduledTask } from 'node-cron';
+import { CronExpressionParser } from 'cron-parser';
 import { query } from '../db/index.js';
 import { sendTelegram } from '../telegram/bot.js';
 import { runClaude } from '../claude/runner.js';
-import { buildSystemContext } from '../claude/prompts.js';
+import { buildScheduledTaskContext } from '../claude/prompts.js';
 import { getVaultRoot } from '../brain/vault.js';
 import { invokeTool } from '../connectors/tools.js';
 
@@ -46,6 +47,33 @@ export async function refreshTasks() {
     live.set(r.id, task);
   }
   console.log(`[tasks] ${live.size} active schedules`);
+  await catchUpMissedTasks().catch((e) => console.error('[tasks] catch-up failed', e));
+}
+
+// On boot, fire any task whose previous scheduled time has passed AND last_run_at < that time.
+// Survives downtime — e.g. task at 07:00 fires on next boot if app was down.
+async function catchUpMissedTasks() {
+  const rows = await query<ScheduledTaskRow>(
+    `SELECT id::int, user_id::int, name, cron, action_type, action_payload, enabled, last_run_at, last_status, last_result
+     FROM scheduled_tasks WHERE user_id IS NOT NULL AND enabled = true`
+  );
+  const now = new Date();
+  for (const r of rows) {
+    try {
+      const it = CronExpressionParser.parse(r.cron, { currentDate: now });
+      const prev = it.prev().toDate();
+      const lastRun = r.last_run_at ? new Date(r.last_run_at) : null;
+      // Only fire if previous scheduled time is within last 25h AND we haven't run since.
+      const ageMs = now.getTime() - prev.getTime();
+      if (ageMs > 25 * 3600_000) continue;
+      if (lastRun && lastRun >= prev) continue;
+      const delay = 5000 + Math.random() * 5000;
+      console.log(`[tasks:u${r.user_id}] catch-up #${r.id} ${r.name}: missed ${prev.toISOString()} (${Math.round(ageMs/60000)}m ago) → firing in ${Math.round(delay)}ms`);
+      setTimeout(() => runTaskById(r.user_id, r.id).catch((e) => console.error('[tasks:catchup]', e)), delay);
+    } catch (e) {
+      console.error(`[tasks] catch-up parse failed for #${r.id} (${r.cron})`, e);
+    }
+  }
 }
 
 export async function runTaskById(userId: number, id: number) {
@@ -64,10 +92,10 @@ export async function runTaskById(userId: number, id: number) {
       await sendTelegram(userId, text);
       result = `sent: ${text.slice(0, 120)}`;
     } else if (t.action_type === 'prompt') {
-      const sys = await buildSystemContext(userId);
+      const sys = await buildScheduledTaskContext(userId);
       const userPrompt = String(t.action_payload?.prompt ?? '').trim();
       if (!userPrompt) throw new Error('prompt: empty');
-      const fullPrompt = `${sys}\n\n=== SCHEDULED TASK: ${t.name} ===\n\nINSTRUCTIONS:\n${userPrompt}\n\nOUTPUT RULES:\n- If you should send something to Telegram, output it directly (split with <<MSG>>).\n- Otherwise output \`SKIP\`.`;
+      const fullPrompt = `${sys}\n\n=== SCHEDULED TASK: ${t.name} ===\n\nINSTRUCTIONS (follow exactly, ignore advisor/conductor framing):\n${userPrompt}\n\nOUTPUT RULES:\n- Output ONLY what the task asks for. No "OK dove eravamo", no roadmap recap, no closing question unless the task itself asks for it.\n- If something should be sent to Telegram: output it directly (split with <<MSG>> for multiple messages).\n- If nothing should be sent: output the literal token \`SKIP\` and nothing else.`;
       const vault = await getVaultRoot(userId);
       const res = await runClaude(userId, fullPrompt, { cwd: vault ?? process.cwd(), timeoutMs: 180_000, kind: 'scheduled', meta: { taskId: t.id, name: t.name } });
       const out = (res.text || '').trim();

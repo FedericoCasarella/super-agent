@@ -12,6 +12,11 @@ import { requireUser } from '../auth/index.js';
 
 export const router = Router();
 
+// merge sess.2938: RIMOSSA la /tools pre-auth di Federico (C2 IDOR — header come userId
+// senza assert, montata prima di requireUser). Ripristinata la nostra versione sicura
+// sotto requireUser (vedi più giù). Il bridge MCP usa un cookie che combacia con
+// POLPO_BRAIN_USER_ID (design sess.2818), non l'header nudo.
+
 // All routes below require auth
 router.use(requireUser);
 
@@ -131,6 +136,7 @@ router.post('/connectors/imap/test', async (req, res) => {
   }
 });
 
+// MCP bridge endpoints — mounted AFTER requireUser (C2 sess.2818).
 router.get('/tools', (_req, res) => {
   res.json(listTools().map((t) => ({
     name: t.fullName, connector: t.connector, description: t.description, inputSchema: t.inputSchema,
@@ -155,15 +161,19 @@ router.post('/tools/:name', async (req, res) => {
     res.status(400).json({ ok: false, error: String(e?.message ?? e) });
   }
 });
-
 router.get('/brain/graph', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
-  const g = await buildGraph(req.user!.id);
-  if (filter === 'all') return res.json(g);
-  const nodes = g.nodes.filter((n) => n.visibility === filter);
+  const origin = req.query.origin ? String(req.query.origin) : 'all';
+  const vaultFilter = req.query.vault ? String(req.query.vault) : 'all';
+  const g = await buildGraph(req.user!.id, { vaultFilter });
+  let nodes = g.nodes;
+  if (filter !== 'all') nodes = nodes.filter((n) => n.visibility === filter);
+  if (origin === 'native') nodes = nodes.filter((n) => !n.origin_user_id);
+  else if (origin !== 'all') nodes = nodes.filter((n) => n.origin_email === origin);
   const ids = new Set(nodes.map((n) => n.id));
   const links = g.links.filter((l) => ids.has(l.source) && ids.has(l.target));
-  res.json({ nodes, links });
+  const origins = Array.from(new Set(g.nodes.map((n) => n.origin_email).filter(Boolean))) as string[];
+  res.json({ nodes, links, origins, vaults: g.vaults });
 });
 
 // Internal agents
@@ -190,10 +200,106 @@ router.get('/brain/search', async (req, res) => {
 });
 
 router.get('/brain/note', async (req, res) => {
-  const p = String(req.query.path ?? '');
-  const note = await readNote(req.user!.id, p);
+  const raw = String(req.query.path ?? '');
+  const userId = req.user!.id;
+  // Support id format `<vaultName>::<relPath>`
+  if (raw.includes('::')) {
+    const [vaultName, rel] = raw.split('::', 2);
+    const { listVaults } = await import('../brain/vaults.js');
+    const vs = await listVaults(userId);
+    const v = vs.find((x) => x.name === vaultName);
+    if (!v) return res.status(404).json({ error: 'vault not found' });
+    try {
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const matter = (await import('gray-matter')).default;
+      const fullPath = path.join(v.path, rel);
+      const txt = await fs.readFile(fullPath, 'utf8');
+      const parsed = matter(txt);
+      return res.json({
+        path: raw,
+        title: parsed.data.title,
+        tags: parsed.data.tags ?? [],
+        data: parsed.data,
+        content: parsed.content,
+      });
+    } catch { return res.status(404).json({ error: 'not found' }); }
+  }
+  const note = await readNote(userId, raw);
   if (!note) return res.status(404).json({ error: 'not found' });
   res.json(note);
+});
+
+router.get('/brain/stats', async (req, res) => {
+  const userId = req.user!.id;
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const { listVaults } = await import('../brain/vaults.js');
+  const vaults = await listVaults(userId);
+
+  async function dirSize(root: string): Promise<{ bytes: number; files: number }> {
+    let bytes = 0, files = 0;
+    async function walk(p: string) {
+      let entries: any[] = [];
+      try { entries = await fs.readdir(p, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const full = path.join(p, e.name);
+        if (e.isDirectory()) { await walk(full); continue; }
+        try {
+          const st = await fs.stat(full);
+          bytes += st.size;
+          files += 1;
+        } catch {}
+      }
+    }
+    await walk(root);
+    return { bytes, files };
+  }
+
+  const vaultStats = await Promise.all(vaults.map(async (v: any) => {
+    const sz = await dirSize(v.path);
+    return { name: v.name, path: v.path, is_primary: v.is_primary, bytes: sz.bytes, files: sz.files };
+  }));
+
+  const byKind = await query<{ kind: string; n: number }>(
+    `SELECT kind, count(*)::int AS n FROM brain_index WHERE user_id=$1 GROUP BY kind ORDER BY n DESC`, [userId]
+  );
+  const byVis = await query<{ visibility: string | null; n: number }>(
+    `SELECT visibility, count(*)::int AS n FROM brain_index WHERE user_id=$1 GROUP BY visibility`, [userId]
+  );
+  const byOrigin = await query<{ origin_email: string | null; n: number }>(
+    `SELECT u.email AS origin_email, count(*)::int AS n
+     FROM brain_index bi LEFT JOIN users u ON u.id = bi.origin_user_id
+     WHERE bi.user_id=$1 AND bi.origin_user_id IS NOT NULL
+     GROUP BY u.email`, [userId]
+  );
+  const totalNotes = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM brain_index WHERE user_id=$1`, [userId]
+  );
+  const lastUpdate = await query<{ ts: string | null }>(
+    `SELECT max(updated_at) AS ts FROM brain_index WHERE user_id=$1`, [userId]
+  );
+  const last7 = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM brain_index WHERE user_id=$1 AND updated_at > now() - interval '7 days'`, [userId]
+  );
+
+  const totalBytes = vaultStats.reduce((a, v) => a + v.bytes, 0);
+  const totalFiles = vaultStats.reduce((a, v) => a + v.files, 0);
+
+  res.json({
+    totals: {
+      notes: totalNotes[0]?.n ?? 0,
+      files: totalFiles,
+      bytes: totalBytes,
+      vaults: vaults.length,
+      updatedLast7Days: last7[0]?.n ?? 0,
+      lastUpdate: lastUpdate[0]?.ts ?? null,
+    },
+    vaults: vaultStats,
+    byKind,
+    byVisibility: byVis,
+    byOrigin: byOrigin.filter((o) => o.origin_email),
+  });
 });
 
 router.get('/brain/index', async (req, res) => {
@@ -285,8 +391,8 @@ router.post('/tasks', async (req, res) => {
   const cron = (await import('node-cron')).default;
   if (!cron.validate(expr)) return res.status(400).json({ error: `invalid cron: ${expr}` });
   const rows = await query<{ id: number }>(
-    `INSERT INTO scheduled_tasks(user_id,name,cron,action_type,action_payload,enabled) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
-    [req.user!.id, name, expr, action_type, action_payload ?? {}, enabled]
+    `INSERT INTO scheduled_tasks(user_id,name,cron,action_type,action_payload,enabled) VALUES($1,$2,$3,$4,$5::jsonb,$6) RETURNING id`,
+    [req.user!.id, name, expr, action_type, JSON.stringify(action_payload ?? {}), enabled]
   );
   const { refreshTasks } = await import('../scheduler/tasks.js');
   await refreshTasks();
@@ -319,6 +425,169 @@ router.post('/tasks/:id/run', async (req, res) => {
   const { runTaskById } = await import('../scheduler/tasks.js');
   await runTaskById(req.user!.id, Number(req.params.id));
   res.json({ ok: true });
+});
+
+// Network (P2P brain sharing) — discovery: all users with public-ish blurb
+router.get('/network/discover', async (req, res) => {
+  const me = req.user!.id;
+  const users = await query<any>(
+    `SELECT u.id::int, u.email, u.name,
+            (SELECT value FROM settings WHERE user_id=u.id AND key='profile')   AS profile,
+            (SELECT value FROM settings WHERE user_id=u.id AND key='business')  AS business
+       FROM users u WHERE u.id <> $1 ORDER BY u.created_at DESC`,
+    [me]
+  );
+  const conns = await query<any>(
+    `SELECT a_user_id::int, b_user_id::int, status, initiator_user_id::int
+       FROM user_connections WHERE a_user_id=$1 OR b_user_id=$1`, [me]
+  );
+  const byPeer = new Map<number, any>();
+  for (const c of conns) {
+    const peer = c.a_user_id === me ? c.b_user_id : c.a_user_id;
+    byPeer.set(peer, c);
+  }
+  res.json(users.map((u: any) => {
+    const c = byPeer.get(u.id);
+    return {
+      id: u.id, email: u.email, name: u.name,
+      role: u.profile?.role ?? null,
+      company: u.business?.company ?? null,
+      what: u.business?.what ?? null,
+      connection_status: c?.status ?? 'none',
+      connection_initiator: c?.initiator_user_id ?? null,
+    };
+  }));
+});
+
+router.get('/network/peers', async (req, res) => {
+  const m = await import('../network/index.js');
+  res.json(await m.listPeers(req.user!.id));
+});
+router.post('/network/connect', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.requestConnection(req.user!.id, String(req.body?.email ?? ''))); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/network/connection/:id/respond', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.respondConnection(req.user!.id, Number(req.params.id), !!req.body?.accept)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/network/share/incoming', async (req, res) => {
+  const m = await import('../network/index.js');
+  res.json(await m.listIncomingShareRequests(req.user!.id));
+});
+router.get('/network/share/outgoing', async (req, res) => {
+  const m = await import('../network/index.js');
+  res.json(await m.listOutgoingShareRequests(req.user!.id));
+});
+router.post('/network/share', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.createShareRequest(req.user!.id, String(req.body?.email ?? ''), String(req.body?.query ?? ''))); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/network/share/:id/review', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.triggerReview(Number(req.params.id), req.user!.id)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/network/share/:id/approve', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.approveShareRequest(req.user!.id, Number(req.params.id), req.body?.paths ?? [])); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/network/share/:id/deny', async (req, res) => {
+  const m = await import('../network/index.js');
+  try { res.json(await m.denyShareRequest(req.user!.id, Number(req.params.id), req.body?.reason)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Vaults (multi-brain)
+router.get('/vaults', async (req, res) => {
+  const m = await import('../brain/vaults.js');
+  res.json(await m.listVaults(req.user!.id));
+});
+router.post('/vaults', async (req, res) => {
+  const m = await import('../brain/vaults.js');
+  const { name, path: p, seed = true, makePrimary = false } = req.body ?? {};
+  if (!name || !p) return res.status(400).json({ error: 'name and path required' });
+  try { res.json(await m.createVault(req.user!.id, String(name), String(p), { seed: !!seed, makePrimary: !!makePrimary })); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/vaults/:id/primary', async (req, res) => {
+  const m = await import('../brain/vaults.js');
+  try { await m.setPrimaryVault(req.user!.id, Number(req.params.id)); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/vaults/:id', async (req, res) => {
+  const m = await import('../brain/vaults.js');
+  try { await m.deleteVault(req.user!.id, Number(req.params.id)); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Sub-agents
+router.get('/sub-agents', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  const status = req.query.status ? String(req.query.status) : undefined;
+  res.json(await sa.listSubAgents(req.user!.id, { status }));
+});
+router.get('/sub-agents/stats', async (req, res) => {
+  const userId = req.user!.id;
+  const totals = await query<any>(
+    `SELECT count(*)::int AS n,
+            coalesce(sum(cost_usd),0)::float8 AS cost,
+            coalesce(sum(input_tokens),0)::int AS in_tok,
+            coalesce(sum(output_tokens),0)::int AS out_tok,
+            coalesce(sum(num_turns),0)::int AS turns
+     FROM sub_agents WHERE user_id=$1`, [userId]
+  );
+  const byStatus = await query<any>(
+    `SELECT status, count(*)::int AS n FROM sub_agents WHERE user_id=$1 GROUP BY status`, [userId]
+  );
+  const byDay = await query<any>(
+    `SELECT date_trunc('day', created_at) AS day, count(*)::int AS n,
+            coalesce(sum(cost_usd),0)::float8 AS cost
+     FROM sub_agents WHERE user_id=$1 AND created_at > now() - interval '14 days'
+     GROUP BY 1 ORDER BY 1 DESC`, [userId]
+  );
+  const topTools = await query<any>(
+    `SELECT tool->>'name' AS name, count(*)::int AS n
+     FROM sub_agents, jsonb_array_elements(actions) AS tool
+     WHERE user_id=$1
+     GROUP BY 1 ORDER BY 2 DESC LIMIT 15`, [userId]
+  );
+  res.json({ totals: totals[0], byStatus, byDay, topTools });
+});
+router.get('/sub-agents/active', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  res.json(await sa.listActive(req.user!.id));
+});
+router.get('/sub-agents/:id', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  const r = await sa.getSubAgent(req.user!.id, Number(req.params.id));
+  if (!r) return res.status(404).json({ error: 'not found' });
+  res.json(r);
+});
+router.post('/sub-agents/:id/cancel', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  await sa.cancelSubAgent(req.user!.id, Number(req.params.id));
+  res.json({ ok: true });
+});
+router.get('/agent-proposals', async (req, res) => {
+  const rows = await query(
+    `SELECT * FROM agent_proposals WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`, [req.user!.id]
+  );
+  res.json(rows);
+});
+router.post('/agent-proposals/:id/approve', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  try { res.json({ ok: true, spawned: await sa.approveProposal(req.user!.id, Number(req.params.id)) }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/agent-proposals/:id/deny', async (req, res) => {
+  const sa = await import('../sub_agents/index.js');
+  try { await sa.denyProposal(req.user!.id, Number(req.params.id)); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
 router.get('/mcp/external', async (req, res) => {

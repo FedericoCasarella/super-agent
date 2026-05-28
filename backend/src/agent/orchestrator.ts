@@ -6,6 +6,8 @@ import { sendTelegram, startTyping } from '../telegram/bot.js';
 import { getVaultRoot } from '../brain/vault.js';
 
 export function startOrchestrator() {
+  // Remove any stale listener (tsx-watch hot-reload, module re-eval) to avoid duplicate replies
+  bus.removeAllListeners('telegram:incoming');
   bus.on('telegram:incoming', handleIncoming);
 }
 
@@ -25,7 +27,7 @@ async function handleIncoming({ userId, text }: { userId: number; chatId: number
     stopTyping();
   }
   const reply = res.ok ? res.text.trim() : `(error: ${res.stderr.slice(0, 200)})`;
-  if (!reply) return;
+  if (!reply || reply === 'SKIP') return;
   try {
     await sendTelegram(userId, reply);
     await logMessage(userId, 'out', 'telegram', reply);

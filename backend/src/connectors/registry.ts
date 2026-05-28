@@ -57,8 +57,8 @@ export async function buildContext(userId: number, name: string): Promise<Connec
     state: row.state,
     saveState: async (next) => {
       await query(
-        'UPDATE connectors SET state=$1, updated_at=now() WHERE user_id=$2 AND name=$3',
-        [next, userId, name]
+        'UPDATE connectors SET state=$1::jsonb, updated_at=now() WHERE user_id=$2 AND name=$3',
+        [JSON.stringify(next ?? {}), userId, name]
       );
     },
     log: (msg, meta) => console.log(`[u${userId}:${name}]`, msg, meta ?? ''),
