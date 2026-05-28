@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { countUsers, createUser, getUserByEmail, getUserById, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken } from './index.js';
+import { countUsers, createUser, getUserByEmail, getUserById, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken, bumpTokenVersion } from './index.js';
 import { config } from '../config.js';
 
 export const authRouter = Router();
@@ -14,6 +14,17 @@ const loginLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'too many login attempts, retry in 15 minutes' },
+});
+// Sess.2817 sec-review — tighter limit on /initialize (1-shot endpoint).
+// Even though gated by countUsers, rate-limit prevents pre-setup DDoS + reduces
+// TOCTOU race window. Schema-level unique index (users_singleton) is the real
+// guarantee; this limiter is defense-in-depth.
+const initializeLimiter = rateLimit({
+  windowMs: 60 * 60_000,  // 1 hour
+  max: 3,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many initialize attempts, retry in 1 hour' },
 });
 
 authRouter.get('/me', async (req, res) => {
@@ -33,7 +44,13 @@ authRouter.get('/bootstrap', async (_req, res) => {
 // One-shot initialization for fresh Polpo Brain instance. Single-user per instance
 // (not a SaaS). After first user is created, this endpoint returns 409 forever.
 // Onboarding wizard (frontend) is the only legitimate caller.
-authRouter.post('/initialize', async (req, res) => {
+//
+// Sess.2817 sec-review hardening:
+//  - Schema-level unique index `users_singleton` (partial unique on TRUE) guarantees
+//    at most 1 row even under concurrent /initialize calls (closes TOCTOU race).
+//  - Rate limit 3/hour per IP (defense-in-depth) via initializeLimiter.
+//  - Fast-path 409 if countUsers > 0 (UX), but real safety is the catch on 23505.
+authRouter.post('/initialize', initializeLimiter, async (req, res) => {
   const existingCount = await countUsers();
   if (existingCount > 0) {
     return res.status(409).json({ error: 'instance already initialized — single user per Polpo Brain instance' });
@@ -41,11 +58,20 @@ authRouter.post('/initialize', async (req, res) => {
   const { email, password, name } = req.body ?? {};
   if (!email || !password) return res.status(400).json({ error: 'email + password required' });
   if (password.length < 6) return res.status(400).json({ error: 'password too short (>= 6)' });
-  const user = await createUser(email, password, name ?? null);
-  await claimOrphanData(user.id);
-  const token = signToken(user);
-  setAuthCookie(res, token);
-  res.json({ user, claimedOrphans: true });
+  try {
+    const user = await createUser(email, password, name ?? null);
+    await claimOrphanData(user.id);
+    const token = signToken(user);
+    setAuthCookie(res, token);
+    res.json({ user, claimedOrphans: true });
+  } catch (e: any) {
+    // PostgreSQL 23505 = unique_violation. Hits either email-unique OR
+    // users_singleton (concurrent /initialize race). Both → 409.
+    if (e?.code === '23505') {
+      return res.status(409).json({ error: 'instance already initialized — single user per Polpo Brain instance' });
+    }
+    throw e;
+  }
 });
 
 authRouter.post('/login', loginLimiter, async (req, res) => {
@@ -61,7 +87,11 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
   res.json({ user });
 });
 
-authRouter.post('/logout', requireUser, (_req, res) => {
+authRouter.post('/logout', requireUser, async (req, res) => {
+  // Sess.2817 — bump token_version so any other live JWT for this user
+  // (e.g. cookie copied to another device) is invalidated server-side.
+  // Closes long-lived cookie revocation hole flagged by security-review.
+  if (req.user) await bumpTokenVersion(req.user.id);
   clearAuthCookie(res);
   res.json({ ok: true });
 });

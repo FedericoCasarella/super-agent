@@ -214,3 +214,18 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS scheduled_tasks_enabled_idx ON scheduled_tasks(enabled);
+
+-- ─── sess.2817 — single-user enforcement + JWT revocation ──────────────────
+-- (a) Partial unique index on (TRUE) → schema-level guarantee max 1 user row.
+--     Atomic with INSERT, closes TOCTOU race on /auth/initialize even under
+--     concurrent calls. Raises 23505 unique_violation on second insert.
+CREATE UNIQUE INDEX IF NOT EXISTS users_singleton ON users ((TRUE));
+
+-- (b) token_version: bumped on logout / password-change → invalidates
+--     server-side any JWT issued before the bump, even before 365d TTL.
+--     Closes "no revocation" hole on long-lived cookies.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='token_version') THEN
+    ALTER TABLE users ADD COLUMN token_version BIGINT NOT NULL DEFAULT 0;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;

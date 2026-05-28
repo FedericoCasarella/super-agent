@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { query } from '../db/index.js';
 import { config } from '../config.js';
 
-export type User = { id: number; email: string; name: string | null };
+export type User = { id: number; email: string; name: string | null; token_version?: number };
 
 declare module 'express-serve-static-core' {
   interface Request { user?: User; }
@@ -21,18 +21,30 @@ export function signToken(user: User): string {
   // Sess.2817 — Polpo Brain is single-user per instance + local-trust device.
   // 365d TTL: Mattia's master instance and student forks should not see /login
   // friction across normal usage. Cookie httpOnly + sameSite still protect from XSS/CSRF.
-  return jwt.sign({ uid: user.id, email: user.email }, config.jwtSecret, { expiresIn: '365d' });
+  // tv (token_version) is bumped on logout/password-change → server-side revocation
+  // even before TTL expiry. Closes long-lived JWT hole flagged by security-review sess.2817.
+  return jwt.sign(
+    { uid: user.id, email: user.email, tv: user.token_version ?? 0 },
+    config.jwtSecret,
+    { expiresIn: '365d' }
+  );
 }
-export function verifyToken(token: string): { uid: number; email: string } | null {
+export function verifyToken(token: string): { uid: number; email: string; tv?: number } | null {
   try { return jwt.verify(token, config.jwtSecret) as any; } catch { return null; }
 }
 
+// Bump token_version → invalidates all JWTs issued before this point.
+// Called on logout, password change, or "revoke all sessions".
+export async function bumpTokenVersion(userId: number): Promise<void> {
+  await query('UPDATE users SET token_version = token_version + 1 WHERE id=$1', [userId]);
+}
+
 export async function getUserById(id: number): Promise<User | null> {
-  const rows = await query<User>('SELECT id::int, email, name FROM users WHERE id=$1', [id]);
+  const rows = await query<User>('SELECT id::int, email, name, token_version::int AS token_version FROM users WHERE id=$1', [id]);
   return rows[0] ?? null;
 }
-export async function getUserByEmail(email: string): Promise<{ id: number; email: string; pass_hash: string; name: string | null } | null> {
-  const rows = await query<any>('SELECT id::int, email, pass_hash, name FROM users WHERE lower(email)=lower($1)', [email]);
+export async function getUserByEmail(email: string): Promise<{ id: number; email: string; pass_hash: string; name: string | null; token_version: number } | null> {
+  const rows = await query<any>('SELECT id::int, email, pass_hash, name, token_version::int AS token_version FROM users WHERE lower(email)=lower($1)', [email]);
   return rows[0] ?? null;
 }
 
@@ -64,6 +76,11 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
   if (!data) return res.status(401).json({ error: 'invalid token' });
   const user = await getUserById(data.uid);
   if (!user) return res.status(401).json({ error: 'user not found' });
+  // Sess.2817 — server-side revocation: reject JWTs older than current token_version.
+  // Bumped by logout/password-change. Closes long-lived cookie hole.
+  const tokenTv = data.tv ?? 0;
+  const currentTv = user.token_version ?? 0;
+  if (tokenTv !== currentTv) return res.status(401).json({ error: 'token revoked' });
   req.user = user;
   next();
 }
