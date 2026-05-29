@@ -7,7 +7,7 @@ function slugify(name: string) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
-export async function upsertPerson(userId: number, input: { name: string; aliases?: string[]; emails?: string[]; note?: string }) {
+export async function upsertPerson(userId: number, input: { name: string; aliases?: string[]; emails?: string[]; phones?: string[]; note?: string }) {
   const slug = slugify(input.name);
   const notePath = `people/${slug}.md`;
   const existing = await readNote(userId, notePath);
@@ -20,20 +20,31 @@ export async function upsertPerson(userId: number, input: { name: string; aliase
     title: input.name,
     aliases: input.aliases ?? existing?.data.aliases ?? [],
     emails: input.emails ?? existing?.data.emails ?? [],
+    phones: input.phones ?? existing?.data.phones ?? [],
     tags: ['person'],
   }, body);
 
   await query(
-    `INSERT INTO people(user_id,slug,name,aliases,emails,note_path)
-     VALUES($1,$2,$3,$4,$5,$6)
+    `INSERT INTO people(user_id,slug,name,aliases,emails,phones,note_path)
+     VALUES($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT(user_id,slug) DO UPDATE SET
        name=EXCLUDED.name,
        aliases=ARRAY(SELECT DISTINCT UNNEST(people.aliases || EXCLUDED.aliases)),
        emails=ARRAY(SELECT DISTINCT UNNEST(people.emails || EXCLUDED.emails)),
+       phones=ARRAY(SELECT DISTINCT UNNEST(people.phones || EXCLUDED.phones)),
        updated_at=now()`,
-    [userId, slug, input.name, input.aliases ?? [], input.emails ?? [], notePath]
+    [userId, slug, input.name, input.aliases ?? [], input.emails ?? [], input.phones ?? [], notePath]
   );
   return { slug, notePath };
+}
+
+export async function findPersonByPhone(userId: number, phone: string): Promise<{ slug: string; name: string } | null> {
+  const norm = phone.replace(/\D/g, '');
+  const rows = await query<{ slug: string; name: string }>(
+    `SELECT slug, name FROM people WHERE user_id=$1 AND EXISTS (SELECT 1 FROM unnest(phones) p WHERE regexp_replace(p, '\\D', '', 'g') = $2) LIMIT 1`,
+    [userId, norm],
+  );
+  return rows[0] ?? null;
 }
 
 const connector: Connector = {
@@ -93,6 +104,7 @@ const connector: Connector = {
           name: { type: 'string' },
           aliases: { type: 'array', items: { type: 'string' } },
           emails: { type: 'array', items: { type: 'string' } },
+          phones: { type: 'array', items: { type: 'string' }, description: 'Numeri telefono (con o senza prefisso, solo digits).' },
           note: { type: 'string' },
         },
         required: ['name'],
