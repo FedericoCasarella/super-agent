@@ -22,4 +22,4 @@ Open http://localhost:5173 → onboarding wizard.
 ## Connectors
 Drop folder in `backend/src/connectors/builtin/<name>` with `manifest.json` + `index.ts` exporting `Connector` interface. Auto-loaded at boot.
 
-Built-in: `imap` (email reader), `people` (people intelligence).
+Built-in: `imap` (email reader + reply drafts), `voice` (speech-to-text via Groq/OpenAI Whisper), `elevenlabs` (text-to-speech), `fathom` (call recordings + summaries), `ghl` (GoHighLevel CRM), `people` (people intelligence), `tasks` (scheduled tasks), `agent` (agent controls).
