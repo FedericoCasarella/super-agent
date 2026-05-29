@@ -9,6 +9,10 @@ async function openClient(acc: Account) {
     host: acc.host, port: Number(acc.port ?? 993), secure: true,
     auth: { user: acc.user, pass: acc.pass }, logger: false,
   });
+  // An unhandled 'error' event on the IMAP socket (e.g. ETIMEOUT after the socket is
+  // already open) is re-thrown by Node and crashes the entire backend process. Always
+  // register a handler; callers reconnect on the next tick. (sess.2939 — backend down RCA)
+  client.on('error', (err) => console.error('[imap] socket error (openClient):', (err as any)?.message ?? err));
   await client.connect();
   return client;
 }
@@ -64,6 +68,9 @@ const connector: Connector = {
         auth: { user: acc.user, pass: acc.pass },
         logger: false,
       });
+      // Guard against unhandled 'error' events (socket timeout mid-fetch) crashing the
+      // process — the try/catch below only covers awaited calls, not async socket events.
+      client.on('error', (err) => console.error(`[imap] socket error (${acc.label}):`, (err as any)?.message ?? err));
       let maxUid = lastUid;
       try {
         await client.connect();
