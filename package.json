@@ -2,6 +2,7 @@
   "name": "super-agent",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "workspaces": ["backend", "frontend"],
   "scripts": {
     "dev": "concurrently -k -n backend,frontend -c blue,magenta \"npm:dev -w backend\" \"npm:dev -w frontend\"",
