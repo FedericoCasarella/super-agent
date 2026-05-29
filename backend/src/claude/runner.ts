@@ -105,7 +105,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     }
     return '';
   }
-  const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null }>((resolve) => {
+  const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null; assistantText: string }>((resolve) => {
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
       // merge sess.2938: rebrand POLPO_BRAIN_USER_ID + shim SUPER_AGENT_USER_ID
@@ -116,6 +116,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     let stdout = '', stderr = '';
     let buf = '';
     let finalEvent: any = null;
+    let lastAssistantText = ''; // fallback if the 'result' event never arrives (truncation/SIGTERM)
     const timer = setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs ?? 120_000);
     child.stdout.on('data', (d) => {
       const s = d.toString();
@@ -130,7 +131,9 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
           const ev = JSON.parse(line);
           // Detect tool_use blocks → emit brain:access
           if (ev?.type === 'assistant' && ev.message?.content) {
+            const turnTexts: string[] = [];
             for (const block of ev.message.content) {
+              if (block?.type === 'text' && typeof block.text === 'string') turnTexts.push(block.text);
               if (block?.type !== 'tool_use') continue;
               const name = block.name as string;
               const input = block.input ?? {};
@@ -151,22 +154,27 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
                 }
               }
             }
+            if (turnTexts.length) lastAssistantText = turnTexts.join('');
           }
           if (ev?.type === 'result') finalEvent = ev;
         } catch {}
       }
     });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code, finalEvent }); });
-    child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code, finalEvent, assistantText: lastAssistantText }); });
+    child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null, assistantText: lastAssistantText }); });
   });
 
   const durationMs = Date.now() - started;
   const parsed: any = result.finalEvent;
 
-  const text = (parsed?.result ?? '').trim();
+  // Fallback (sess.2939): stream-json only sets finalEvent on a 'result' line. On a
+  // truncated / SIGTERM'd run that event never arrives → parsed is null → the reply was
+  // silently empty. Fall back to the last streamed assistant text so the user still gets
+  // the partial answer instead of nothing, and treat a clean-exit-with-text as ok.
+  const text = (parsed?.result ?? result.assistantText ?? '').trim();
   const usage = parsed?.usage ?? {};
-  const ok = result.code === 0 && !!parsed && parsed.subtype !== 'error_during_execution';
+  const ok = result.code === 0 && (parsed ? parsed.subtype !== 'error_during_execution' : text.length > 0);
 
   const out: ClaudeResult = {
     ok, text, stderr: result.stderr.trim(), exitCode: result.code,
