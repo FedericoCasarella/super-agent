@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+title: super-agent
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Federico
+    family-names: Casarella
+    affiliation: super-agent
+  - given-names: Mattia
+    family-names: Calastri
+repository-code: 'https://github.com/FedericoCasarella/super-agent'
+abstract: >-
+  A self-hosted personal AI agent that lives in Telegram,
+  reasons with the Claude Code CLI, and keeps an
+  Obsidian-style markdown second brain it can act on through
+  pluggable connectors exposed over the Model Context
+  Protocol. Designed around a human-in-the-loop principle:
+  irreversible actions are proposed for approval, never
+  auto-executed.
+keywords:
+  - ai-agent
+  - personal-assistant
+  - second-brain
+  - knowledge-management
+  - telegram-bot
+  - claude
+  - model-context-protocol
+  - mcp
+  - llm
+  - self-hosted
+  - typescript
+license: MIT
