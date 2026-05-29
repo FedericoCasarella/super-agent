@@ -117,7 +117,7 @@ export async function runTick(userId: number, name: string) {
 async function onConnectorEvent(ev: { userId: number; connector: string; kind: string; payload: any }) {
   const vault = await getVaultRoot(ev.userId);
   const prompt = await buildProactivePrompt(ev.userId, `${ev.connector}:${ev.kind}`, ev.payload);
-  const res = await runClaude(ev.userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 60_000, kind: 'proactive', meta: { trigger: `${ev.connector}:${ev.kind}` } });
+  const res = await runClaude(ev.userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 120_000, kind: 'proactive', meta: { trigger: `${ev.connector}:${ev.kind}` } });
   if (!res.ok) return;
   const out = res.text.trim();
   if (!out || out === 'SKIP') return;

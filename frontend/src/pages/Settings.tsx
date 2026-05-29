@@ -12,6 +12,9 @@ export default function Settings() {
   const [profile, setProfile] = useState<any>({});
   const [business, setBusiness] = useState<any>({});
   const [token, setToken] = useState('');
+  const [linkCode, setLinkCode] = useState<{ code: string; expires_at: string } | null>(null);
+  const [linkSecondsLeft, setLinkSecondsLeft] = useState<number>(0);
+  const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
 
   async function load() {
     const data = await api.settings();
@@ -85,6 +88,43 @@ export default function Settings() {
     toast.push('Telegram token updated', 'on');
     await load();
   }
+
+  // H3 (sess.2818) — generate a one-time link code and start countdown.
+  async function generateLinkCode() {
+    try {
+      const res = await api.telegramLinkCode();
+      setLinkCode({ code: res.code, expires_at: res.expires_at });
+      toast.push('Link code generated', 'on');
+    } catch (e: any) {
+      toast.push(e.message ?? 'failed', 'err');
+    }
+  }
+
+  async function unlinkChat() {
+    try {
+      await api.telegramUnlink();
+      setUnlinkConfirmOpen(false);
+      setLinkCode(null);
+      toast.push('Chat unlinked', 'warn');
+      await load();
+    } catch (e: any) {
+      toast.push(e.message ?? 'failed', 'err');
+    }
+  }
+
+  // Countdown ticker — runs only when a link code is active.
+  useEffect(() => {
+    if (!linkCode) { setLinkSecondsLeft(0); return; }
+    const tick = () => {
+      const ms = new Date(linkCode.expires_at).getTime() - Date.now();
+      const secs = Math.max(0, Math.floor(ms / 1000));
+      setLinkSecondsLeft(secs);
+      if (secs === 0) setLinkCode(null);
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [linkCode]);
 
   if (!s) return <div className="text-muted">loading…</div>;
 
@@ -208,6 +248,43 @@ export default function Settings() {
         <p className="text-sm text-muted mb-3">
           {s.telegram?.chatId ? <>Chat: <Chip tone="on">{s.telegram.chatId}</Chip></> : <Chip tone="warn">{t('settings.notLinked')}</Chip>}
         </p>
+
+        {/* H3 (sess.2818) — chatId binding via one-time code. */}
+        {!s.telegram?.chatId && s.telegram?.hasToken && (
+          <div className="mb-4 p-3 rounded border border-border bg-surface-2">
+            <div className="text-sm font-medium mb-1">{lang === 'it' ? 'Collega questa chat al bot' : 'Link this chat to the bot'}</div>
+            <p className="text-xs text-muted mb-3">
+              {lang === 'it'
+                ? 'Genera un codice e invialo al bot Telegram come "/link CODICE" entro 10 minuti per autorizzare la chat.'
+                : 'Generate a code and send it to your Telegram bot as "/link CODE" within 10 minutes to authorize the chat.'}
+            </p>
+            {!linkCode ? (
+              <Button onClick={generateLinkCode}>{lang === 'it' ? 'Genera codice' : 'Generate code'}</Button>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <code className="text-2xl font-mono px-3 py-1 rounded bg-bg-2 tracking-widest">{linkCode.code}</code>
+                  <Chip tone={linkSecondsLeft > 60 ? 'on' : 'warn'}>
+                    {Math.floor(linkSecondsLeft / 60)}:{String(linkSecondsLeft % 60).padStart(2, '0')}
+                  </Chip>
+                </div>
+                <div className="text-xs text-muted font-mono">{lang === 'it' ? 'Manda al bot' : 'Send to bot'}: /link {linkCode.code}</div>
+                <Button variant="ghost" size="sm" onClick={generateLinkCode}>{lang === 'it' ? 'Rigenera' : 'Regenerate'}</Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Existing chat binding — offer unlink. */}
+        {s.telegram?.chatId && (
+          <div className="mb-4 flex items-center justify-between gap-3 p-3 rounded border border-border bg-surface-2">
+            <div className="text-sm text-muted">
+              {lang === 'it' ? 'Per cambiare chat o se sospetti compromissione del bot, scollega e ricollega.' : 'To change chat or if you suspect bot token leak, unlink and re-link.'}
+            </div>
+            <Button variant="danger" size="sm" onClick={() => setUnlinkConfirmOpen(true)}>{lang === 'it' ? 'Scollega chat' : 'Unlink chat'}</Button>
+          </div>
+        )}
+
         <Field label={t('settings.replaceToken')}><Input className="font-mono" placeholder="123456:ABC-…" value={token} onChange={(e) => setToken(e.target.value)} /></Field>
         <div className="mt-4 flex justify-end"><Button onClick={saveToken} disabled={!token}>{t('settings.updateToken')}</Button></div>
       </Card>
@@ -265,6 +342,24 @@ export default function Settings() {
           <div>{t('settings.from')}: {s.vault ?? '(none)'}</div>
           <div>{t('settings.to')}: {vault}</div>
         </div>
+      </Modal>
+
+      <Modal
+        open={unlinkConfirmOpen}
+        title={lang === 'it' ? 'Scollega chat Telegram' : 'Unlink Telegram chat'}
+        onClose={() => setUnlinkConfirmOpen(false)}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setUnlinkConfirmOpen(false)}>{t('common.cancel')}</Button>
+            <Button variant="danger" onClick={unlinkChat}>{lang === 'it' ? 'Scollega' : 'Unlink'}</Button>
+          </>
+        }
+      >
+        <Banner tone="warn">
+          {lang === 'it'
+            ? 'Il bot non risponderà più alla chat attuale. Dovrai generare un nuovo codice e ricollegare via "/link CODICE".'
+            : 'The bot will stop responding to the current chat. You will need to generate a new code and re-link via "/link CODE".'}
+        </Banner>
       </Modal>
     </div>
   );

@@ -3,6 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import http from 'node:http';
 import { config } from './config.js';
+import { query } from './db/index.js';
 import { router } from './api/routes.js';
 import { authRouter } from './auth/routes.js';
 import { attachWs } from './api/ws.js';
@@ -13,6 +14,21 @@ import { startOrchestrator } from './agent/orchestrator.js';
 import { writeMcpConfig } from './mcp/config.js';
 import { refreshExternalMcps } from './claude/external_mcps.js';
 
+const bootedAt = Date.now();
+
+// Resilience (sess.2939): a backend that dies silently while its supervisor still
+// sees a live PID is the worst failure mode (login outage RCA). Surface fatal errors
+// and EXIT so the supervisor (watchdog / launchd KeepAlive) restarts a fresh process,
+// instead of lingering in an undefined state. fail-fast + auto-recover.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException — exiting for supervisor restart:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] unhandledRejection — exiting for supervisor restart:', reason);
+  process.exit(1);
+});
+
 async function main() {
   const app = express();
   app.use(cors({ origin: config.frontendOrigin, credentials: true }));
@@ -20,7 +36,16 @@ async function main() {
   app.use(cookieParser());
   app.use('/api/auth', authRouter);
   app.use('/api', router);
-  app.get('/health', (_req, res) => res.json({ ok: true }));
+  // Liveness probe for the watchdog: verifies the process AND its DB link are alive,
+  // not just that the port answers. Never throws — returns 503 so the supervisor can act.
+  app.get('/health', async (_req, res) => {
+    try {
+      await query('SELECT 1');
+      res.json({ ok: true, uptimeMs: Date.now() - bootedAt });
+    } catch {
+      res.status(503).json({ ok: false, error: 'db_unreachable', uptimeMs: Date.now() - bootedAt });
+    }
+  });
 
   const server = http.createServer(app);
   attachWs(server);

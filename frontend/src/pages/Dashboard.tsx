@@ -50,7 +50,9 @@ export default function Dashboard() {
   useEffect(() => {
     api.messages(100).then(setMsgs).catch(() => {});
     loadState();
-    const id = setInterval(loadState, 15000);
+    // WS drives live updates; this is just a slow safety-net poll for state the socket
+    // does not push (sleep/quiet/status). Was 15s — redundant churn on top of the WS.
+    const id = setInterval(loadState, 60000);
     return () => clearInterval(id);
   }, []);
 
@@ -69,7 +71,7 @@ export default function Dashboard() {
     if (stickRef.current) el.scrollTop = el.scrollHeight;
   }, [msgs]);
 
-  useWS((msg) => {
+  const { connected } = useWS((msg) => {
     if (msg.type === 'message') setMsgs((prev) => [...prev, msg.payload]);
     if (msg.type === 'connector') setEvents((prev) => [msg.payload, ...prev].slice(0, 50));
     if (msg.type === 'subagent') loadState();
@@ -148,10 +150,10 @@ export default function Dashboard() {
         <Card className="lg:col-span-2 flex flex-col h-[80vh]">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">{t('dash.liveStream')}</h2>
-            <Chip tone="on"><span className="inline-block w-1.5 h-1.5 rounded-full bg-ok mr-1.5 animate-pulse" />{t('dash.realtime')}</Chip>
+            <Chip tone={connected ? 'on' : 'default'}><span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 ${connected ? 'bg-ok animate-pulse' : 'bg-muted'}`} />{connected ? t('dash.realtime') : 'offline'}</Chip>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
-            <Kpi icon={<Clock size={14} />} label="Sessione" value={fmtUptime} />
+            <Kpi icon={<Clock size={14} />} label="Tab aperta" value={fmtUptime} />
             <Kpi icon={<MessageSquare size={14} />} label="Msg 24h" value={String(msg24h)} />
             <Kpi icon={<MessageSquare size={14} />} label="Msg 7gg" value={String(msg7d)} />
             <Kpi icon={<MessageSquare size={14} />} label="Msg 30gg" value={String(msg30d)} />

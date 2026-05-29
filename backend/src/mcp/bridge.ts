@@ -6,8 +6,8 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
-const API = process.env.SUPER_AGENT_API ?? 'http://127.0.0.1:8787';
-const USER_ID = process.env.SUPER_AGENT_USER_ID ?? '';
+const API = process.env.POLPO_BRAIN_API ?? 'http://127.0.0.1:8787';
+const USER_ID = process.env.POLPO_BRAIN_USER_ID ?? '';
 
 type ToolDef = { name: string; connector: string; description: string; inputSchema: any };
 
@@ -18,10 +18,10 @@ async function fetchTools(): Promise<ToolDef[]> {
 }
 
 async function invoke(name: string, args: any): Promise<any> {
-  if (!USER_ID) throw new Error('SUPER_AGENT_USER_ID not set in bridge env');
+  if (!USER_ID) throw new Error('POLPO_BRAIN_USER_ID not set in bridge env');
   const res = await fetch(`${API}/api/tools/${encodeURIComponent(name)}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-super-agent-user': USER_ID },
+    headers: { 'content-type': 'application/json', 'x-polpo-brain-user': USER_ID },
     body: JSON.stringify(args ?? {}),
   });
   const body = await res.json().catch(() => ({}));
@@ -33,7 +33,7 @@ async function invoke(name: string, args: any): Promise<any> {
 
 async function main() {
   const server = new Server(
-    { name: 'super-agent', version: '0.1.0' },
+    { name: 'polpo-brain', version: '0.1.0' },
     { capabilities: { tools: {} } }
   );
 

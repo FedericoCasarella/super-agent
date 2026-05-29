@@ -145,6 +145,19 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS agent_runs_user_idx ON agent_runs(user_id);
 
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  cron TEXT NOT NULL,
+  action_type TEXT NOT NULL CHECK (action_type IN ('notify','prompt','tool')),
+  action_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  last_run_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_result TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_tasks' AND column_name='user_id') THEN
     ALTER TABLE scheduled_tasks ADD COLUMN user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
@@ -256,6 +269,22 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
 );
 CREATE INDEX IF NOT EXISTS scheduled_tasks_enabled_idx ON scheduled_tasks(enabled);
 
+-- ─── sess.2817 — single-user enforcement + JWT revocation ──────────────────
+-- (a) Partial unique index on (TRUE) → schema-level guarantee max 1 user row.
+--     Atomic with INSERT, closes TOCTOU race on /auth/initialize even under
+--     concurrent calls. Raises 23505 unique_violation on second insert.
+CREATE UNIQUE INDEX IF NOT EXISTS users_singleton ON users ((TRUE));
+
+-- (b) token_version: bumped on logout / password-change → invalidates
+--     server-side any JWT issued before the bump, even before 365d TTL.
+--     Closes "no revocation" hole on long-lived cookies.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='token_version') THEN
+    ALTER TABLE users ADD COLUMN token_version BIGINT NOT NULL DEFAULT 0;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+-- merge sess.2938: tabelle sub-agent di Federico preservate accanto alla nostra security (union, non override).
 -- Sub-agents (human-in-the-loop spawned by main agent)
 CREATE TABLE IF NOT EXISTS agent_proposals (
   id BIGSERIAL PRIMARY KEY,

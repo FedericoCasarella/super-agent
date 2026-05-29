@@ -3,6 +3,7 @@ import ForceGraph3D, { ForceGraphMethods } from 'react-force-graph-3d';
 import * as THREE from 'three';
 import { api } from '../api';
 import { useWS } from '../ws';
+import { useI18n } from '../i18n';
 
 const MRI_GREEN = '#39ff7a';
 const MRI_DURATION_MS = 4200;
@@ -96,6 +97,7 @@ export default function BrainGraph3DConstellation({
   onOriginsChange?: (origins: string[]) => void;
   onVaultsChange?: (vaults: string[]) => void;
 }) {
+  const { t } = useI18n();
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
   const [hover, setHover] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -654,7 +656,7 @@ export default function BrainGraph3DConstellation({
   return (
     <div ref={wrapRef} className="w-full h-full relative" style={{ background: '#02030a' }}>
       {data.nodes.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center text-muted text-sm z-10">empty vault</div>
+        <div className="absolute inset-0 flex items-center justify-center text-muted text-sm z-10">{t('brain.emptyVault')}</div>
       )}
       <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-1">
         <button
