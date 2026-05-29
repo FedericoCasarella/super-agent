@@ -2,6 +2,11 @@ import { NavLink } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import { useAuth } from '../auth';
 import { Button } from './ui';
+import {
+  Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
+  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight,
+  type LucideIcon,
+} from 'lucide-react';
 
 type Props = {
   collapsed: boolean;
@@ -13,17 +18,17 @@ type Props = {
 export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onCloseMobile }: Props) {
   const { t } = useI18n();
   const { user, logout } = useAuth();
-  const items = [
-    { to: '/', label: t('nav.live'), icon: '◉' },
-    { to: '/connectors', label: t('nav.connectors'), icon: '⚙' },
-    { to: '/brain', label: t('nav.brain'), icon: '✦' },
-    { to: '/roadmap', label: t('nav.roadmap'), icon: '◆' },
-    { to: '/tasks', label: 'Tasks', icon: '◷' },
-    { to: '/agents', label: 'Agents', icon: '⚡' },
-    { to: '/perks', label: 'Perks', icon: '◈' },
-    { to: '/network', label: 'Network', icon: '⌬' },
-    { to: '/logs', label: 'Logs', icon: '▤' },
-    { to: '/settings', label: t('nav.settings'), icon: '⚒' },
+  const items: { to: string; label: string; icon: LucideIcon }[] = [
+    { to: '/dashboard', label: t('nav.live'), icon: Activity },
+    { to: '/connectors', label: t('nav.connectors'), icon: Plug },
+    { to: '/brain', label: t('nav.brain'), icon: Brain },
+    { to: '/roadmap', label: t('nav.roadmap'), icon: MapIcon },
+    { to: '/tasks', label: 'Tasks', icon: ListChecks },
+    { to: '/agents', label: 'Agents', icon: Zap },
+    { to: '/perks', label: 'Perks', icon: Sparkles },
+    { to: '/network', label: 'Network', icon: Share2 },
+    { to: '/logs', label: 'Logs', icon: ScrollText },
+    { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
   ];
   const widthClass = collapsed ? 'md:w-[72px]' : 'md:w-64';
 
@@ -55,39 +60,42 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
         </div>
 
         <nav className="flex flex-col gap-1 mt-2">
-          {items.map((it, i) => (
-            <NavLink
-              key={it.to}
-              to={it.to}
-              end={it.to === '/'}
-              onClick={onCloseMobile}
-              title={collapsed ? it.label : undefined}
-              style={{ animationDelay: `${i * 30}ms` }}
-              className={({ isActive }) =>
-                `group relative flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm transition-all duration-200 ease-out-expo animate-slide-up ${
-                  collapsed ? 'md:justify-center md:px-0' : ''
-                } ${
-                  isActive
-                    ? 'bg-gradient-to-r from-accent/15 to-accent2/10 text-text border border-accent/30 shadow-[0_0_22px_-8px_rgba(192,132,252,0.6)]'
-                    : 'text-muted hover:text-text hover:bg-surface2/60 hover:translate-x-0.5'
-                }`
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-gradient-to-b from-accent to-accent2" />}
-                  <span className={`text-base ${isActive ? 'text-accent2' : 'text-accent/70 group-hover:text-accent2'}`}>{it.icon}</span>
-                  <span className={collapsed ? 'md:hidden' : ''}>{it.label}</span>
-                </>
-              )}
-            </NavLink>
-          ))}
+          {items.map((it, i) => {
+            const Icon = it.icon;
+            return (
+              <NavLink
+                key={it.to}
+                to={it.to}
+                end={it.to === '/dashboard'}
+                onClick={onCloseMobile}
+                title={collapsed ? it.label : undefined}
+                style={{ animationDelay: `${i * 30}ms` }}
+                className={({ isActive }) =>
+                  `group relative flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm transition-all duration-200 ease-out-expo animate-slide-up ${
+                    collapsed ? 'md:justify-center md:px-0' : ''
+                  } ${
+                    isActive
+                      ? 'bg-gradient-to-r from-accent/15 to-accent2/10 text-text border border-accent/30 shadow-[0_0_22px_-8px_rgba(192,132,252,0.6)]'
+                      : 'text-muted hover:text-text hover:bg-surface2/60 hover:translate-x-0.5'
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    {isActive && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-gradient-to-b from-accent to-accent2" />}
+                    <Icon size={18} className={isActive ? 'text-accent2' : 'text-accent/70 group-hover:text-accent2'} />
+                    <span className={collapsed ? 'md:hidden' : ''}>{it.label}</span>
+                  </>
+                )}
+              </NavLink>
+            );
+          })}
         </nav>
 
         <div className="mt-auto px-1 pt-4 border-t border-border/60 space-y-2">
           {!collapsed && <div className="text-xs text-muted truncate font-medium px-1">{user?.name || user?.email}</div>}
           <Button variant="ghost" size="sm" className={`w-full ${collapsed ? 'md:px-2' : ''}`} onClick={logout}>
-            {collapsed ? '↩' : t('nav.logout')}
+            {collapsed ? <LogOut size={16} /> : (<><LogOut size={14} className="inline mr-1.5 -mt-0.5" />{t('nav.logout')}</>)}
           </Button>
           <Button
             variant="ghost"
@@ -96,7 +104,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
             onClick={onToggleCollapse}
             title={collapsed ? t('nav.expand') : t('nav.collapseTip')}
           >
-            {collapsed ? '»' : t('nav.collapse')}
+            {collapsed ? <ChevronsRight size={16} /> : (<><ChevronsLeft size={14} className="inline mr-1.5 -mt-0.5" />{t('nav.collapse')}</>)}
           </Button>
           <div className={`text-[10px] text-muted/70 text-center tracking-widest ${collapsed ? 'md:hidden' : ''}`}>v0.1.0</div>
         </div>

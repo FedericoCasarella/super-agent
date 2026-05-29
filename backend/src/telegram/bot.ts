@@ -88,14 +88,14 @@ async function startBotForUser(userId: number) {
       const draftId = Number(m[1]);
       const action = m[2];
       try {
-        const smtp = await import('../connectors/builtin/smtp/index.js');
+        const email = await import('../connectors/builtin/imap/index.js');
         if (action === 'send') {
           await ctx.answerCbQuery('📤 invio in corso…');
-          await smtp.sendDraft(userId, draftId);
+          await email.sendDraft(userId, draftId);
           try { await ctx.editMessageReplyMarkup(undefined); } catch {}
           try { await ctx.editMessageText('✅ Email inviata.'); } catch {}
         } else {
-          await smtp.denyDraft(userId, draftId);
+          await email.denyDraft(userId, draftId);
           await ctx.answerCbQuery('❌ Bozza scartata');
           try { await ctx.editMessageReplyMarkup(undefined); } catch {}
           try { await ctx.editMessageText('❌ Bozza scartata.'); } catch {}

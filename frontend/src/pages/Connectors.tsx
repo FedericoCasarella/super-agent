@@ -48,7 +48,14 @@ export default function Connectors() {
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg font-semibold">{c.manifest.title}</h3>
-                  <Chip>{c.manifest.name}</Chip>
+                  {c.manifest.name === 'imap' ? (
+                    <>
+                      <Chip tone="accent2">imap</Chip>
+                      <Chip tone="accent">smtp</Chip>
+                    </>
+                  ) : (
+                    <Chip>{c.manifest.name}</Chip>
+                  )}
                 </div>
                 <p className="text-sm text-muted mt-1">{c.manifest.description}</p>
                 {c.manifest.schedule && <div className="text-xs text-muted mt-2">{t('connectors.schedule')}: <span className="font-mono">{c.manifest.schedule}</span></div>}
@@ -62,6 +69,13 @@ export default function Connectors() {
                   <Field key={f.key} label={f.label}>
                     {f.type === 'accounts' ? (
                       <AccountsEditor value={draft[f.key] ?? []} onChange={(v) => setDraft({ ...draft, [f.key]: v })} />
+                    ) : f.type === 'boolean' ? (
+                      <input
+                        type="checkbox"
+                        checked={!!draft[f.key]}
+                        onChange={(e) => setDraft({ ...draft, [f.key]: e.target.checked })}
+                        className="w-4 h-4 rounded border-border bg-surface2 accent-accent"
+                      />
                     ) : (
                       <Input
                         type={f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}

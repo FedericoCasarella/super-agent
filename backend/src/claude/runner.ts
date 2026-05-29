@@ -36,7 +36,10 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   const started = Date.now();
   const kind = opts.kind ?? 'turn';
 
-  const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--model', config.claudeModel];
+  // Inject current datetime (Claude CLI has no clock).
+  const finalPrompt = `now=${new Date().toISOString()}\n\n${prompt}`;
+
+  const args = ['-p', finalPrompt, '--output-format', 'stream-json', '--verbose', '--model', config.claudeModel];
   if (opts.useMcp !== false) {
     args.push('--mcp-config', MCP_CONFIG_PATH);
   }

@@ -76,6 +76,7 @@ export const api = {
   updateTelegram: (token: string) => req('/settings/telegram', { method: 'PUT', body: JSON.stringify({ token }) }),
   updateSound: (enabled: boolean) => req('/settings/sound', { method: 'PUT', body: JSON.stringify({ enabled }) }),
   // Sub-agents
+  emailTest: (account: string) => req<any>('/email/test', { method: 'POST', body: JSON.stringify({ account }) }),
   subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
   subAgentsActive: () => req<any[]>('/sub-agents/active'),
   subAgentsStats: () => req<any>('/sub-agents/stats'),

@@ -326,3 +326,9 @@ CREATE TABLE IF NOT EXISTS email_drafts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS email_drafts_user_status_idx ON email_drafts(user_id, status, created_at DESC);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='email_drafts' AND column_name='account_label') THEN
+    ALTER TABLE email_drafts ADD COLUMN account_label TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;

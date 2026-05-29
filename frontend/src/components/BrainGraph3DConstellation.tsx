@@ -112,14 +112,8 @@ export default function BrainGraph3DConstellation({
       return v;
     });
   };
-  const [showParticles, setShowParticlesState] = useState<boolean>(() => LS_READ('brain_3d_particles', '1') !== '0');
-  const setShowParticles = (next: boolean | ((v: boolean) => boolean)) => {
-    setShowParticlesState((prev) => {
-      const v = typeof next === 'function' ? (next as (v: boolean) => boolean)(prev) : next;
-      LS_WRITE('brain_3d_particles', v ? '1' : '0');
-      return v;
-    });
-  };
+  // Particle field permanently disabled — only static line mode.
+  const showParticles = false;
   const [density, setDensityState] = useState<Density>(() => {
     const v = LS_READ('brain_3d_density', 'med') as Density;
     return DENSITY_PRESETS[v] ? v : 'med';
@@ -175,7 +169,7 @@ export default function BrainGraph3DConstellation({
         if (v.end <= now) mriRef.current.delete(k);
       }
       setMriTick((t) => t + 1);
-    }, 100);
+    }, 500);
     return () => clearInterval(iv);
   }, []);
 
@@ -328,7 +322,7 @@ export default function BrainGraph3DConstellation({
   useEffect(() => {
     const fg: any = fgRef.current;
     if (!fg) return;
-    // OrbitControls autoRotate as fallback (library may pause after cooldown)
+    // Auto-rotate ON (slow), edge particle animations OFF
     const ctrls0: any = fg.controls?.();
     if (ctrls0) { ctrls0.autoRotate = true; ctrls0.autoRotateSpeed = 0.12; }
 
@@ -404,97 +398,25 @@ export default function BrainGraph3DConstellation({
           (f.points.geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
           focusDirtyRef.current = false;
         }
-        // Per-frame node mesh tint + halo for MRI
+        // Per-frame node mesh tint for MRI — solid green when active, restore otherwise (no halo/scale anim)
         if (mriRef.current.size > 0 || haloRef.current.size > 0) {
           const fgAny: any = fg;
           const gd = fgAny.graphData?.() ?? null;
           if (gd) {
             const activeIds = new Set(mriRef.current.keys());
             for (const n of gd.nodes) {
-              const env = mriEnv.get(idToIdxRef.current.get(n.id) ?? -1) ?? 0;
+              const isActive = activeIds.has(n.id);
+              const env = isActive ? 1 : 0;
               const obj = (n as any).__threeObj as THREE.Object3D | undefined;
               if (!obj) continue;
-              // Mesh: hard-set green when active (library nodeColorCb also returns green); add emissive+scale
+              // Solid green color when active, no scale/emissive/halo anim
               obj.traverse((c: any) => {
                 if (c.isMesh && c.material) {
                   const mat: any = c.material;
-                  if (env > 0) {
-                    mat.color.copy(G);
-                    if ('emissive' in mat) {
-                      if (!mat.userData.__baseEmissive) mat.userData.__baseEmissive = mat.emissive.clone();
-                      mat.emissive.copy(G).multiplyScalar(0.8 + env * 2.5);
-                    }
-                  } else {
-                    if (mat.userData.__baseEmissive && 'emissive' in mat) mat.emissive.copy(mat.userData.__baseEmissive);
-                  }
+                  if (!mat.userData.__baseColor) mat.userData.__baseColor = mat.color.clone();
+                  mat.color.copy(env > 0 ? G : mat.userData.__baseColor);
                 }
               });
-              obj.scale.setScalar(env > 0 ? (1 + env * 3.5) : 1);
-              // Composite halo: glow sprite + 3 concentric expanding rings
-              let halo = haloRef.current.get(n.id);
-              if (env > 0) {
-                if (!halo) {
-                  halo = new THREE.Group();
-                  // Glow sprite (radial gradient texture)
-                  const cv = document.createElement('canvas');
-                  cv.width = 128; cv.height = 128;
-                  const cx = cv.getContext('2d')!;
-                  const grd = cx.createRadialGradient(64, 64, 0, 64, 64, 64);
-                  grd.addColorStop(0, 'rgba(150,255,200,1)');
-                  grd.addColorStop(0.35, 'rgba(57,255,122,0.55)');
-                  grd.addColorStop(1, 'rgba(57,255,122,0)');
-                  cx.fillStyle = grd;
-                  cx.fillRect(0, 0, 128, 128);
-                  const tex = new THREE.CanvasTexture(cv);
-                  const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
-                  const glow = new THREE.Sprite(spriteMat);
-                  glow.scale.set(40, 40, 1);
-                  glow.userData.__role = 'glow';
-                  halo.add(glow);
-                  // Inner solid green disc for unmistakable presence
-                  const coreMat = new THREE.SpriteMaterial({ color: MRI_GREEN, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
-                  const core = new THREE.Sprite(coreMat);
-                  core.scale.set(8, 8, 1);
-                  core.userData.__role = 'core';
-                  halo.add(core);
-                  // 5 rings staggered
-                  for (let k = 0; k < 5; k++) {
-                    const ringGeo = new THREE.RingGeometry(3.5, 4.2, 64);
-                    const ringMat = new THREE.MeshBasicMaterial({ color: MRI_GREEN, transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
-                    const ring = new THREE.Mesh(ringGeo, ringMat);
-                    ring.userData.__role = 'ring';
-                    ring.userData.__phase = k / 5;
-                    halo.add(ring);
-                  }
-                  obj.add(halo);
-                  haloRef.current.set(n.id, halo);
-                }
-                // Animate children
-                try {
-                  const camPos = fg.camera().position;
-                  for (const child of halo.children) {
-                    if (child.userData.__role === 'glow') {
-                      const s = 14 + env * 60;
-                      (child as THREE.Sprite).scale.set(s, s, 1);
-                      ((child as THREE.Sprite).material as THREE.SpriteMaterial).opacity = Math.min(1, env * 1.4);
-                    } else if (child.userData.__role === 'core') {
-                      const s = 3 + env * 12;
-                      (child as THREE.Sprite).scale.set(s, s, 1);
-                      ((child as THREE.Sprite).material as THREE.SpriteMaterial).opacity = Math.min(1, env * 1.5);
-                    } else if (child.userData.__role === 'ring') {
-                      child.lookAt(camPos);
-                      const phase = (env + child.userData.__phase) % 1;
-                      const grow = 1 + phase * 11;
-                      child.scale.setScalar(grow);
-                      ((child as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = (1 - phase) * env;
-                    }
-                  }
-                } catch {}
-              } else if (halo) {
-                obj.remove(halo);
-                halo.traverse((c: any) => { if (c.geometry) c.geometry.dispose(); if (c.material) { if (c.material.map) c.material.map.dispose(); c.material.dispose(); } });
-                haloRef.current.delete(n.id);
-              }
               activeIds.delete(n.id);
             }
             // Cleanup halos whose node disappeared
@@ -543,15 +465,13 @@ export default function BrainGraph3DConstellation({
         }
         (f.points.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
       }
-      // Manual perpetual camera orbit around origin — pauses 2s after user interaction
+      // Manual perpetual camera orbit — independent of library render loop
       try {
         const ctrls: any = fg.controls?.();
         const cam = fg.camera?.();
         const target = ctrls?.target;
         const idleMs = performance.now() - lastInteractRef.current;
-        if (ctrls) ctrls.autoRotate = !hoveringRef.current;
         if (cam && target && idleMs > 2000 && !hoveringRef.current) {
-          // Rotate camera around target on Y axis at ~0.12 rad/sec
           const dx = cam.position.x - target.x;
           const dz = cam.position.z - target.z;
           const r = Math.hypot(dx, dz);
@@ -757,25 +677,6 @@ export default function BrainGraph3DConstellation({
           title={showLabels ? 'Nascondi nomi' : 'Mostra nomi'}
         >Aa</button>
         <button
-          onClick={() => setShowParticles((v) => !v)}
-          className={`w-10 h-10 rounded-xl border backdrop-blur transition flex items-center justify-center text-xs font-semibold ${
-            !showParticles
-              ? 'bg-accent/20 border-accent/60 text-accent'
-              : 'bg-surface2/70 border-border text-muted hover:border-accent/50'
-          }`}
-          title={showParticles ? 'Solo righe (no particelle)' : 'Mostra particelle'}
-        >{showParticles ? '≈' : '╱'}</button>
-        <button
-          onClick={() => setDensity((d) => DENSITY_ORDER[(DENSITY_ORDER.indexOf(d) + 1) % DENSITY_ORDER.length])}
-          disabled={!showParticles}
-          className={`w-10 h-10 rounded-xl border backdrop-blur transition flex items-center justify-center text-xs font-semibold ${
-            !showParticles
-              ? 'bg-surface2/40 border-border text-muted/50 cursor-not-allowed'
-              : 'bg-surface2/70 border-border text-text hover:border-accent/50'
-          }`}
-          title={`Densità particelle: ${density.toUpperCase()} (${DENSITY_PRESETS[density]}/nodo). Clicca per cambiare.`}
-        >{DENSITY_LABEL[density]}</button>
-        <button
           onClick={triggerMriDemo}
           className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/60 text-emerald-300 hover:bg-emerald-500/30 backdrop-blur transition flex items-center justify-center text-xs font-semibold"
           title="Demo MRI animation"
@@ -800,17 +701,7 @@ export default function BrainGraph3DConstellation({
           linkColor={linkColor}
           linkOpacity={1}
           linkWidth={linkWidthCb}
-          linkDirectionalParticles={(l: any) => {
-            const focus = hover ?? selected;
-            const sId = typeof l.source === 'object' ? l.source.id : l.source;
-            const tId = typeof l.target === 'object' ? l.target.id : l.target;
-            const now = Date.now();
-            const mriS = mriRef.current.get(sId);
-            const mriT = mriRef.current.get(tId);
-            if ((mriS && mriS.end > now) || (mriT && mriT.end > now)) return 14;
-            if (!focus) return 0;
-            return (sId === focus || tId === focus) ? 10 : 0;
-          }}
+          linkDirectionalParticles={0}
           linkDirectionalParticleSpeed={(l: any) => {
             const focus = hover ?? selected;
             const sId = typeof l.source === 'object' ? l.source.id : l.source;
