@@ -34,6 +34,21 @@ async function main() {
   startOrchestrator();
   await startScheduler();
   await startAllTelegramBots();
+  // Auto-restart WhatsApp sessions for users with existing creds on disk
+  try {
+    const fs = await import('node:fs/promises');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const root = path.join(os.homedir(), '.super-agent', 'wa-sessions');
+    const entries = await fs.readdir(root).catch(() => [] as string[]);
+    const wa = await import('./connectors/builtin/whatsapp/index.js');
+    for (const e of entries) {
+      const m = e.match(/^u(\d+)$/);
+      if (!m) continue;
+      const uid = Number(m[1]);
+      try { await wa.startWaForUser(uid); } catch (err) { console.error(`[wa:u${uid}] boot start failed`, err); }
+    }
+  } catch (e) { console.error('[wa] boot scan failed', e); }
 
   server.listen(config.port, config.host, () => {
     console.log(`[backend] http://${config.host}:${config.port}`);

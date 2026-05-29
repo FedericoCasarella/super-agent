@@ -1,16 +1,40 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import AccountsEditor from '../components/AccountsEditor';
-import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
+import { Button, Card, Chip, Field, Input, Modal, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
+import { useWS } from '../ws';
 
 export default function Connectors() {
   const [items, setItems] = useState<any[]>([]);
   const [externals, setExternals] = useState<any[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Record<string, any>>({});
+  const [waOpen, setWaOpen] = useState(false);
+  const [waState, setWaState] = useState<any>({ status: 'idle' });
 
   const toast = useToast();
+  useWS((msg) => {
+    if (msg.type === 'wa:qr') setWaState((s: any) => ({ ...s, status: 'qr', qr: msg.payload.qr }));
+    if (msg.type === 'wa:connected') setWaState((s: any) => ({ ...s, status: 'connected', me: { jid: msg.payload.jid } }));
+    if (msg.type === 'wa:closed') setWaState((s: any) => ({ ...s, status: 'idle', qr: undefined }));
+  });
+  async function loadWa() { try { setWaState(await api.waStatus()); } catch {} }
+  async function startWa() {
+    try { await api.waStart(); toast.push('Avvio WhatsApp…', 'on'); loadWa(); }
+    catch (e: any) { toast.push(e.message, 'err'); }
+  }
+  async function logoutWa() {
+    if (!confirm('Disconnettere WhatsApp? Sessione cancellata, dovrai riscansionare il QR.')) return;
+    try { await api.waLogout(); toast.push('Disconnesso', 'warn'); loadWa(); }
+    catch (e: any) { toast.push(e.message, 'err'); }
+  }
+  useEffect(() => {
+    if (!waOpen) return;
+    loadWa();
+    const id = setInterval(loadWa, 1500);
+    return () => clearInterval(id);
+  }, [waOpen]);
   const { t } = useI18n();
 
   async function load() {
@@ -97,6 +121,9 @@ export default function Connectors() {
                   <Button variant="ghost" onClick={() => { setEditing(c.manifest.name); setDraft(c.config ?? {}); }}>{t('connectors.configure')}</Button>
                 )}
                 <Button variant="ghost" onClick={() => run(c.manifest.name)}>{t('connectors.runNowBtn')}</Button>
+                {c.manifest.name === 'whatsapp' && (
+                  <Button onClick={() => setWaOpen(true)}>📱 Apri WhatsApp</Button>
+                )}
               </div>
             )}
           </Card>
@@ -127,6 +154,39 @@ export default function Connectors() {
           </Card>
         ))}
       </div>
+
+      <Modal open={waOpen} onClose={() => setWaOpen(false)} title="WhatsApp">
+        <div className="text-center space-y-4">
+          {waState.status === 'idle' && (
+            <>
+              <p className="text-muted text-sm">Avvia la sessione per ricevere messaggi WhatsApp. Verrà mostrato un QR code da scansionare con il tuo telefono.</p>
+              <Button onClick={startWa}>Avvia sessione</Button>
+            </>
+          )}
+          {waState.status === 'starting' && !waState.qr && (
+            <>
+              <p className="text-muted text-sm">Avvio in corso… in attesa del QR (15-30s).</p>
+              <Button variant="ghost" onClick={startWa}>Forza ricarica</Button>
+            </>
+          )}
+          {waState.qr && waState.status !== 'connected' && (
+            <>
+              <p className="text-sm">Apri WhatsApp → ⚙ Impostazioni → Dispositivi collegati → Collega un dispositivo. Scansiona:</p>
+              <img src={waState.qr} alt="QR" className="mx-auto rounded-2xl border border-border bg-white p-2" />
+              <p className="text-xs text-muted">QR aggiornato live. Se scade, attendi: ne arriva uno nuovo automaticamente.</p>
+              <Button variant="ghost" size="sm" onClick={startWa}>Rigenera QR</Button>
+            </>
+          )}
+          {waState.status === 'connected' && (
+            <>
+              <Chip tone="on">✅ Connesso</Chip>
+              {waState.me && <p className="text-xs text-muted font-mono">{waState.me.jid}</p>}
+              <p className="text-sm text-muted">Ricevi messaggi automaticamente. Li trovi nel brain in <code className="font-mono text-accent2">inbox/whatsapp/&lt;persona&gt;/</code> e nello stream live.</p>
+              <Button variant="danger" onClick={logoutWa}>Disconnetti / resetta sessione</Button>
+            </>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }
