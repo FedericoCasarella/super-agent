@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { query } from '../db/index.js';
 import { config } from '../config.js';
 
-export type User = { id: number; email: string; name: string | null; token_version?: number };
+export type User = { id: number; email: string; name: string | null };
 
 declare module 'express-serve-static-core' {
   interface Request { user?: User; }
@@ -18,67 +18,24 @@ export async function verifyPassword(pw: string, hash: string): Promise<boolean>
 }
 
 export function signToken(user: User): string {
-  // Sess.2817 — Polpo Brain is single-user per instance + local-trust device.
-  // 365d TTL: Mattia's master instance and student forks should not see /login
-  // friction across normal usage. Cookie httpOnly + sameSite still protect from XSS/CSRF.
-  // tv (token_version) is bumped on logout/password-change → server-side revocation
-  // even before TTL expiry. Closes long-lived JWT hole flagged by security-review sess.2817.
-  return jwt.sign(
-    { uid: user.id, email: user.email, tv: user.token_version ?? 0 },
-    config.jwtSecret,
-    { expiresIn: '365d' }
-  );
+  return jwt.sign({ uid: user.id, email: user.email }, config.jwtSecret, { expiresIn: '30d' });
 }
-export function verifyToken(token: string): { uid: number; email: string; tv?: number } | null {
+export function verifyToken(token: string): { uid: number; email: string } | null {
   try { return jwt.verify(token, config.jwtSecret) as any; } catch { return null; }
 }
 
-// Bump token_version → invalidates all JWTs issued before this point.
-// Called on logout, password change, or "revoke all sessions".
-export async function bumpTokenVersion(userId: number): Promise<void> {
-  await query('UPDATE users SET token_version = token_version + 1 WHERE id=$1', [userId]);
-}
-
 export async function getUserById(id: number): Promise<User | null> {
-  const rows = await query<User>('SELECT id::int, email, name, token_version::int AS token_version FROM users WHERE id=$1', [id]);
+  const rows = await query<User>('SELECT id::int, email, name FROM users WHERE id=$1', [id]);
   return rows[0] ?? null;
 }
-export async function getUserByEmail(email: string): Promise<{ id: number; email: string; pass_hash: string; name: string | null; token_version: number } | null> {
-  const rows = await query<any>('SELECT id::int, email, pass_hash, name, token_version::int AS token_version FROM users WHERE lower(email)=lower($1)', [email]);
+export async function getUserByEmail(email: string): Promise<{ id: number; email: string; pass_hash: string; name: string | null } | null> {
+  const rows = await query<any>('SELECT id::int, email, pass_hash, name FROM users WHERE lower(email)=lower($1)', [email]);
   return rows[0] ?? null;
 }
 
 export async function countUsers(): Promise<number> {
   const rows = await query<{ c: number }>('SELECT count(*)::int AS c FROM users');
   return rows[0]?.c ?? 0;
-}
-
-// Sovereign Mode (sess.2839) — the instance owner is the first user (lowest id).
-// The single-user-per-instance invariant (users_singleton index) makes this unambiguous.
-export async function getOwner(): Promise<User | null> {
-  const rows = await query<User>('SELECT id::int, email, name, token_version::int AS token_version FROM users ORDER BY id ASC LIMIT 1');
-  return rows[0] ?? null;
-}
-
-// Sovereign Mode trust gate (defence-in-depth, sess.2839 sec-review). ALL must hold
-// before authenticating as the owner without a token:
-//  1. config.sovereign — flag armed (itself fail-closed to a loopback HOST at boot).
-//  2. loopback connection peer — blocks remote / reverse-proxied callers.
-//  3. loopback Host header — blocks DNS-rebinding (browser tricked into hitting
-//     localhost under an attacker hostname still carries the attacker's Host).
-//  4. Origin (if present) == frontendOrigin — blocks cross-site CSRF; absent Origin =
-//     non-browser caller (curl/native) → allowed.
-const LOOPBACK_PEERS = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
-const LOOPBACK_HOSTNAMES = ['127.0.0.1', '::1', 'localhost'];
-export function sovereignTrusted(req: Request): boolean {
-  if (!config.sovereign) return false;
-  const peer = req.socket?.remoteAddress ?? '';
-  if (!LOOPBACK_PEERS.includes(peer)) return false;
-  const hostname = (req.headers.host ?? '').split(':')[0];
-  if (!LOOPBACK_HOSTNAMES.includes(hostname)) return false;
-  const origin = req.headers.origin;
-  if (origin && origin !== config.frontendOrigin) return false;
-  return true;
 }
 
 export async function createUser(email: string, password: string, name: string | null): Promise<User> {
@@ -98,36 +55,20 @@ export async function claimOrphanData(userId: number): Promise<void> {
 }
 
 export async function requireUser(req: Request, res: Response, next: NextFunction) {
-  // Sovereign Mode (sess.2839) — local-trust: recognize the owner without a token, but
-  // only when every trust gate holds (flag + loopback peer + loopback Host + same-origin).
-  // No owner yet → fall through to normal auth so onboarding can create one.
-  if (sovereignTrusted(req)) {
-    const owner = await getOwner();
-    if (owner) { req.user = owner; return next(); }
-  }
   const token = (req as any).cookies?.[config.cookieName];
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
   const data = verifyToken(token);
   if (!data) return res.status(401).json({ error: 'invalid token' });
   const user = await getUserById(data.uid);
   if (!user) return res.status(401).json({ error: 'user not found' });
-  // Sess.2817 — server-side revocation: reject JWTs older than current token_version.
-  // Bumped by logout/password-change. Closes long-lived cookie hole.
-  const tokenTv = data.tv ?? 0;
-  const currentTv = user.token_version ?? 0;
-  if (tokenTv !== currentTv) return res.status(401).json({ error: 'token revoked' });
   req.user = user;
   next();
 }
 
 export function setAuthCookie(res: Response, token: string) {
   res.cookie(config.cookieName, token, {
-    // C3 (sess.2818) — secure flag gated on NODE_ENV=production.
-    // In dev (HTTP localhost) secure:true would prevent cookie set entirely.
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: config.isProduction,
-    maxAge: 365 * 24 * 60 * 60_000,  // 1 year — sess.2817 single-user persistent login
+    httpOnly: true, sameSite: 'lax', secure: false,
+    maxAge: 30 * 24 * 60 * 60_000,
     path: '/',
   });
 }

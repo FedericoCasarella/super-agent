@@ -7,10 +7,10 @@ import { config } from '../config.js';
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const BRIDGE = path.resolve(__dirname, 'bridge.ts');
 
-export const MCP_CONFIG_PATH = path.join(os.tmpdir(), 'polpo-brain-mcp.json');
+export const MCP_CONFIG_PATH = path.join(os.tmpdir(), 'super-agent-mcp.json');
 // MCP server name MUST be a valid identifier (no dashes) — Claude prefixes
 // tool names as `mcp__<server>__<tool>` and dashes break the allow-list match.
-export const MCP_SERVER_NAME = 'polpo_brain';
+export const MCP_SERVER_NAME = 'super_agent';
 
 async function findTsx(): Promise<string> {
   const candidates = [
@@ -31,7 +31,7 @@ export async function writeMcpConfig(): Promise<string> {
         command: tsx,
         args: [BRIDGE],
         env: {
-          POLPO_BRAIN_API: `http://${config.host}:${config.port}`,
+          SUPER_AGENT_API: `http://${config.host}:${config.port}`,
         },
       },
     },

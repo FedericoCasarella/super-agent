@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { randomInt } from 'node:crypto';
 import { query, getSetting, setSetting } from '../db/index.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
 import { buildGraph } from '../brain/graph.js';
@@ -12,19 +11,34 @@ import { requireUser } from '../auth/index.js';
 
 export const router = Router();
 
-// sec sess.2938: precheck Path Traversal per /brain/note — rifiuta rel assoluti,
-// drive Windows, o con segmenti '..'. Difesa veloce prima del realpath-containment.
-function path_isUnsafeRel(rel: string): boolean {
-  if (!rel) return true;
-  if (rel.startsWith('/') || rel.startsWith('\\')) return true;
-  if (/^[a-zA-Z]:[\\/]/.test(rel)) return true;
-  return rel.split(/[\\/]/).some((s) => s === '..');
-}
-
-// merge sess.2938: RIMOSSA la /tools pre-auth di Federico (C2 IDOR — header come userId
-// senza assert, montata prima di requireUser). Ripristinata la nostra versione sicura
-// sotto requireUser (vedi più giù). Il bridge MCP usa un cookie che combacia con
-// POLPO_BRAIN_USER_ID (design sess.2818), non l'header nudo.
+// ===== MCP bridge endpoints — auth via service header `x-super-agent-user`.
+// These MUST be mounted BEFORE requireUser middleware so the local MCP bridge
+// (which has no cookie) can still list/invoke tools.
+router.get('/tools', (_req, res) => {
+  res.json(listTools().map((t) => ({
+    name: t.fullName, connector: t.connector, description: t.description, inputSchema: t.inputSchema,
+  })));
+});
+router.post('/tools/:name', async (req, res) => {
+  const headerUid = Number(req.header('x-super-agent-user') || '');
+  // Prefer header (bridge call) — fall back to cookie session if present
+  let userId = Number.isFinite(headerUid) && headerUid > 0 ? headerUid : NaN;
+  if (!userId) {
+    // Try cookie auth manually
+    const { verifyToken } = await import('../auth/index.js');
+    const { config } = await import('../config.js');
+    const tok = (req as any).cookies?.[config.cookieName];
+    const d = tok ? verifyToken(tok) : null;
+    if (d) userId = d.uid;
+  }
+  if (!userId) return res.status(401).json({ ok: false, error: 'missing user id (header or cookie)' });
+  try {
+    const out = await invokeTool(userId, req.params.name, req.body ?? {});
+    res.json({ ok: true, result: out });
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
 
 // All routes below require auth
 router.use(requireUser);
@@ -57,28 +71,6 @@ router.post('/onboarding/vault', async (req, res) => {
   await setVaultRoot(req.user!.id, vaultPath);
   res.json({ ok: true });
 });
-// H3 (sess.2818) — generate one-time link code for Telegram chatId binding.
-// User generates code here (authenticated), sends to bot via "/link CODE"
-// within 10min. Prevents first-contact race binding on leaked tokens.
-// H3+ (sess.2818, post-review) — CSPRNG via crypto.randomInt instead of
-// Math.random (predictable PRNG, not safe for security-sensitive tokens).
-router.post('/telegram/link-code', async (req, res) => {
-  // 6 chars from 32-symbol alphabet (O/0/I/1 omitted for readability):
-  // ~32^6 = 1.07B combinations, brute-force unviable within 10min TTL.
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const code = Array.from({ length: 6 }, () => chars[randomInt(0, chars.length)]).join('');
-  const expires_at = new Date(Date.now() + 10 * 60_000).toISOString();
-  await setSetting(req.user!.id, 'telegram_link_pending', { code, expires_at });
-  res.json({ code, expires_at, instructions: 'Send "/link ' + code + '" to your bot within 10 minutes.' });
-});
-
-// H3 (sess.2818) — emergency unlink for compromised binding.
-router.post('/telegram/unlink', async (req, res) => {
-  const cur = await getSetting<any>(req.user!.id, 'telegram') ?? {};
-  await setSetting(req.user!.id, 'telegram', { ...cur, chatId: null });
-  res.json({ ok: true });
-});
-
 router.post('/onboarding/telegram', async (req, res) => {
   const { token } = req.body ?? {};
   if (!token) return res.status(400).json({ error: 'token required' });
@@ -146,31 +138,6 @@ router.post('/connectors/imap/test', async (req, res) => {
   }
 });
 
-// MCP bridge endpoints — mounted AFTER requireUser (C2 sess.2818).
-router.get('/tools', (_req, res) => {
-  res.json(listTools().map((t) => ({
-    name: t.fullName, connector: t.connector, description: t.description, inputSchema: t.inputSchema,
-  })));
-});
-
-// Tool invocation. Authoritative user_id from auth context only.
-// C2 (sess.2818) — x-polpo-brain-user header now ASSERTS intent and must match
-// the authenticated user. Header-based impersonation (any authed user could
-// override user_id) is closed. The MCP bridge subprocess must run with a
-// cookie that matches its POLPO_BRAIN_USER_ID env.
-router.post('/tools/:name', async (req, res) => {
-  const headerUid = Number(req.header('x-polpo-brain-user') || '');
-  if (Number.isFinite(headerUid) && headerUid > 0 && headerUid !== req.user!.id) {
-    return res.status(403).json({ ok: false, error: 'x-polpo-brain-user header mismatch with auth context' });
-  }
-  const userId = req.user!.id;
-  try {
-    const out = await invokeTool(userId, req.params.name, req.body ?? {});
-    res.json({ ok: true, result: out });
-  } catch (e: any) {
-    res.status(400).json({ ok: false, error: String(e?.message ?? e) });
-  }
-});
 router.get('/brain/graph', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
   const origin = req.query.origin ? String(req.query.origin) : 'all';
@@ -219,23 +186,12 @@ router.get('/brain/note', async (req, res) => {
     const vs = await listVaults(userId);
     const v = vs.find((x) => x.name === vaultName);
     if (!v) return res.status(404).json({ error: 'vault not found' });
-    // sec sess.2938: Path Traversal fix (security-review HIGH). `rel` arriva dal client →
-    // resolve realpath + assert contenuto nel vault realpath + estensione .md. Fast precheck
-    // rifiuta path assoluti o `..`. Senza questo, rel='../../../etc/passwd' leggeva file arbitrari.
-    if (path_isUnsafeRel(rel)) return res.status(400).json({ error: 'invalid path' });
     try {
       const fs = await import('node:fs/promises');
       const path = await import('node:path');
       const matter = (await import('gray-matter')).default;
-      const vaultReal = await fs.realpath(v.path);
-      const candidate = path.resolve(vaultReal, rel);
-      let fullReal: string;
-      try { fullReal = await fs.realpath(candidate); } catch { return res.status(404).json({ error: 'not found' }); }
-      if (fullReal !== vaultReal && !fullReal.startsWith(vaultReal + path.sep)) {
-        return res.status(400).json({ error: 'invalid path' });
-      }
-      if (!fullReal.toLowerCase().endsWith('.md')) return res.status(400).json({ error: 'invalid file' });
-      const txt = await fs.readFile(fullReal, 'utf8');
+      const fullPath = path.join(v.path, rel);
+      const txt = await fs.readFile(fullPath, 'utf8');
       const parsed = matter(txt);
       return res.json({
         path: raw,

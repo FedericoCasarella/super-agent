@@ -95,7 +95,7 @@ export default function Agents() {
                     <p className="text-sm text-muted line-clamp-2 mt-1">{a.description}</p>
                   </div>
                   <div onClick={(e) => e.stopPropagation()} className="shrink-0">
-                    <Toggle checked={a.enabled} onChange={() => toggle(a)} label={`Abilita ${a.title}`} />
+                    <Toggle checked={a.enabled} onChange={() => toggle(a)} />
                   </div>
                 </div>
                 <div className="mt-4 flex items-center gap-2 text-xs flex-wrap">

@@ -173,7 +173,7 @@ export default function Brain() {
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card className="max-h-[70vh] overflow-y-auto">
-              {items.length === 0 && <div className="text-muted text-sm">{t('brain.listEmpty')}</div>}
+              {items.length === 0 && <div className="text-muted text-sm">Empty.</div>}
               <ul className="space-y-2">
                 {items.map((n) => (
                   <li key={n.path}>
@@ -203,7 +203,7 @@ export default function Brain() {
               </ul>
             </Card>
             <Card className="max-h-[70vh] overflow-y-auto">
-              {!note ? <div className="text-muted text-sm">{t('brain.selectNote')}</div> : (
+              {!note ? <div className="text-muted text-sm">Select a note.</div> : (
                 <div>
                   <div className="text-xs text-muted font-mono mb-2">{note.path}</div>
                   <h2 className="text-lg font-semibold mb-3">{note.title || note.path}</h2>

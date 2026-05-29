@@ -18,28 +18,8 @@ import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
 import MessageSound from './components/MessageSound';
 
-function BackendOffline({ onRetry }: { onRetry: () => Promise<void> }) {
-  const [retrying, setRetrying] = useState(false);
-  return (
-    <div className="h-full flex items-center justify-center p-6">
-      <div className="max-w-sm text-center space-y-4">
-        <div aria-hidden className="w-16 h-16 mx-auto rounded-2xl ring-1 ring-white/10 flex items-center justify-center text-3xl bg-gradient-to-br from-accent/20 to-accent2/20">🐙</div>
-        <h1 className="text-lg font-semibold text-gradient">Polpo Brain non è raggiungibile</h1>
-        <p className="text-sm text-muted">Il backend è offline o non risponde. Non è un problema di accesso — il tuo cervello è solo scollegato.</p>
-        <button
-          onClick={async () => { setRetrying(true); try { await onRetry(); } finally { setRetrying(false); } }}
-          disabled={retrying}
-          className="px-5 py-2.5 rounded-full bg-accent/90 hover:bg-accent text-bg font-medium text-sm transition disabled:opacity-50"
-        >
-          {retrying ? 'Riprovo…' : 'Riprova'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
-  const { user, loading, backendDown, refresh: refreshAuth } = useAuth();
+  const { user, loading } = useAuth();
   const [status, setStatus] = useState<any>(null);
   const [collapsed, setCollapsed] = useState(() => typeof localStorage !== 'undefined' && localStorage.getItem('sidebar_collapsed') === '1');
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -52,7 +32,6 @@ export default function App() {
   }
   useEffect(() => { refresh(); }, [user]);
 
-  if (backendDown) return <BackendOffline onRetry={refreshAuth} />;
   if (loading) return <div className="h-full flex items-center justify-center text-muted">loading…</div>;
   if (!user) return <AuthPage />;
   if (!status) return <div className="h-full flex items-center justify-center text-muted">loading…</div>;
@@ -78,8 +57,8 @@ export default function App() {
             <span className="text-lg">≡</span>
           </button>
           <div className="flex items-center gap-2">
-            <div aria-hidden className="w-7 h-7 rounded-lg ring-1 ring-white/10 flex items-center justify-center text-base bg-gradient-to-br from-accent/20 to-accent2/20">🐙</div>
-            <span className="text-sm font-semibold text-gradient">Polpo Brain</span>
+            <img src="/rounded-image.png" alt="" className="w-7 h-7 rounded-lg ring-1 ring-white/10" />
+            <span className="text-sm font-semibold text-gradient">super-agent</span>
           </div>
           <div className="w-10" />
         </div>

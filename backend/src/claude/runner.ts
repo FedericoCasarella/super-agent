@@ -7,40 +7,14 @@ import { externalMcpAllowEntries } from './external_mcps.js';
 import { listVaults } from '../brain/vaults.js';
 import { bus } from '../bus.js';
 
-export type ClaudeKind = 'reflection' | 'chat_turn' | 'chitchat' | 'proactive' | 'scheduled' | 'turn' | string;
-
 export type ClaudeRunOptions = {
   cwd?: string;
   timeoutMs?: number;
   allowedTools?: string[];
   useMcp?: boolean;
-  kind?: ClaudeKind;
+  kind?: string;
   meta?: Record<string, any>;
-  // Override esplicito del modello (precedenza assoluta su routing)
-  model?: string;
-  // Testo utente (solo per kind='chat_turn') usato dall'heuristic chitchat.
-  // Se <=30 char AND no '?' -> route a haiku (10x piu' economico).
-  userText?: string;
-  // Cooperative cancellation (sess.2939): abort kills the claude child process so a
-  // user-cancelled sub-agent actually stops burning tokens instead of running to completion.
-  signal?: AbortSignal;
 };
-
-const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || 'claude-haiku-4-5-20251001';
-const CHITCHAT_MAX_CHARS = 30;
-
-// Heuristic model routing — chitchat/saluti vanno su Haiku, il resto su Sonnet.
-// Cosi' un "ok"/"grazie"/"ciao" costa ~10x meno di un turn analitico.
-function pickModel(opts: ClaudeRunOptions): string {
-  if (opts.model) return opts.model;
-  const kind = opts.kind ?? 'turn';
-  if (kind === 'chitchat') return HAIKU_MODEL;
-  if (kind === 'chat_turn' && opts.userText) {
-    const t = opts.userText.trim();
-    if (t.length > 0 && t.length <= CHITCHAT_MAX_CHARS && !t.includes('?')) return HAIKU_MODEL;
-  }
-  return config.claudeModel;
-}
 
 export type ClaudeResult = {
   ok: boolean;
@@ -61,7 +35,6 @@ export type ClaudeResult = {
 export async function runClaude(userId: number, prompt: string, opts: ClaudeRunOptions = {}): Promise<ClaudeResult> {
   const started = Date.now();
   const kind = opts.kind ?? 'turn';
-  const model = pickModel(opts);
 
   // Inject current datetime (Claude CLI has no clock).
   const finalPrompt = `now=${new Date().toISOString()}\n\n${prompt}`;
@@ -109,36 +82,20 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     }
     return '';
   }
-  const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null; assistantText: string }>((resolve) => {
+  const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null }>((resolve) => {
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
-      // merge sess.2938: rebrand POLPO_BRAIN_USER_ID + shim SUPER_AGENT_USER_ID
-      // così sia il nostro codice rebrandizzato sia le feature nuove di Federico leggono lo userId.
-      env: { ...process.env, POLPO_BRAIN_USER_ID: String(userId), SUPER_AGENT_USER_ID: String(userId) },
+      env: { ...process.env, SUPER_AGENT_USER_ID: String(userId) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
     let buf = '';
     let finalEvent: any = null;
-<<<<<<< HEAD
     const timeoutMs = opts.timeoutMs ?? 120_000;
     const timer = setTimeout(() => {
       console.error(`[runner:u${userId}:${kind}] TIMEOUT after ${timeoutMs}ms — sending SIGTERM`);
       child.kill('SIGTERM');
     }, timeoutMs);
-=======
-    const timeoutMs = opts.timeoutMs ?? 120_000;
-    const timer = setTimeout(() => {
-      console.error(`[runner:u${userId}:${kind}] TIMEOUT after ${timeoutMs}ms — sending SIGTERM`);
-      child.kill('SIGTERM');
-    }, timeoutMs);
-    let lastAssistantText = ''; // fallback if the 'result' event never arrives (truncation/SIGTERM)
-    const onAbort = () => { try { child.kill('SIGTERM'); } catch {} };
-    if (opts.signal) {
-      if (opts.signal.aborted) onAbort();
-      else opts.signal.addEventListener('abort', onAbort, { once: true });
-    }
->>>>>>> origin/polpo-fork
     child.stdout.on('data', (d) => {
       const s = d.toString();
       stdout += s;
@@ -152,9 +109,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
           const ev = JSON.parse(line);
           // Detect tool_use blocks → emit brain:access
           if (ev?.type === 'assistant' && ev.message?.content) {
-            const turnTexts: string[] = [];
             for (const block of ev.message.content) {
-              if (block?.type === 'text' && typeof block.text === 'string') turnTexts.push(block.text);
               if (block?.type !== 'tool_use') continue;
               const name = block.name as string;
               const input = block.input ?? {};
@@ -187,27 +142,22 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
                 }
               }
             }
-            if (turnTexts.length) lastAssistantText = turnTexts.join('');
           }
           if (ev?.type === 'result') finalEvent = ev;
         } catch {}
       }
     });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => { clearTimeout(timer); opts.signal?.removeEventListener('abort', onAbort); resolve({ stdout, stderr, code, finalEvent, assistantText: lastAssistantText }); });
-    child.on('error', (err) => { clearTimeout(timer); opts.signal?.removeEventListener('abort', onAbort); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null, assistantText: lastAssistantText }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code, finalEvent }); });
+    child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null }); });
   });
 
   const durationMs = Date.now() - started;
   const parsed: any = result.finalEvent;
 
-  // Fallback (sess.2939): stream-json only sets finalEvent on a 'result' line. On a
-  // truncated / SIGTERM'd run that event never arrives → parsed is null → the reply was
-  // silently empty. Fall back to the last streamed assistant text so the user still gets
-  // the partial answer instead of nothing, and treat a clean-exit-with-text as ok.
-  const text = (parsed?.result ?? result.assistantText ?? '').trim();
+  const text = (parsed?.result ?? '').trim();
   const usage = parsed?.usage ?? {};
-  const ok = result.code === 0 && (parsed ? parsed.subtype !== 'error_during_execution' : text.length > 0);
+  const ok = result.code === 0 && !!parsed && parsed.subtype !== 'error_during_execution';
 
   // Build richer stderr when failure: include error subtype + last stdout lines for diagnosis
   let combinedStderr = result.stderr.trim();
@@ -238,7 +188,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
       `INSERT INTO agent_runs(user_id,kind,status,model,duration_ms,input_tokens,output_tokens,cache_creation_tokens,cache_read_tokens,cost_usd,num_turns,prompt,result,meta,error)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15) RETURNING id`,
       [
-        userId, kind, ok ? 'ok' : 'error', model, durationMs,
+        userId, kind, ok ? 'ok' : 'error', config.claudeModel, durationMs,
         out.inputTokens ?? null, out.outputTokens ?? null,
         out.cacheCreationTokens ?? null, out.cacheReadTokens ?? null,
         out.costUsd ?? null, out.numTurns ?? null,

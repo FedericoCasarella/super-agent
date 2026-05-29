@@ -282,32 +282,14 @@ export async function approveShareRequest(myUserId: number, requestId: number, p
   if (!targetVault || !requesterVault) throw new Error('vault missing');
   const peerHandle = (me?.email ?? `u${myUserId}`).replace(/[^a-z0-9]+/gi, '-').toLowerCase();
 
-  // Resolve the canonical vault root once for the path-traversal containment checks below.
-  const targetRoot = await fs.realpath(targetVault);
-
   for (const item of chosen) {
     try {
-      // SECURITY (sess.2939): item.path is agent/peer-influenced (prompt-injection
-      // vector). Reject absolute paths and any `..` segment, then require the resolved
-      // path to stay inside the target vault before reading. realpath also defeats
-      // symlink-escape from a note that points outside the vault.
-      const rel = typeof item.path === 'string' ? item.path : '';
-      if (!rel || path.isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) {
-        console.warn(`[network] rejected unsafe share path: ${JSON.stringify(item.path)}`);
-        continue;
-      }
-      const full = path.resolve(targetVault, rel);
-      const realFull = await fs.realpath(full);
-      if (realFull !== targetRoot && !realFull.startsWith(targetRoot + path.sep)) {
-        console.warn(`[network] rejected out-of-vault share path: ${rel}`);
-        continue;
-      }
-      const raw = await fs.readFile(realFull, 'utf8');
+      const full = path.join(targetVault, item.path);
+      const raw = await fs.readFile(full, 'utf8');
       const parsed = matter(raw);
       // skip if accidentally protected
       if (parsed.data.visibility === 'protected') continue;
-      // rel is validated (relative, no `..`), so newRel stays under shared/<peer>/.
-      const newRel = `shared/${peerHandle}/${rel}`;
+      const newRel = `shared/${peerHandle}/${item.path}`;
       const fm = {
         ...parsed.data,
         origin: {

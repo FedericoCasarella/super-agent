@@ -108,7 +108,7 @@ export default function Logs() {
                 <td className="px-4 py-2 text-muted truncate max-w-[280px]">{r.preview?.slice(0, 90) || '(empty)'}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={10} className="text-center text-muted py-8">{t('logs.empty')}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={10} className="text-center text-muted py-8">empty</td></tr>}
           </tbody>
         </table>
         </div>

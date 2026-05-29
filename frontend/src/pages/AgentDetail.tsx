@@ -91,7 +91,7 @@ export default function AgentDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Toggle checked={agent.enabled} onChange={toggle} label={t('agents.on')} />
+          <Toggle checked={agent.enabled} onChange={toggle} />
           <Button onClick={run} disabled={busy}>{busy ? '…' : t('agents.runNow')}</Button>
         </div>
       </div>
@@ -116,7 +116,7 @@ export default function AgentDetail() {
             <h2 className="text-lg font-semibold mb-1">{t('agents.notifyTitle')}</h2>
             <p className="text-sm text-muted">{t('agents.notifyDesc')}</p>
           </div>
-          <Toggle checked={!!agent.notify_on_run} onChange={toggleNotify} label={t('agents.notifyTitle')} />
+          <Toggle checked={!!agent.notify_on_run} onChange={toggleNotify} />
         </div>
       </Card>
 

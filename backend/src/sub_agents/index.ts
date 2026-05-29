@@ -120,30 +120,20 @@ export async function denyProposal(userId: number, id: number): Promise<void> {
   emit(userId, 'proposal:denied', { id });
 }
 
-// Live cancellation handles (sess.2939): id → AbortController whose signal is wired into
-// runClaude. cancelSubAgent.abort() actually kills the running claude child so a cancelled
-// agent stops burning tokens, instead of only flipping a DB status while it runs to the end.
-const cancellers = new Map<number, AbortController>();
-
 async function runSubAgent(id: number): Promise<void> {
   const rows = await query<SubAgent>(`SELECT * FROM sub_agents WHERE id=$1`, [id]);
   const sa = rows[0];
   if (!sa) return;
-  const started = await query<{ id: number }>(
-    `UPDATE sub_agents SET status='running', started_at=now(), updated_at=now() WHERE id=$1 AND status='pending' RETURNING id`, [id],
+  await query(
+    `UPDATE sub_agents SET status='running', started_at=now(), updated_at=now() WHERE id=$1`, [id],
   );
-  if (!started[0]) return; // cancelled (or already running) before it could start — don't run
   emit(sa.user_id, 'subagent:running', { id });
-  const ac = new AbortController();
-  cancellers.set(id, ac);
   try {
     const result = await runClaude(sa.user_id, sa.prompt, {
       kind: `subagent:${sa.title.slice(0, 32)}`,
       timeoutMs: 600_000,
       meta: { sub_agent_id: id, title: sa.title },
-      signal: ac.signal,
     });
-    if (ac.signal.aborted) return; // user cancelled mid-run — status already 'cancelled', don't resurrect
     const actions = JSON.stringify(result.toolCalls ?? []);
     if (!result.ok) {
       await query(
@@ -161,14 +151,11 @@ async function runSubAgent(id: number): Promise<void> {
     emit(sa.user_id, 'subagent:done', { id, status: 'done' });
     await notifyDone(sa.user_id, sa, 'done', result.text).catch(() => {});
   } catch (e: any) {
-    if (ac.signal.aborted) return; // cancelled — don't overwrite 'cancelled' with 'error'
     await query(
       `UPDATE sub_agents SET status='error', error=$2, ended_at=now(), updated_at=now() WHERE id=$1`,
       [id, String(e?.message ?? e).slice(0, 2000)],
     );
     emit(sa.user_id, 'subagent:done', { id, status: 'error' });
-  } finally {
-    cancellers.delete(id);
   }
 }
 
@@ -208,14 +195,9 @@ export async function getSubAgent(userId: number, id: number): Promise<SubAgent 
 }
 
 export async function cancelSubAgent(userId: number, id: number): Promise<void> {
-  // Flip status first (ownership-scoped, only if actually cancellable) so the runSubAgent
-  // guard sees 'cancelled' and won't resurrect the row; then ACTUALLY kill the running
-  // claude child via its AbortController so it stops burning tokens. (sess.2939)
-  const rows = await query<{ id: number }>(
-    `UPDATE sub_agents SET status='cancelled', ended_at=now(), updated_at=now() WHERE id=$1 AND user_id=$2 AND status IN ('pending','running') RETURNING id`,
+  await query(
+    `UPDATE sub_agents SET status='cancelled', ended_at=now(), updated_at=now() WHERE id=$1 AND user_id=$2 AND status IN ('pending','running')`,
     [id, userId],
   );
-  if (!rows[0]) return; // not found / already finished — nothing to cancel
-  cancellers.get(id)?.abort();
   emit(userId, 'subagent:done', { id, status: 'cancelled' });
 }

@@ -1,40 +1,10 @@
 import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
-import { countUsers, createUser, getUserByEmail, getUserById, getOwner, sovereignTrusted, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken, bumpTokenVersion } from './index.js';
+import { countUsers, createUser, getUserByEmail, getUserById, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken } from './index.js';
 import { config } from '../config.js';
 
 export const authRouter = Router();
 
-// H1 (sess.2818) — rate limit /login per-IP, prevent bruteforce.
-// /register removed sess.2817 — Polpo Brain is not a SaaS: one user per instance,
-// created via /initialize one-shot on first boot. Subsequent /initialize calls 409.
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60_000,
-  max: 20,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'too many login attempts, retry in 15 minutes' },
-});
-// Sess.2817 sec-review — tighter limit on /initialize (1-shot endpoint).
-// Even though gated by countUsers, rate-limit prevents pre-setup DDoS + reduces
-// TOCTOU race window. Schema-level unique index (users_singleton) is the real
-// guarantee; this limiter is defense-in-depth.
-const initializeLimiter = rateLimit({
-  windowMs: 60 * 60_000,  // 1 hour
-  max: 3,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'too many initialize attempts, retry in 1 hour' },
-});
-
 authRouter.get('/me', async (req, res) => {
-  // Sovereign Mode (sess.2839) — the owner is "logged in" on their own machine, but only
-  // under the full trust gate (flag + loopback peer + loopback Host + same-origin).
-  // Frontend sees user != null → enters the app, never renders the login wall.
-  if (sovereignTrusted(req)) {
-    const owner = await getOwner();
-    return res.json({ user: owner });
-  }
   const token = (req as any).cookies?.[config.cookieName];
   if (!token) return res.json({ user: null });
   const data = verifyToken(token);
@@ -43,54 +13,32 @@ authRouter.get('/me', async (req, res) => {
   res.json({ user });
 });
 
-authRouter.get('/bootstrap', async (req, res) => {
+authRouter.get('/bootstrap', async (_req, res) => {
   const c = await countUsers();
-  // per-request sovereign flag (gates checked) so the frontend can skip the login wall.
-  res.json({ usersExist: c > 0, count: c, sovereign: sovereignTrusted(req) });
+  res.json({ usersExist: c > 0, count: c });
 });
 
-// One-shot initialization for fresh Polpo Brain instance. Single-user per instance
-// (not a SaaS). After first user is created, this endpoint returns 409 forever.
-// Onboarding wizard (frontend) is the only legitimate caller.
-//
-// Sess.2817 sec-review hardening:
-//  - Schema-level unique index `users_singleton` (partial unique on TRUE) guarantees
-//    at most 1 row even under concurrent /initialize calls (closes TOCTOU race).
-//  - Rate limit 3/hour per IP (defense-in-depth) via initializeLimiter.
-//  - Fast-path 409 if countUsers > 0 (UX), but real safety is the catch on 23505.
-authRouter.post('/initialize', initializeLimiter, async (req, res) => {
-  const existingCount = await countUsers();
-  if (existingCount > 0) {
-    return res.status(409).json({ error: 'instance already initialized — single user per Polpo Brain instance' });
-  }
+authRouter.post('/register', async (req, res) => {
   const { email, password, name } = req.body ?? {};
   if (!email || !password) return res.status(400).json({ error: 'email + password required' });
   if (password.length < 6) return res.status(400).json({ error: 'password too short (>= 6)' });
+  const existing = await getUserByEmail(email);
+  if (existing) return res.status(409).json({ error: 'email already registered' });
+  const isFirst = (await countUsers()) === 0;
+  const user = await createUser(email, password, name ?? null);
+  if (isFirst) await claimOrphanData(user.id);
+  // Seed default daily anchor tasks (kickoff + evening commit)
   try {
-    const user = await createUser(email, password, name ?? null);
-    await claimOrphanData(user.id);
-    // merge sess.2938: adotta il seed default tasks di Federico (kickoff + evening commit)
-    // dentro il nostro /initialize single-shot. Scartata la logica register (ridondante:
-    // countUsers fast-path + 23505 catch garantiscono già single-user).
-    try {
-      const { seedDefaultTasksForUser } = await import('../scheduler/seed_tasks.js');
-      const { refreshTasks } = await import('../scheduler/tasks.js');
-      if (await seedDefaultTasksForUser(user.id)) await refreshTasks();
-    } catch (e) { console.error('[initialize] seed tasks', e); }
-    const token = signToken(user);
-    setAuthCookie(res, token);
-    res.json({ user, claimedOrphans: true });
-  } catch (e: any) {
-    // PostgreSQL 23505 = unique_violation. Hits either email-unique OR
-    // users_singleton (concurrent /initialize race). Both → 409.
-    if (e?.code === '23505') {
-      return res.status(409).json({ error: 'instance already initialized — single user per Polpo Brain instance' });
-    }
-    throw e;
-  }
+    const { seedDefaultTasksForUser } = await import('../scheduler/seed_tasks.js');
+    const { refreshTasks } = await import('../scheduler/tasks.js');
+    if (await seedDefaultTasksForUser(user.id)) await refreshTasks();
+  } catch (e) { console.error('[register] seed tasks', e); }
+  const token = signToken(user);
+  setAuthCookie(res, token);
+  res.json({ user, claimedOrphans: isFirst });
 });
 
-authRouter.post('/login', loginLimiter, async (req, res) => {
+authRouter.post('/login', async (req, res) => {
   const { email, password } = req.body ?? {};
   if (!email || !password) return res.status(400).json({ error: 'email + password required' });
   const u = await getUserByEmail(email);
@@ -103,11 +51,7 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
   res.json({ user });
 });
 
-authRouter.post('/logout', requireUser, async (req, res) => {
-  // Sess.2817 — bump token_version so any other live JWT for this user
-  // (e.g. cookie copied to another device) is invalidated server-side.
-  // Closes long-lived cookie revocation hole flagged by security-review.
-  if (req.user) await bumpTokenVersion(req.user.id);
+authRouter.post('/logout', requireUser, (_req, res) => {
   clearAuthCookie(res);
   res.json({ ok: true });
 });

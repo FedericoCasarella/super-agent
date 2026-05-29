@@ -1,38 +1,20 @@
 const base = '/api';
 
-// Carries the HTTP status so callers can tell "backend unreachable / 5xx" (infra problem)
-// apart from "401 / 4xx" (auth or client problem). status 0 = network-level failure
-// (backend down, offline) — there is no HTTP response at all. (sess.2939, UX backend-offline state)
-export class ApiError extends Error {
-  status: number;
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-  }
-}
-
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(base + path, {
-      credentials: 'include',
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-      ...init,
-    });
-  } catch (e: any) {
-    // fetch rejects only on network-level failure (backend down, DNS, offline) — no status.
-    throw new ApiError(e?.message ?? 'network error', 0);
-  }
-  if (!res.ok) throw new ApiError(`${res.status} ${await res.text()}`, res.status);
+  const res = await fetch(base + path, {
+    credentials: 'include',
+    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    ...init,
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
 }
 
 export const auth = {
   me: () => req<{ user: { id: number; email: string; name: string | null } | null }>('/auth/me'),
   bootstrap: () => req<{ usersExist: boolean; count: number }>('/auth/bootstrap'),
-  initialize: (email: string, password: string, name?: string) =>
-    req<{ user: any; claimedOrphans?: boolean }>('/auth/initialize', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
+  register: (email: string, password: string, name?: string) =>
+    req<{ user: any; claimedOrphans?: boolean }>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
   login: (email: string, password: string) =>
     req<{ user: any }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   logout: () => req('/auth/logout', { method: 'POST' }),
@@ -64,7 +46,6 @@ export const api = {
   updateInternalAgent: (name: string, data: any) => req(`/internal-agents/${name}`, { method: 'PUT', body: JSON.stringify(data) }),
   runInternalAgent: (name: string) => req<{ status: string; report: any }>(`/internal-agents/${name}/run`, { method: 'POST' }),
   brainIndexFiltered: (visibility: 'all' | 'public' | 'protected') => req<any[]>(`/brain/index?visibility=${visibility}`),
-  // merge sess.2938: adottato multi-vault reale di Federico (il nostro era shim placeholder).
   brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
     req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
   brainStats: () => req<any>('/brain/stats'),
@@ -94,10 +75,6 @@ export const api = {
   updateBusiness: (data: any) => req('/settings/business', { method: 'PUT', body: JSON.stringify(data) }),
   updateTelegram: (token: string) => req('/settings/telegram', { method: 'PUT', body: JSON.stringify({ token }) }),
   updateSound: (enabled: boolean) => req('/settings/sound', { method: 'PUT', body: JSON.stringify({ enabled }) }),
-  // merge sess.2938: tieni entrambi — H3 Telegram link-code (nostro) + sub-agents/proposals (Federico).
-  // H3 (sess.2818) — Telegram chatId binding via one-time code
-  telegramLinkCode: () => req<{ code: string; expires_at: string; instructions: string }>('/telegram/link-code', { method: 'POST' }),
-  telegramUnlink: () => req<{ ok: boolean }>('/telegram/unlink', { method: 'POST' }),
   // Sub-agents
   emailTest: (account: string) => req<any>('/email/test', { method: 'POST', body: JSON.stringify({ account }) }),
   subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
