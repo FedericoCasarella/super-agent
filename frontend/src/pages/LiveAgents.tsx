@@ -65,7 +65,10 @@ export default function LiveAgents() {
     } catch (e: any) { toast.push(e.message, 'err'); }
   }
 
-  useEffect(() => { refresh(); const iv = setInterval(refresh, 5000); return () => clearInterval(iv); }, []);
+  // WS pushes 'subagent' events and triggers refresh below; this is a slow safety-net
+  // poll (was 5s — it remounted every card on each tick, breaking hover/scroll and the
+  // open detail modal). 30s catches Telegram-side proposal changes the socket misses.
+  useEffect(() => { refresh(); const iv = setInterval(refresh, 30000); return () => clearInterval(iv); }, []);
 
   useWS((msg) => {
     if (msg?.type !== 'subagent') return;
