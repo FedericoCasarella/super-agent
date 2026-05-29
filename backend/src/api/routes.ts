@@ -3,7 +3,7 @@ import { randomInt } from 'node:crypto';
 import { query, getSetting, setSetting } from '../db/index.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
 import { buildGraph } from '../brain/graph.js';
-import { listConnectors, ensureUserConnectorRows } from '../connectors/registry.js';
+import { listConnectors, getConnector, ensureUserConnectorRows } from '../connectors/registry.js';
 import { restartTelegramForUser } from '../telegram/bot.js';
 import { bus } from '../bus.js';
 import { runTick } from '../scheduler/index.js';
@@ -105,6 +105,7 @@ router.get('/connectors', async (req, res) => {
   const byName = new Map(rows.map((r) => [r.name, r]));
   const out = listConnectors().map((c) => ({
     manifest: c.manifest,
+    testable: typeof c.test === 'function',
     enabled: byName.get(c.manifest.name)?.enabled ?? false,
     config: byName.get(c.manifest.name)?.config ?? {},
     state: byName.get(c.manifest.name)?.state ?? {},
@@ -128,11 +129,33 @@ router.post('/connectors/:name/run', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Live connectivity check. Tests the unsaved draft config if provided, else the
+// saved config — so the user can validate a key BEFORE committing it.
+router.post('/connectors/:name/test', async (req, res) => {
+  const conn = getConnector(req.params.name);
+  if (!conn?.test) return res.json({ ok: false, error: 'this connector has no test' });
+  let cfg = req.body?.config;
+  if (!cfg || Object.keys(cfg).length === 0) {
+    const rows = await query<{ config: any }>(
+      `SELECT config FROM connectors WHERE user_id=$1 AND name=$2`, [req.user!.id, req.params.name]
+    );
+    cfg = rows[0]?.config ?? {};
+  }
+  try {
+    res.json(await conn.test(cfg));
+  } catch (e: any) {
+    res.json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
+
 router.post('/connectors/imap/test', async (req, res) => {
   const { ImapFlow } = await import('imapflow');
   const { host, port, user, pass, mailbox } = req.body ?? {};
   if (!host || !user || !pass) return res.json({ ok: false, error: 'host, user, pass required' });
   const client = new ImapFlow({ host, port: Number(port ?? 993), secure: true, auth: { user, pass }, logger: false });
+  // Guard against an unhandled socket 'error' event crashing the backend (same class as
+  // the ingestion-path crash fixed in e02bb14 — a test against a bad host must not kill us).
+  client.on('error', (err) => console.error('[imap] test socket error:', (err as any)?.message ?? err));
   try {
     await client.connect();
     const box = mailbox || 'INBOX';

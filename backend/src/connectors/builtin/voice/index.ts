@@ -107,12 +107,31 @@ const connector: Connector = {
     title: 'Voice Transcription',
     description: 'Transcribe Telegram voice/audio messages via Whisper (OpenAI or Groq).',
     configSchema: [
-      { key: 'provider', label: 'Provider (openai | groq | custom)', type: 'text', required: true, placeholder: 'openai' },
+      { key: 'provider', label: 'Provider', type: 'select', options: ['openai', 'groq', 'custom'], required: true, placeholder: 'openai' },
       { key: 'apiKey', label: 'API key', type: 'password', required: true },
       { key: 'baseUrl', label: 'Base URL (optional override)', type: 'text', placeholder: 'https://api.openai.com/v1' },
       { key: 'model', label: 'Model (optional)', type: 'text', placeholder: 'whisper-1 / whisper-large-v3' },
       { key: 'language', label: 'Force language (ISO-639-1)', type: 'text', placeholder: 'it' },
     ],
+  },
+  async test(cfg) {
+    const provider = (cfg.provider as string) || 'openai';
+    const defaults = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.openai;
+    const baseUrl = (cfg.baseUrl as string) || defaults.baseUrl;
+    const apiKey = cfg.apiKey as string | undefined;
+    if (!apiKey) return { ok: false, error: 'apiKey missing' };
+    if (!baseUrl) return { ok: false, error: 'baseUrl missing' };
+    try {
+      const res = await fetch(`${baseUrl}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+      if (!res.ok) {
+        const body = (await res.text().catch(() => '')).slice(0, 160);
+        return { ok: false, error: `${res.status} ${body}`.trim() };
+      }
+      const model = (cfg.model as string) || defaults.model;
+      return { ok: true, detail: `${provider} reachable · model ${model} · lang ${cfg.language || 'auto'}` };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
   },
   tools: [
     {

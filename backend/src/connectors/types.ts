@@ -1,9 +1,10 @@
 export type ConnectorConfigField = {
   key: string;
   label: string;
-  type: 'text' | 'password' | 'number' | 'boolean' | 'accounts';
+  type: 'text' | 'password' | 'number' | 'boolean' | 'accounts' | 'select';
   required?: boolean;
   placeholder?: string;
+  options?: string[]; // for type='select'
 };
 
 export type ConnectorManifest = {
@@ -29,9 +30,13 @@ export type ConnectorTool = {
   handler: (ctx: ConnectorContext, args: any) => Promise<any>;
 };
 
+export type ConnectorTestResult = { ok: boolean; detail?: string; error?: string };
+
 export type Connector = {
   manifest: ConnectorManifest;
   onTick?: (ctx: ConnectorContext) => Promise<void>;
   onMessage?: (ctx: ConnectorContext, message: string) => Promise<void>;
   tools?: ConnectorTool[];
+  // Optional live connectivity check against the provider, given a (possibly unsaved) config.
+  test?: (cfg: Record<string, any>) => Promise<ConnectorTestResult>;
 };

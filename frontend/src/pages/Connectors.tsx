@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import AccountsEditor from '../components/AccountsEditor';
-import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
+import { Button, Card, Chip, Field, Input, Select, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 
 export default function Connectors() {
@@ -9,6 +9,19 @@ export default function Connectors() {
   const [externals, setExternals] = useState<any[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Record<string, any>>({});
+  const [reveal, setReveal] = useState<Record<string, boolean>>({});
+
+  // A connector is "configured" when every required field has a non-empty value.
+  function isConfigured(c: any): boolean {
+    const req = (c.manifest.configSchema as any[]).filter((f) => f.required);
+    return req.every((f) => { const v = c.config?.[f.key]; return v != null && String(v).length > 0; });
+  }
+  // Disable Save while any required field in the current draft is still empty.
+  function draftMissingRequired(c: any): boolean {
+    return (c.manifest.configSchema as any[])
+      .filter((f) => f.required)
+      .some((f) => { const v = draft[f.key]; return v == null || String(v).length === 0; });
+  }
 
   const toast = useToast();
   const { t } = useI18n();
@@ -35,6 +48,17 @@ export default function Connectors() {
     await api.runConnector(name);
     toast.push(t('connectors.toastTickStarted').replace('{name}', name), 'info');
   }
+  // Live test of the current draft config — honest feedback instead of a blind "saved".
+  async function test(name: string) {
+    toast.push(`Testing ${name}…`, 'info');
+    try {
+      const r = await api.testConnector(name, draft);
+      if (r.ok) toast.push(r.detail || 'OK', 'on');
+      else toast.push(`✗ ${r.error || 'failed'}`, 'err');
+    } catch (e: any) {
+      toast.push(`✗ ${String(e?.message ?? e)}`, 'err');
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -49,22 +73,55 @@ export default function Connectors() {
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg font-semibold">{c.manifest.title}</h3>
                   <Chip>{c.manifest.name}</Chip>
+                  {c.manifest.configSchema.length > 0 && (
+                    isConfigured(c)
+                      ? <Chip tone="on">✓ configured</Chip>
+                      : <Chip tone="warn">⚠ needs config</Chip>
+                  )}
                 </div>
                 <p className="text-sm text-muted mt-1">{c.manifest.description}</p>
                 {c.manifest.schedule && <div className="text-xs text-muted mt-2">{t('connectors.schedule')}: <span className="font-mono">{c.manifest.schedule}</span></div>}
               </div>
-              <Toggle checked={c.enabled} onChange={(v) => toggle(c.manifest.name, v)} />
+              <Toggle checked={c.enabled} onChange={(v) => toggle(c.manifest.name, v)} label={`Abilita/disabilita ${c.manifest.title}`} />
             </div>
 
             {editing === c.manifest.name ? (
               <div className="mt-4 space-y-3">
                 {c.manifest.configSchema.map((f: any) => (
-                  <Field key={f.key} label={f.label}>
+                  <Field key={f.key} label={f.required ? `${f.label} *` : f.label}>
                     {f.type === 'accounts' ? (
                       <AccountsEditor value={draft[f.key] ?? []} onChange={(v) => setDraft({ ...draft, [f.key]: v })} />
+                    ) : f.type === 'select' ? (
+                      <Select
+                        value={draft[f.key] ?? ''}
+                        onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+                      >
+                        <option value="" disabled>{f.placeholder ?? '—'}</option>
+                        {(f.options ?? []).map((opt: string) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </Select>
+                    ) : f.type === 'password' ? (
+                      <div className="relative">
+                        <Input
+                          type={reveal[f.key] ? 'text' : 'password'}
+                          placeholder={f.placeholder}
+                          value={draft[f.key] ?? ''}
+                          onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+                          className="pr-12"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setReveal({ ...reveal, [f.key]: !reveal[f.key] })}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text text-sm"
+                          aria-label={reveal[f.key] ? 'Hide' : 'Reveal'}
+                        >
+                          {reveal[f.key] ? '🙈' : '👁'}
+                        </button>
+                      </div>
                     ) : (
                       <Input
-                        type={f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}
+                        type={f.type === 'number' ? 'number' : 'text'}
                         placeholder={f.placeholder}
                         value={draft[f.key] ?? ''}
                         onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
@@ -74,7 +131,10 @@ export default function Connectors() {
                 ))}
                 <div className="flex gap-2 justify-end">
                   <Button variant="ghost" onClick={() => setEditing(null)}>{t('connectors.cancel')}</Button>
-                  <Button onClick={() => save(c.manifest.name)}>{t('connectors.save')}</Button>
+                  {c.testable && (
+                    <Button variant="ghost" disabled={draftMissingRequired(c)} onClick={() => test(c.manifest.name)}>Test</Button>
+                  )}
+                  <Button disabled={draftMissingRequired(c)} onClick={() => save(c.manifest.name)}>{t('connectors.save')}</Button>
                 </div>
               </div>
             ) : (
