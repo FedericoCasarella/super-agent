@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import ForceGraph2D, { ForceGraphMethods } from 'react-force-graph-2d';
 import { api } from '../api';
+import { useI18n } from '../i18n';
 
 type Node = { id: string; title: string; kind: string; tags: string[]; size: number; visibility?: 'protected' | 'public' | null; origin_email?: string | null; x?: number; y?: number };
 type Link = { source: string | Node; target: string | Node };
@@ -76,6 +77,7 @@ export default function BrainGraph3D({
   onOriginsChange?: (origins: string[]) => void;
   onVaultsChange?: (vaults: string[]) => void;
 }) {
+  const { t } = useI18n();
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
   const [hover, setHover] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -281,7 +283,7 @@ export default function BrainGraph3D({
   return (
     <div ref={wrapRef} className="w-full h-full relative" style={{ background: '#0f0f12' }}>
       {data.nodes.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">empty vault</div>
+        <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">{t('brain.emptyVault')}</div>
       )}
       <ForceGraph2D
         ref={fgRef as any}
