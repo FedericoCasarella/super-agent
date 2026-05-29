@@ -1,12 +1,30 @@
 const base = '/api';
 
+// Carries the HTTP status so callers can tell "backend unreachable / 5xx" (infra problem)
+// apart from "401 / 4xx" (auth or client problem). status 0 = network-level failure
+// (backend down, offline) — there is no HTTP response at all. (sess.2939, UX backend-offline state)
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(base + path, {
-    credentials: 'include',
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-    ...init,
-  });
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  let res: Response;
+  try {
+    res = await fetch(base + path, {
+      credentials: 'include',
+      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      ...init,
+    });
+  } catch (e: any) {
+    // fetch rejects only on network-level failure (backend down, DNS, offline) — no status.
+    throw new ApiError(e?.message ?? 'network error', 0);
+  }
+  if (!res.ok) throw new ApiError(`${res.status} ${await res.text()}`, res.status);
   return res.json();
 }
 
