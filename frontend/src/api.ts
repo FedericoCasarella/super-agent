@@ -100,6 +100,7 @@ export const api = {
   telegramLinkCode: () => req<{ code: string; expires_at: string; instructions: string }>('/telegram/link-code', { method: 'POST' }),
   telegramUnlink: () => req<{ ok: boolean }>('/telegram/unlink', { method: 'POST' }),
   // Sub-agents
+  emailTest: (account: string) => req<any>('/email/test', { method: 'POST', body: JSON.stringify({ account }) }),
   subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
   subAgentsActive: () => req<any[]>('/sub-agents/active'),
   subAgentsStats: () => req<any>('/sub-agents/stats'),

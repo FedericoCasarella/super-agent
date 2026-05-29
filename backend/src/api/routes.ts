@@ -116,9 +116,10 @@ router.get('/connectors', async (req, res) => {
 router.put('/connectors/:name', async (req, res) => {
   const { enabled, config } = req.body ?? {};
   await ensureUserConnectorRows(req.user!.id);
+  const cfgJson = config !== undefined ? JSON.stringify(config) : null;
   await query(
-    `UPDATE connectors SET enabled=COALESCE($3,enabled), config=COALESCE($4,config), updated_at=now() WHERE user_id=$1 AND name=$2`,
-    [req.user!.id, req.params.name, enabled ?? null, config ?? null]
+    `UPDATE connectors SET enabled=COALESCE($3,enabled), config=COALESCE($4::jsonb,config), updated_at=now() WHERE user_id=$1 AND name=$2`,
+    [req.user!.id, req.params.name, enabled ?? null, cfgJson]
   );
   bus.emit('connectors:changed');
   res.json({ ok: true });
@@ -631,6 +632,30 @@ router.post('/agent-proposals/:id/deny', async (req, res) => {
   const sa = await import('../sub_agents/index.js');
   try { await sa.denyProposal(req.user!.id, Number(req.params.id)); res.json({ ok: true }); }
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Email drafts (IMAP+SMTP human-in-the-loop)
+router.get('/email-drafts', async (req, res) => {
+  const m = await import('../connectors/builtin/imap/index.js');
+  const status = req.query.status ? String(req.query.status) : undefined;
+  res.json(await m.listDrafts(req.user!.id, status));
+});
+router.post('/email-drafts/:id/send', async (req, res) => {
+  const m = await import('../connectors/builtin/imap/index.js');
+  try { const d = await m.sendDraft(req.user!.id, Number(req.params.id)); res.json(d); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/email-drafts/:id/deny', async (req, res) => {
+  const m = await import('../connectors/builtin/imap/index.js');
+  await m.denyDraft(req.user!.id, Number(req.params.id));
+  res.json({ ok: true });
+});
+router.post('/email/test', async (req, res) => {
+  const m = await import('../connectors/builtin/imap/index.js');
+  const account = String(req.body?.account ?? '');
+  if (!account) return res.status(400).json({ ok: false, error: 'account label required' });
+  try { res.json(await m.sendTestEmail(req.user!.id, account)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
 
 router.get('/mcp/external', async (req, res) => {

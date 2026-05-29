@@ -72,7 +72,14 @@ export default function Connectors() {
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg font-semibold">{c.manifest.title}</h3>
-                  <Chip>{c.manifest.name}</Chip>
+                  {c.manifest.name === 'imap' ? (
+                    <>
+                      <Chip tone="accent2">imap</Chip>
+                      <Chip tone="accent">smtp</Chip>
+                    </>
+                  ) : (
+                    <Chip>{c.manifest.name}</Chip>
+                  )}
                   {c.manifest.configSchema.length > 0 && (
                     isConfigured(c)
                       ? <Chip tone="on">✓ configured</Chip>
@@ -119,6 +126,13 @@ export default function Connectors() {
                           {reveal[f.key] ? '🙈' : '👁'}
                         </button>
                       </div>
+                    ) : f.type === 'boolean' ? (
+                      <input
+                        type="checkbox"
+                        checked={!!draft[f.key]}
+                        onChange={(e) => setDraft({ ...draft, [f.key]: e.target.checked })}
+                        className="w-4 h-4 rounded border-border bg-surface2 accent-accent"
+                      />
                     ) : (
                       <Input
                         type={f.type === 'number' ? 'number' : 'text'}

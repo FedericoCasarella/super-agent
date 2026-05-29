@@ -168,6 +168,10 @@ export async function buildSystemContext(userId: number): Promise<string> {
   );
 
   parts.push(
+    'EMAIL REPLIES — Se ricevi una mail (via IMAP) o l\'utente chiede di rispondere a qualcuno, NON inviare mai direttamente. Usa `mcp__polpo_brain__imap_propose_reply` con account (label dell\'account email da cui inviare — usa lo STESSO account che ha ricevuto l\'email originale), to, subject, body (+ inReplyTo se hai il Message-ID per il threading). Il backend salva bozza + manda Telegram con keyboard ✅ Invia / ❌ Scarta. L\'utente decide. Firma sempre con il nome dell\'utente.'
+  );
+
+  parts.push(
     'TELEGRAM REACTIONS — Per messaggi brevi/banali/acknowledgement dell\'utente, invece di rispondere a parole puoi reagire con un\'emoji via `mcp__polpo_brain__agent_telegram_react`. Usa con parsimonia: 👍 conferma, ❤️/🔥 entusiasmo, 🎉 celebrazione, 🤔 sto pensando, 🙏 grazie, 👌 ricevuto. Se reagisci e basta, restituisci la risposta SKIP per evitare il messaggio di testo. NON reagire a domande, richieste operative o messaggi che richiedono risposta. Reagisci max 1 volta ogni 3-4 turni — non spammare.'
   );
 

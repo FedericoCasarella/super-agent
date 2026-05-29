@@ -10,17 +10,24 @@ export type Account = {
   pass: string;
   mailbox?: string;
   initialBacklog?: number;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpUser?: string;
+  smtpPass?: string;
+  smtpFromName?: string;
 };
 
 type Props = { value: Account[]; onChange: (next: Account[]) => void };
 
-const blank: Account = { label: '', host: 'imap.gmail.com', port: 993, user: '', pass: '', mailbox: 'INBOX', initialBacklog: 0 };
+const blank: Account = { label: '', host: 'imap.gmail.com', port: 993, user: '', pass: '', mailbox: 'INBOX', initialBacklog: 0, smtpHost: 'smtp.gmail.com', smtpPort: 587, smtpSecure: false, smtpFromName: '' };
 
 export default function AccountsEditor({ value, onChange }: Props) {
   const accounts = value ?? [];
   const [open, setOpen] = useState<number | null>(accounts.length === 0 ? -1 : null);
   const [testing, setTesting] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<Record<number, { ok: boolean; msg: string }>>({});
+  const [sendingTest, setSendingTest] = useState<number | null>(null);
   const toast = useToast();
 
   function update(i: number, patch: Partial<Account>) {
@@ -56,6 +63,18 @@ export default function AccountsEditor({ value, onChange }: Props) {
     } finally { setTesting(null); }
   }
 
+  async function sendTestEmail(i: number) {
+    const a = accounts[i];
+    if (!a.label) { toast.push('Label richiesta', 'err'); return; }
+    setSendingTest(i);
+    try {
+      const r = await api.emailTest(a.label);
+      if (r.ok) toast.push(`Test inviato a ${r.to}`, 'on');
+      else toast.push(`Errore: ${String(r.error ?? 'sconosciuto').slice(0, 200)}`, 'err');
+    } catch (e: any) { toast.push(e.message, 'err'); }
+    finally { setSendingTest(null); }
+  }
+
   return (
     <div className="space-y-3">
       {accounts.map((a, i) => (
@@ -76,11 +95,30 @@ export default function AccountsEditor({ value, onChange }: Props) {
               <Field label="User"><Input value={a.user} onChange={(e) => update(i, { user: e.target.value })} placeholder="you@gmail.com" /></Field>
               <Field label="Password (app password)"><Input type="password" value={a.pass} onChange={(e) => update(i, { pass: e.target.value })} /></Field>
               <div className="col-span-2"><Field label="Initial backlog (0 = only new)"><Input type="number" value={a.initialBacklog ?? 0} onChange={(e) => update(i, { initialBacklog: Number(e.target.value) })} /></Field></div>
-              <div className="col-span-2 flex items-center justify-between gap-3">
+
+              <div className="col-span-2 border-t border-border pt-3 mt-2">
+                <div className="text-xs uppercase tracking-wider text-accent2 mb-2 font-semibold">SMTP (invio risposte)</div>
+              </div>
+              <Field label="SMTP host"><Input value={a.smtpHost ?? ''} onChange={(e) => update(i, { smtpHost: e.target.value })} placeholder="smtp.gmail.com" /></Field>
+              <Field label="SMTP port"><Input type="number" value={a.smtpPort ?? 587} onChange={(e) => update(i, { smtpPort: Number(e.target.value) })} placeholder="587" /></Field>
+              <Field label="SSL">
+                <input type="checkbox" checked={!!a.smtpSecure} onChange={(e) => update(i, { smtpSecure: e.target.checked })} className="w-4 h-4 rounded border-border bg-surface2 accent-accent" />
+              </Field>
+              <Field label="From name (opz.)"><Input value={a.smtpFromName ?? ''} onChange={(e) => update(i, { smtpFromName: e.target.value })} placeholder="Federico Casarella" /></Field>
+              <div className="col-span-2 text-[11px] text-muted">SMTP user/pass = IMAP user/pass. Lascia vuoti se uguali.</div>
+              <Field label="SMTP user (override)"><Input value={a.smtpUser ?? ''} onChange={(e) => update(i, { smtpUser: e.target.value })} placeholder="(usa IMAP user)" /></Field>
+              <Field label="SMTP pass (override)"><Input type="password" value={a.smtpPass ?? ''} onChange={(e) => update(i, { smtpPass: e.target.value })} placeholder="(usa IMAP pass)" /></Field>
+
+              <div className="col-span-2 flex items-center justify-between gap-3 flex-wrap pt-2">
                 <div>{testResult[i] && <Chip tone={testResult[i].ok ? 'on' : 'err'}>{testResult[i].msg}</Chip>}</div>
-                <Button variant="ghost" size="sm" onClick={() => test(i)} disabled={testing === i || !a.host || !a.user || !a.pass}>
-                  {testing === i ? 'Testing…' : 'Test connection'}
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => test(i)} disabled={testing === i || !a.host || !a.user || !a.pass}>
+                    {testing === i ? 'Testing…' : 'Test IMAP'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => sendTestEmail(i)} disabled={sendingTest === i || !a.label}>
+                    {sendingTest === i ? 'Inviando…' : '📧 Invia test SMTP'}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
