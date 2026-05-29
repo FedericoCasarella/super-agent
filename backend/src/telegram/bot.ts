@@ -345,3 +345,59 @@ export async function startTyping(userId: number): Promise<() => void> {
   const t = setInterval(tick, 4000);
   return () => clearInterval(t);
 }
+
+// merge sess.2938: innestati da origin/main (Federico) — usati da sub_agents + agent connector.
+// Il nostro --ours bot.ts non li aveva → tsc TS2339. Grafted per sbloccare la compilazione.
+const TG_REACTIONS = new Set(['👍','👎','❤','🔥','🥰','👏','😁','🤔','🤯','😱','🤬','😢','🎉','🤩','🤮','💩','🙏','👌','🕊','🤡','🥱','🥴','😍','🐳','❤‍🔥','🌚','🌭','💯','🤣','⚡','🍌','🏆','💔','🤨','😐','🍓','🍾','💋','🖕','😈','😴','😭','🤓','👻','👨‍💻','👀','🎃','🙈','😇','😨','🤝','✍','🤗','🫡','🎅','🎄','☃','💅','🤪','🗿','🆒','💘','🙉','🦄','😘','💊','🙊','😎','👾','🤷‍♂','🤷','🤷‍♀','😡']);
+
+export async function sendReaction(userId: number, chatId: number, messageId: number, emoji: string): Promise<boolean> {
+  if (!TG_REACTIONS.has(emoji)) throw new Error(`emoji not allowed: ${emoji}`);
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) throw new Error(`telegram bot init failed for user ${userId}`);
+  try {
+    await entry.bot.telegram.callApi('setMessageReaction' as any, {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{ type: 'emoji', emoji }],
+      is_big: false,
+    });
+    return true;
+  } catch (e: any) {
+    console.error('[telegram] setMessageReaction failed', e?.message ?? e);
+    return false;
+  }
+}
+
+export async function sendProposalKeyboard(userId: number, proposal: { id: number; title: string; reason: string | null; proposals: { title: string; brief: string }[] }): Promise<{ message_id: number; chat_id: number } | null> {
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return null;
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return null;
+  const chatId = cfg.chatId;
+  const body = [
+    `🤖 *${proposal.title}*`,
+    proposal.reason ? `\n${proposal.reason}` : '',
+    '',
+    'Vorrei lanciare in parallelo:',
+    ...proposal.proposals.map((p, i) => `${i + 1}. *${p.title}* — ${p.brief}`),
+    '',
+    'Procedo?',
+  ].filter(Boolean).join('\n');
+  try {
+    const sent = await entry.bot.telegram.sendMessage(chatId, body, {
+      parse_mode: 'Markdown' as any,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ Sì, procedi', callback_data: `proposal:${proposal.id}:approve` },
+          { text: '❌ No', callback_data: `proposal:${proposal.id}:deny` },
+        ]],
+      },
+    });
+    return { message_id: (sent as any).message_id, chat_id: chatId };
+  } catch (e: any) {
+    console.error('[telegram] proposal send failed', e?.message ?? e);
+    return null;
+  }
+}
