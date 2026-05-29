@@ -21,6 +21,9 @@ export type ClaudeRunOptions = {
   // Testo utente (solo per kind='chat_turn') usato dall'heuristic chitchat.
   // Se <=30 char AND no '?' -> route a haiku (10x piu' economico).
   userText?: string;
+  // Cooperative cancellation (sess.2939): abort kills the claude child process so a
+  // user-cancelled sub-agent actually stops burning tokens instead of running to completion.
+  signal?: AbortSignal;
 };
 
 const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || 'claude-haiku-4-5-20251001';
@@ -118,6 +121,11 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     let finalEvent: any = null;
     let lastAssistantText = ''; // fallback if the 'result' event never arrives (truncation/SIGTERM)
     const timer = setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs ?? 120_000);
+    const onAbort = () => { try { child.kill('SIGTERM'); } catch {} };
+    if (opts.signal) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
     child.stdout.on('data', (d) => {
       const s = d.toString();
       stdout += s;
@@ -161,8 +169,8 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
       }
     });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code, finalEvent, assistantText: lastAssistantText }); });
-    child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null, assistantText: lastAssistantText }); });
+    child.on('close', (code) => { clearTimeout(timer); opts.signal?.removeEventListener('abort', onAbort); resolve({ stdout, stderr, code, finalEvent, assistantText: lastAssistantText }); });
+    child.on('error', (err) => { clearTimeout(timer); opts.signal?.removeEventListener('abort', onAbort); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null, assistantText: lastAssistantText }); });
   });
 
   const durationMs = Date.now() - started;
