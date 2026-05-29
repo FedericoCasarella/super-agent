@@ -98,7 +98,10 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
   const ok = await verifyPassword(password, u.pass_hash);
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
   const user = { id: u.id, email: u.email, name: u.name };
-  const token = signToken(user);
+  // Sess.2941 — thread stored token_version into the JWT. getUserByEmail returns it,
+  // but dropping it here minted tv:0 tokens that requireUser rejects after any logout
+  // (bumpTokenVersion >= 1), instantly self-locking the owner on every /api/* call.
+  const token = signToken({ ...user, token_version: u.token_version });
   setAuthCookie(res, token);
   res.json({ user });
 });

@@ -3,6 +3,14 @@ import { config } from '../config.js';
 
 export const pool = new pg.Pool({ connectionString: config.databaseUrl });
 
+// Idle clients emit 'error' out-of-band (Postgres restart, sleep/wake, TCP RST,
+// idle_in_transaction_session_timeout). This is NOT tied to any awaited query,
+// so no try/catch can catch it — unhandled it would reach the fatal guard and
+// kill the backend. Log it and let the pool re-establish connections.
+pool.on('error', (err) => {
+  console.error('[db] idle client error (pool stays up):', err?.message ?? err);
+});
+
 export async function query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   const res = await pool.query(sql, params);
   return res.rows as T[];

@@ -46,6 +46,25 @@ function toTelegramHtml(raw: string): string {
   return s;
 }
 
+// Telegram rejects sendMessage with text > 4096 chars (400 MESSAGE_TOO_LONG).
+// Split the RAW text (before toTelegramHtml) on paragraph/line boundaries into
+// <=TELEGRAM_MAX_CHARS pieces so per-chunk HTML conversion keeps tags intact.
+const TELEGRAM_MAX_CHARS = 4000;
+function chunkForTelegram(text: string, limit = TELEGRAM_MAX_CHARS): string[] {
+  if (text.length <= limit) return [text];
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > limit) {
+    let cut = rest.lastIndexOf('\n', limit);
+    if (cut <= 0) cut = rest.lastIndexOf(' ', limit);
+    if (cut <= 0) cut = limit; // no boundary found → hard cut
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\n+/, '');
+  }
+  if (rest.length) chunks.push(rest);
+  return chunks;
+}
+
 async function startBotForUser(userId: number): Promise<void> {
   // Coalesce concurrent starts: any caller while a start is in-flight awaits the same promise.
   const inFlight = startInFlight.get(userId);
@@ -259,6 +278,7 @@ ${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a
           }
           console.error(`[telegram:${userId}] launch (attempt ${attempt})`, e);
           entry.state = 'stopped';
+          bus.emit('telegram:stopped', { userId, code });
           return;
         }
       }
@@ -325,12 +345,14 @@ export async function sendTelegram(userId: number, text: string) {
   if (!entry) throw new Error(`telegram bot init failed for user ${userId}`);
   const parts = text.split('<<MSG>>').map((p) => p.trim()).filter(Boolean);
   for (const p of parts) {
-    try {
-      await entry.bot.telegram.sendMessage(cfg.chatId, toTelegramHtml(p), { parse_mode: 'HTML' });
-    } catch {
-      await entry.bot.telegram.sendMessage(cfg.chatId, p.replace(/\*\*|__|`/g, ''));
+    for (const chunk of chunkForTelegram(p)) {
+      try {
+        await entry.bot.telegram.sendMessage(cfg.chatId, toTelegramHtml(chunk), { parse_mode: 'HTML' });
+      } catch {
+        await entry.bot.telegram.sendMessage(cfg.chatId, chunk.replace(/\*\*|__|`/g, ''));
+      }
+      await new Promise((r) => setTimeout(r, 250));
     }
-    await new Promise((r) => setTimeout(r, 250));
   }
 }
 

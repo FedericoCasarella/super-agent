@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -45,6 +46,24 @@ async function main() {
     } catch {
       res.status(503).json({ ok: false, error: 'db_unreachable', uptimeMs: Date.now() - bootedAt });
     }
+  });
+  // Deep liveness probe: exercises the dominant failure mode (the claude spawn path).
+  // The bot is 100% broken when claudeBin is missing yet the DB-only /health stays green
+  // (sess.2941 ENOENT outage). Watchdog should hit this at a slower cadence (~5min) and
+  // alert on non-ok. 5s timeout so a hung binary can't wedge the probe.
+  app.get('/health/deep', async (_req, res) => {
+    let dbOk = true;
+    try { await query('SELECT 1'); } catch { dbOk = false; }
+    const claudeBin = await new Promise<'ok' | 'enoent' | 'timeout' | 'error'>((resolve) => {
+      let done = false;
+      const finish = (v: 'ok' | 'enoent' | 'timeout' | 'error') => { if (!done) { done = true; resolve(v); } };
+      const child = spawn(config.claudeBin, ['--version'], { stdio: 'ignore' });
+      const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* noop */ } finish('timeout'); }, 5000);
+      child.on('error', (e: NodeJS.ErrnoException) => { clearTimeout(t); finish(e.code === 'ENOENT' ? 'enoent' : 'error'); });
+      child.on('close', (code) => { clearTimeout(t); finish(code === 0 ? 'ok' : 'error'); });
+    });
+    const ok = dbOk && claudeBin === 'ok';
+    res.status(ok ? 200 : 503).json({ ok, db: dbOk ? 'ok' : 'unreachable', claudeBin, uptimeMs: Date.now() - bootedAt });
   });
 
   const server = http.createServer(app);
