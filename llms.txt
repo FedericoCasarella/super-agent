@@ -1,0 +1,24 @@
+# super-agent
+
+> A self-hosted personal AI agent that lives in your Telegram, reasons with the Claude Code CLI, and keeps an Obsidian-style markdown second brain it can act on through pluggable connectors. Autonomous in thought, deliberate in action: every irreversible action is proposed for one-tap human approval.
+
+super-agent is the layer between a note app and a chatbot: it remembers everything in a markdown vault you own (indexed in Postgres, explorable as a knowledge graph) and acts on that memory — reading email, transcribing voice, running scheduled tasks, spawning parallel sub-agents. It is self-hosted: your data stays on your infrastructure.
+
+## Core concepts
+
+- [README](README.md): overview, capabilities, architecture, and comparison
+- [Architecture](README.md#-how-it-works): Telegram → orchestrator → Claude Code CLI → connectors (over MCP) → markdown brain + Postgres → web dashboard
+- [Connectors](README.md#-connectors): built-in agent, imap (email + reply drafts), voice (Whisper STT), people, tasks; each exposes typed tools over the Model Context Protocol
+- [Quick start](README.md#-quick-start): cp .env.example .env, createdb, npm install, npm run db:migrate, npm run dev
+
+## For coding agents
+
+- [AGENTS.md](AGENTS.md): build/test commands, conventions, and how to add a connector
+
+## Key facts
+
+- Stack: Node + TypeScript (Express, ws, Telegraf, Postgres, node-cron) backend; Vite + React + TypeScript + Tailwind frontend
+- LLM: Claude Code CLI (`claude -p`, headless), tools bridged via Model Context Protocol (MCP)
+- Brain: Obsidian-style markdown vault + Postgres index
+- Design principle: human-in-the-loop — irreversible actions are proposed, never auto-executed
+- Hosting: self-hosted, multi-user
