@@ -88,7 +88,11 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     let stdout = '', stderr = '';
     let buf = '';
     let finalEvent: any = null;
-    const timer = setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs ?? 120_000);
+    const timeoutMs = opts.timeoutMs ?? 120_000;
+    const timer = setTimeout(() => {
+      console.error(`[runner:u${userId}:${kind}] TIMEOUT after ${timeoutMs}ms — sending SIGTERM`);
+      child.kill('SIGTERM');
+    }, timeoutMs);
     child.stdout.on('data', (d) => {
       const s = d.toString();
       stdout += s;
@@ -106,7 +110,19 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
               if (block?.type !== 'tool_use') continue;
               const name = block.name as string;
               const input = block.input ?? {};
-              toolCalls.push({ name, brief: briefForTool(name, input), ts: Date.now() });
+              const briefStr = briefForTool(name, input);
+              toolCalls.push({ name, brief: briefStr, ts: Date.now() });
+              // Broadcast tool use (mcp + native) for live UI
+              const isMcp = name.startsWith('mcp__');
+              bus.emit('tool:use', {
+                userId,
+                name,
+                brief: briefStr,
+                isMcp,
+                // pretty server: mcp__<server>__tool → <server>
+                server: isMcp ? (name.split('__')[1] ?? null) : null,
+                ts: Date.now(),
+              });
               const candidatePaths: string[] = [];
               if (name === 'Read' || name === 'Write' || name === 'Edit') {
                 if (input.file_path) candidatePaths.push(input.file_path);
@@ -140,8 +156,20 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   const usage = parsed?.usage ?? {};
   const ok = result.code === 0 && !!parsed && parsed.subtype !== 'error_during_execution';
 
+  // Build richer stderr when failure: include error subtype + last stdout lines for diagnosis
+  let combinedStderr = result.stderr.trim();
+  if (!ok) {
+    const tail = result.stdout.split('\n').filter(Boolean).slice(-6).join('\n');
+    const subtype = parsed?.subtype ? `subtype=${parsed.subtype}` : '';
+    const isErr = parsed?.is_error ? 'is_error=true' : '';
+    const exit = `exit=${result.code}`;
+    combinedStderr = [combinedStderr, subtype, isErr, exit, tail ? `tail:\n${tail}` : '']
+      .filter(Boolean).join(' · ').slice(0, 4000);
+    console.error(`[runner:u${userId}:${kind}] failed`, { exit: result.code, subtype: parsed?.subtype, stderrLen: result.stderr.length, stdoutLen: result.stdout.length });
+  }
+
   const out: ClaudeResult = {
-    ok, text, stderr: result.stderr.trim(), exitCode: result.code,
+    ok, text, stderr: combinedStderr, exitCode: result.code,
     costUsd: parsed?.total_cost_usd,
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,

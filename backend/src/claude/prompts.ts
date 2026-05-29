@@ -163,6 +163,10 @@ export async function buildSystemContext(userId: number): Promise<string> {
   );
 
   parts.push(
+    'EMAIL REPLIES (SMTP) — Se ricevi una mail (via IMAP) o l\'utente chiede di rispondere a qualcuno, NON inviare mai direttamente. Usa `mcp__super_agent__smtp_propose_reply` con to/subject/body (+ inReplyTo se hai il Message-ID dell\'originale per il threading). Il backend salva bozza + manda Telegram con keyboard ✅ Invia / ❌ Scarta. L\'utente decide. Firma sempre con il nome dell\'utente. Tono coerente con il behavioral profile.'
+  );
+
+  parts.push(
     'TELEGRAM REACTIONS — Per messaggi brevi/banali/acknowledgement dell\'utente, invece di rispondere a parole puoi reagire con un\'emoji via `mcp__super_agent__agent_telegram_react`. Usa con parsimonia: 👍 conferma, ❤️/🔥 entusiasmo, 🎉 celebrazione, 🤔 sto pensando, 🙏 grazie, 👌 ricevuto. Se reagisci e basta, restituisci la risposta SKIP per evitare il messaggio di testo. NON reagire a domande, richieste operative o messaggi che richiedono risposta. Reagisci max 1 volta ogni 3-4 turni — non spammare.'
   );
 

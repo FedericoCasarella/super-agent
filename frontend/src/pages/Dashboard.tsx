@@ -31,6 +31,7 @@ function Kpi({ icon, label, value, mono, highlight }: { icon: React.ReactNode; l
 export default function Dashboard() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [events, setEvents] = useState<any[]>([]);
+  const [toolUses, setToolUses] = useState<Array<{ name: string; brief: string; isMcp: boolean; server: string | null; ts: number }>>([]);
   const [agentState, setAgentState] = useState<any>(null);
   const [status, setStatus] = useState<any>(null);
   const [activeAgents, setActiveAgents] = useState<any[]>([]);
@@ -72,6 +73,7 @@ export default function Dashboard() {
     if (msg.type === 'message') setMsgs((prev) => [...prev, msg.payload]);
     if (msg.type === 'connector') setEvents((prev) => [msg.payload, ...prev].slice(0, 50));
     if (msg.type === 'subagent') loadState();
+    if (msg.type === 'tool:use') setToolUses((prev) => [msg.payload, ...prev].slice(0, 80));
   });
 
   // Derived KPIs
@@ -175,16 +177,45 @@ export default function Dashboard() {
           </div>
         </Card>
         <Card className="h-[80vh] overflow-y-auto">
-          <h2 className="text-lg font-semibold mb-4">{t('dash.connectorEvents')}</h2>
-          {events.length === 0 && <div className="text-muted text-sm">{t('dash.nothingYet')}</div>}
-          <ul className="space-y-2">
-            {events.map((e, i) => (
-              <li key={i} className="text-sm border border-border rounded-xl p-3 bg-surface2/40">
-                <div className="text-xs text-accent2 uppercase">{e.connector} · {e.kind}</div>
-                <pre className="text-xs text-muted whitespace-pre-wrap mt-1">{JSON.stringify(e.payload, null, 2)}</pre>
-              </li>
-            ))}
-          </ul>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Attività agente</h2>
+            <Chip tone="on"><span className="inline-block w-1.5 h-1.5 rounded-full bg-ok mr-1.5 animate-pulse" />live</Chip>
+          </div>
+          {toolUses.length === 0 && events.length === 0 && <div className="text-muted text-sm">Nessuna attività ancora.</div>}
+          {toolUses.length > 0 && (
+            <div className="mb-5">
+              <div className="text-[10px] uppercase tracking-wider text-muted mb-2 font-semibold">Tool & MCP usati</div>
+              <ul className="space-y-1.5">
+                {toolUses.slice(0, 25).map((u, i) => (
+                  <li key={i} className={`border rounded-xl p-2.5 text-xs ${u.isMcp ? 'border-accent2/30 bg-accent2/5' : 'border-border bg-surface2/40'}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className={u.isMcp ? 'text-accent2' : 'text-accent'}>{u.isMcp ? '⌬' : '▸'}</span>
+                        <span className="font-mono font-semibold truncate">{u.isMcp && u.server ? `${u.server}` : u.name.replace(/^mcp__/, '')}</span>
+                        {u.isMcp && <span className="font-mono text-muted truncate">{u.name.split('__').slice(2).join('_') || ''}</span>}
+                        {!u.isMcp && u.name && <span className="font-mono text-muted">{u.name}</span>}
+                      </div>
+                      <span className="text-[9px] text-muted font-mono shrink-0">{new Date(u.ts).toLocaleTimeString()}</span>
+                    </div>
+                    {u.brief && <div className="text-muted mt-1 truncate font-mono text-[10px]">{u.brief}</div>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {events.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted mb-2 font-semibold">{t('dash.connectorEvents')}</div>
+              <ul className="space-y-2">
+                {events.map((e, i) => (
+                  <li key={i} className="text-sm border border-border rounded-xl p-3 bg-surface2/40">
+                    <div className="text-xs text-accent2 uppercase">{e.connector} · {e.kind}</div>
+                    <pre className="text-xs text-muted whitespace-pre-wrap mt-1">{JSON.stringify(e.payload, null, 2).slice(0, 400)}</pre>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Card>
       </div>
     </div>

@@ -22,11 +22,18 @@ async function handleIncoming({ userId, text }: { userId: number; chatId: number
   const stopTyping = await startTyping(userId);
   let res;
   try {
-    res = await runClaude(userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 180_000, kind: 'chat_turn', meta: { incoming: text.slice(0, 200) } });
+    res = await runClaude(userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 600_000, kind: 'chat_turn', meta: { incoming: text.slice(0, 200) } });
   } finally {
     stopTyping();
   }
-  const reply = res.ok ? res.text.trim() : `(error: ${res.stderr.slice(0, 200)})`;
+  let reply: string;
+  if (res.ok) {
+    reply = res.text.trim();
+  } else if (res.exitCode === 143) {
+    reply = '⏱️ Timeout: ho impiegato troppo (probabile MCP esterno lento). Riprova o spezza la richiesta in step più piccoli.';
+  } else {
+    reply = `(error: ${res.stderr.slice(0, 300)})`;
+  }
   if (!reply || reply === 'SKIP') return;
   try {
     await sendTelegram(userId, reply);

@@ -55,30 +55,57 @@ async function startBotForUser(userId: number) {
     }
   });
 
-  // Inline keyboard callback — approve/deny proposals
+  // Inline keyboard callback — approve/deny proposals + email drafts
   bot.on('callback_query', async (ctx) => {
     const cq: any = ctx.callbackQuery;
     const data: string = cq?.data ?? '';
-    const m = data.match(/^proposal:(\d+):(approve|deny)$/);
-    if (!m) { await ctx.answerCbQuery('Unknown action'); return; }
-    const proposalId = Number(m[1]);
-    const action = m[2];
-    try {
-      const subAgents = await import('../sub_agents/index.js');
-      if (action === 'approve') {
-        const spawned = await subAgents.approveProposal(userId, proposalId);
-        await ctx.answerCbQuery(`✅ ${spawned.length} agent lanciat${spawned.length > 1 ? 'i' : 'o'}`);
-        try { await ctx.editMessageReplyMarkup(undefined); } catch {}
-        try { await ctx.editMessageText(`✅ Approvato. ${spawned.length} agent in esecuzione.`); } catch {}
-      } else {
-        await subAgents.denyProposal(userId, proposalId);
-        await ctx.answerCbQuery('❌ Rifiutato');
-        try { await ctx.editMessageReplyMarkup(undefined); } catch {}
-        try { await ctx.editMessageText('❌ Rifiutato.'); } catch {}
+    // Proposals (sub-agents)
+    let m = data.match(/^proposal:(\d+):(approve|deny)$/);
+    if (m) {
+      const proposalId = Number(m[1]);
+      const action = m[2];
+      try {
+        const subAgents = await import('../sub_agents/index.js');
+        if (action === 'approve') {
+          const spawned = await subAgents.approveProposal(userId, proposalId);
+          await ctx.answerCbQuery(`✅ ${spawned.length} agent lanciat${spawned.length > 1 ? 'i' : 'o'}`);
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText(`✅ Approvato. ${spawned.length} agent in esecuzione.`); } catch {}
+        } else {
+          await subAgents.denyProposal(userId, proposalId);
+          await ctx.answerCbQuery('❌ Rifiutato');
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText('❌ Rifiutato.'); } catch {}
+        }
+      } catch (e: any) {
+        await ctx.answerCbQuery(`Errore: ${String(e?.message ?? e).slice(0, 100)}`);
       }
-    } catch (e: any) {
-      await ctx.answerCbQuery(`Errore: ${String(e?.message ?? e).slice(0, 100)}`);
+      return;
     }
+    // Email draft approval
+    m = data.match(/^email_draft:(\d+):(send|deny)$/);
+    if (m) {
+      const draftId = Number(m[1]);
+      const action = m[2];
+      try {
+        const smtp = await import('../connectors/builtin/smtp/index.js');
+        if (action === 'send') {
+          await ctx.answerCbQuery('📤 invio in corso…');
+          await smtp.sendDraft(userId, draftId);
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText('✅ Email inviata.'); } catch {}
+        } else {
+          await smtp.denyDraft(userId, draftId);
+          await ctx.answerCbQuery('❌ Bozza scartata');
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText('❌ Bozza scartata.'); } catch {}
+        }
+      } catch (e: any) {
+        await ctx.answerCbQuery(`Errore: ${String(e?.message ?? e).slice(0, 100)}`);
+      }
+      return;
+    }
+    await ctx.answerCbQuery('Unknown action');
   });
 
   bot.start(async (ctx) => {
@@ -298,6 +325,43 @@ export async function sendProposalKeyboard(userId: number, proposal: { id: numbe
     return { message_id: (sent as any).message_id, chat_id: chatId };
   } catch (e: any) {
     console.error('[telegram] proposal send failed', e?.message ?? e);
+    return null;
+  }
+}
+
+export async function sendEmailDraftKeyboard(userId: number, draft: { id: number; to_addr: string; subject: string; body: string }): Promise<{ message_id: number; chat_id: number } | null> {
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return null;
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return null;
+  const chatId = cfg.chatId;
+  const bodyPreview = draft.body.length > 500 ? draft.body.slice(0, 500) + '…' : draft.body;
+  const msg = [
+    '✉️ *Bozza email pronta*',
+    '',
+    `*A:* \`${draft.to_addr}\``,
+    `*Oggetto:* ${draft.subject}`,
+    '',
+    '```',
+    bodyPreview,
+    '```',
+    '',
+    'Invio?',
+  ].join('\n');
+  try {
+    const sent = await entry.bot.telegram.sendMessage(chatId, msg, {
+      parse_mode: 'Markdown' as any,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '📤 Invia', callback_data: `email_draft:${draft.id}:send` },
+          { text: '❌ Scarta', callback_data: `email_draft:${draft.id}:deny` },
+        ]],
+      },
+    });
+    return { message_id: (sent as any).message_id, chat_id: chatId };
+  } catch (e: any) {
+    console.error('[telegram] email_draft send failed', e?.message ?? e);
     return null;
   }
 }

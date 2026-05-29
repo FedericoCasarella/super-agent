@@ -566,6 +566,23 @@ router.post('/agent-proposals/:id/deny', async (req, res) => {
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// Email drafts (SMTP human-in-the-loop)
+router.get('/email-drafts', async (req, res) => {
+  const smtp = await import('../connectors/builtin/smtp/index.js');
+  const status = req.query.status ? String(req.query.status) : undefined;
+  res.json(await smtp.listDrafts(req.user!.id, status));
+});
+router.post('/email-drafts/:id/send', async (req, res) => {
+  const smtp = await import('../connectors/builtin/smtp/index.js');
+  try { const d = await smtp.sendDraft(req.user!.id, Number(req.params.id)); res.json(d); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/email-drafts/:id/deny', async (req, res) => {
+  const smtp = await import('../connectors/builtin/smtp/index.js');
+  await smtp.denyDraft(req.user!.id, Number(req.params.id));
+  res.json({ ok: true });
+});
+
 router.get('/mcp/external', async (req, res) => {
   const { listExternalMcps, refreshExternalMcps } = await import('../claude/external_mcps.js');
   if (req.query.refresh === '1') await refreshExternalMcps();

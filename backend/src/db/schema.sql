@@ -304,3 +304,25 @@ DO $$ BEGIN
     ALTER TABLE sub_agents ADD COLUMN num_turns INTEGER;
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
+
+-- SMTP draft replies (created by agent, approved by user before send)
+CREATE TABLE IF NOT EXISTS email_drafts (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_addr TEXT NOT NULL,
+  cc_addr TEXT,
+  bcc_addr TEXT,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  in_reply_to TEXT,
+  references_ids TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','sent','error')),
+  telegram_message_id BIGINT,
+  telegram_chat_id BIGINT,
+  decided_at TIMESTAMPTZ,
+  sent_at TIMESTAMPTZ,
+  error TEXT,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS email_drafts_user_status_idx ON email_drafts(user_id, status, created_at DESC);
