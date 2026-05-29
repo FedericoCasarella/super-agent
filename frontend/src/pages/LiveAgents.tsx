@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -210,17 +211,17 @@ export default function LiveAgents() {
         )}
       </Card>
 
-      {open && (
-        <div className="fixed inset-0 bg-bg/80 backdrop-blur z-50 flex items-center justify-center p-4" onClick={() => setOpen(null)}>
+      {open && createPortal(
+        <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setOpen(null)} role="dialog" aria-modal="true">
           <div className="max-w-3xl w-full max-h-[85vh] overflow-y-auto" onClick={(e: any) => e.stopPropagation()}><Card>
-            <div className="flex items-start justify-between mb-3 gap-3">
-              <div>
-                <h2 className="text-lg font-semibold">{open.title}</h2>
-                {open.brief && <div className="text-sm text-muted mt-1">{open.brief}</div>}
+            <div className="flex items-start justify-between mb-3 gap-3 sticky top-0 bg-surface/95 backdrop-blur pb-2 -mx-4 px-4 z-10">
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold truncate">{open.title}</h2>
+                {open.brief && <div className="text-sm text-muted mt-1 line-clamp-2">{open.brief}</div>}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <Chip tone={STATUS_TONE[open.status] ?? 'default'}>{open.status}</Chip>
-                <Button size="sm" variant="ghost" onClick={() => setOpen(null)}>✕</Button>
+                <Button size="sm" variant="ghost" onClick={() => setOpen(null)} aria-label="Chiudi">✕</Button>
               </div>
             </div>
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs mb-4">
@@ -247,15 +248,21 @@ export default function LiveAgents() {
               </div>
             )}
             <details className="mb-3"><summary className="text-xs text-muted cursor-pointer">Prompt completo</summary><pre className="text-xs bg-surface2/40 border border-border rounded-xl p-3 mt-2 whitespace-pre-wrap overflow-auto max-h-64">{open.prompt}</pre></details>
-            {open.error && <div className="text-sm border border-red-400/40 bg-red-400/10 rounded-xl p-3 mb-3 text-red-300"><div className="font-semibold mb-1">Errore</div><pre className="whitespace-pre-wrap text-xs">{open.error}</pre></div>}
+            {open.error && (
+              <div className="text-sm border border-red-400/40 bg-red-400/10 rounded-xl p-3 mb-3 text-red-300">
+                <div className="font-semibold mb-1">Errore</div>
+                <pre className="whitespace-pre-wrap break-all text-xs max-h-80 overflow-auto">{open.error}</pre>
+              </div>
+            )}
             {open.result && (
               <div>
                 <div className="text-xs text-muted mb-1">Risultato</div>
-                <pre className="text-sm bg-surface2/40 border border-border rounded-xl p-3 whitespace-pre-wrap overflow-auto max-h-96">{open.result}</pre>
+                <pre className="text-sm bg-surface2/40 border border-border rounded-xl p-3 whitespace-pre-wrap break-words overflow-auto max-h-96">{open.result}</pre>
               </div>
             )}
           </Card></div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
