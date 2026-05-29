@@ -606,6 +606,17 @@ router.post('/whatsapp/logout', async (req, res) => {
   await m.logoutWaForUser(req.user!.id);
   res.json({ ok: true });
 });
+router.post('/whatsapp/chats/:jid/suggest', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.suggestReply(req.user!.id, req.params.jid, { hint: req.body?.hint })); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/:jid/send', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const text = String(req.body?.text ?? '');
+  try { res.json(await m.sendWaMessage(req.user!.id, req.params.jid, text)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/chats/merge', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const canon = String(req.body?.canon ?? '');

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useWS } from '../ws';
-import { Users, MessageCircle, RefreshCw, Sparkles, UserCog } from 'lucide-react';
+import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X } from 'lucide-react';
 
 type Chat = {
   chat_jid: string;
@@ -41,13 +41,53 @@ function fmtAgo(ts: string): string {
   return `${Math.floor(h / 24)}g`;
 }
 
+// Palette aligned to app theme (accent violet → accent2 cyan + supporting brand tints)
+const AVATAR_PALETTE = [
+  'linear-gradient(135deg,#c084fc,#a78bfa)', // violet
+  'linear-gradient(135deg,#22d3ee,#67e8f9)', // cyan
+  'linear-gradient(135deg,#f0abfc,#c084fc)', // fuchsia → violet
+  'linear-gradient(135deg,#a78bfa,#22d3ee)', // violet → cyan
+  'linear-gradient(135deg,#34d399,#22d3ee)', // emerald → cyan
+  'linear-gradient(135deg,#fbbf24,#f0abfc)', // amber → fuchsia
+];
 function avatarColor(s: string): string {
   let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return `hsl(${Math.abs(h) % 360}, 60%, 55%)`;
+  return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
 }
 
 function initials(name: string): string {
   return name.split(/\s+/).slice(0, 2).map((p) => p[0] ?? '').join('').toUpperCase();
+}
+
+const WAVE_BARS = [4, 8, 14, 18, 22, 16, 12, 20, 24, 18, 14, 8, 4, 10, 16, 12, 6];
+function AudioWave({ size = 'sm' }: { size?: 'sm' | 'md' }) {
+  const h = size === 'sm' ? 14 : 22;
+  const w = size === 'sm' ? 2 : 3;
+  return (
+    <span className="inline-flex items-center gap-2 align-middle">
+      <span className="inline-flex items-center justify-center rounded-full bg-accent2/15 text-accent2 w-6 h-6 shrink-0">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+      </span>
+      <span className="inline-flex items-end gap-[2px]" aria-label="audio">
+        {WAVE_BARS.map((b, i) => (
+          <span
+            key={i}
+            className="inline-block rounded-full bg-accent2/70"
+            style={{ width: w, height: (b / 24) * h + 2 }}
+          />
+        ))}
+      </span>
+      <span className={`text-[10px] text-muted ${size === 'sm' ? '' : 'text-xs'}`}>vocale</span>
+    </span>
+  );
+}
+
+function isAudio(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return /^\[audio\]/i.test(text.trim());
+}
+function audioCaption(text: string): string {
+  return text.replace(/^\[audio\]\s*/i, '').trim();
 }
 
 export default function WhatsApp() {
@@ -62,6 +102,34 @@ export default function WhatsApp() {
   const [bonifying, setBonifying] = useState(false);
   const [bonifyProgress, setBonifyProgress] = useState<{ total: number; toolCalls: number; onlyChat: string | null; startedAt: number } | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [suggesting, setSuggesting] = useState(false);
+  const [draftReply, setDraftReply] = useState<string>('');
+  const [sending, setSending] = useState(false);
+
+  async function suggest() {
+    if (!selected) return;
+    setSuggesting(true);
+    setDraftReply('');
+    try {
+      const r = await api.waSuggestReply(selected);
+      if (r.ok) setDraftReply(r.draft);
+      else toast.push(`Errore: ${String(r.error ?? '').slice(0, 200)}`, 'err');
+    } catch (e: any) { toast.push(e.message, 'err'); }
+    finally { setSuggesting(false); }
+  }
+  async function sendReply() {
+    if (!selected || !draftReply.trim()) return;
+    setSending(true);
+    try {
+      const r = await api.waSendMessage(selected, draftReply.trim());
+      if (r.ok) { toast.push('Inviato', 'on'); setDraftReply(''); }
+      else toast.push(`Errore: ${String(r.error ?? '').slice(0, 200)}`, 'err');
+    } catch (e: any) { toast.push(e.message, 'err'); }
+    finally { setSending(false); }
+  }
+
+  // Reset draft when chat changes
+  useEffect(() => { setDraftReply(''); setSuggesting(false); setSending(false); }, [selected]);
   const streamRef = useRef<HTMLDivElement>(null);
   const toast = useToast();
 
@@ -268,7 +336,9 @@ export default function WhatsApp() {
                       <span className="text-[10px] text-muted shrink-0">{fmtTime(c.ts)}</span>
                     </div>
                     <div className="text-xs text-muted truncate flex items-center gap-1.5">
-                      <span className="truncate flex-1">{c.text || '…'}</span>
+                      <span className="truncate flex-1">
+                        {isAudio(c.text) ? <AudioWave /> : (c.text || '…')}
+                      </span>
                       {c.total_count > 0 && c.pending_count === 0 && (
                         <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-400/30">✓ bonificata</span>
                       )}
@@ -310,9 +380,35 @@ export default function WhatsApp() {
                     <Button size="sm" variant="ghost" disabled={bonifying} onClick={() => bonify(selected)}>
                       <Sparkles size={13} className="inline mr-1 -mt-0.5" />Bonifica chat
                     </Button>
+                    <Button size="sm" disabled={suggesting} onClick={suggest}>
+                      <Wand2 size={13} className={`inline mr-1 -mt-0.5 ${suggesting ? 'animate-pulse' : ''}`} />
+                      {suggesting ? 'Penso…' : 'Suggerisci risposta'}
+                    </Button>
                   </div>
                 );
               })()}
+              {draftReply && (
+                <div className="border-b border-accent2/30 bg-accent2/5 p-3">
+                  <div className="flex items-center justify-between mb-2 text-[10px] uppercase tracking-wider text-accent2 font-semibold">
+                    <span className="flex items-center gap-1"><Wand2 size={12} /> Bozza suggerita</span>
+                    <button onClick={() => setDraftReply('')} className="text-muted hover:text-text"><X size={12} /></button>
+                  </div>
+                  <textarea
+                    value={draftReply}
+                    onChange={(e) => setDraftReply(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-xl bg-bg/60 border border-border px-3 py-2 text-sm text-text focus:outline-none focus:border-accent2 resize-y"
+                  />
+                  <div className="flex items-center justify-between gap-2 mt-2">
+                    <Button size="sm" variant="ghost" onClick={suggest} disabled={suggesting}>
+                      <Wand2 size={12} className="inline mr-1 -mt-0.5" />Rigenera
+                    </Button>
+                    <Button size="sm" onClick={sendReply} disabled={sending || !draftReply.trim()}>
+                      <Send size={12} className="inline mr-1 -mt-0.5" />{sending ? 'Invio…' : 'Invia risposta'}
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div ref={streamRef} className="flex-1 overflow-y-auto p-4 space-y-2 bg-gradient-to-b from-surface2/20 to-transparent">
                 {loading && <div className="text-muted text-sm text-center">Caricamento…</div>}
                 {messages.map((m) => (
@@ -321,7 +417,14 @@ export default function WhatsApp() {
                       {m.is_group && !m.from_me && m.sender_name && (
                         <div className="text-[10px] font-semibold text-accent2 mb-0.5">{m.sender_name}</div>
                       )}
-                      <div className="whitespace-pre-wrap">{m.text || <span className="text-muted italic">(empty)</span>}</div>
+                      {isAudio(m.text) ? (
+                        <div>
+                          <AudioWave size="md" />
+                          {audioCaption(m.text) && <div className="text-xs text-muted mt-1.5">{audioCaption(m.text)}</div>}
+                        </div>
+                      ) : (
+                        <div className="whitespace-pre-wrap">{m.text || <span className="text-muted italic">(empty)</span>}</div>
+                      )}
                       <div className="text-[9px] text-muted mt-1 text-right">{fmtAgo(m.ts)} fa</div>
                     </div>
                   </div>
