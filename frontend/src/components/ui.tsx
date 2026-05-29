@@ -1,4 +1,4 @@
-import { ButtonHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes, ReactNode, createContext, useCallback, useContext, useState } from 'react';
+import { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes, ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 type Variant = 'primary' | 'ghost' | 'danger';
 type Size = 'sm' | 'md';
@@ -21,6 +21,10 @@ export function Button({
 
 export function Input({ className = '', ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...rest} className={`w-full bg-surface2/70 border border-border rounded-2xl px-4 py-2.5 text-text placeholder:text-muted/70 focus:outline-none focus:border-accent/60 focus:bg-surface2 focus:shadow-[0_0_0_4px_rgba(192,132,252,0.08)] ${className}`} />;
+}
+
+export function Select({ className = '', ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select {...rest} className={`w-full bg-surface2/70 border border-border rounded-2xl px-4 py-2.5 text-text focus:outline-none focus:border-accent/60 focus:bg-surface2 focus:shadow-[0_0_0_4px_rgba(192,132,252,0.08)] ${className}`} />;
 }
 
 export function Textarea({ className = '', ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -51,10 +55,10 @@ export function Chip({ tone = 'default', children }: { tone?: 'default' | 'on' |
   return <span className={`inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border backdrop-blur-sm ${tones[tone]}`}>{children}</span>;
 }
 
-export function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
   return (
     <label className="inline-flex items-center cursor-pointer">
-      <input type="checkbox" className="sr-only peer" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <input type="checkbox" aria-label={label} className="sr-only peer" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       <div className="w-12 h-6 bg-surface2 border border-border peer-checked:bg-gradient-to-r peer-checked:from-accent peer-checked:to-accent2 peer-checked:border-transparent peer-checked:shadow-[0_0_18px_-4px_rgba(192,132,252,0.6)] rounded-full relative transition-all duration-300 ease-out-expo">
         <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-text shadow-md transition-all duration-300 ease-out-expo ${checked ? 'translate-x-6' : ''}`} />
       </div>
@@ -62,15 +66,46 @@ export function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: 
   );
 }
 
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
 export function Modal({
   open, title, children, onClose, footer,
 }: {
   open: boolean; title: string; children: ReactNode; onClose: () => void; footer?: ReactNode;
 }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  // a11y (sess.2939): Esc-to-close, focus trap, and focus restore — a modal with no
+  // keyboard escape or focus management traps keyboard/screen-reader users.
+  useEffect(() => {
+    if (!open) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return; }
+      if (e.key === 'Tab' && ref.current) {
+        const f = Array.from(ref.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+        if (f.length === 0) return;
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    (ref.current?.querySelector<HTMLElement>(FOCUSABLE) ?? ref.current)?.focus();
+    return () => { document.removeEventListener('keydown', onKey); prevFocus?.focus?.(); };
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70 backdrop-blur-sm animate-fade-in" onClick={onClose}>
-      <div className="glass border border-border rounded-xl3 p-6 w-full max-w-lg mx-4 ring-soft gradient-border animate-slide-up" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="glass border border-border rounded-xl3 p-6 w-full max-w-lg mx-4 ring-soft gradient-border animate-slide-up outline-none"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="text-lg font-semibold mb-3 text-gradient">{title}</div>
         <div className="text-sm text-text/90">{children}</div>
         {footer && <div className="flex gap-2 justify-end mt-6">{footer}</div>}
