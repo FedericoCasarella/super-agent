@@ -9,12 +9,14 @@
     "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
+    "@hapi/boom": "^10.0.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/html-to-text": "^9.0.4",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/nodemailer": "^8.0.0",
     "@types/pdf-parse": "^1.1.5",
+    "@whiskeysockets/baileys": "^6.7.18",
     "bcryptjs": "^3.0.3",
     "cookie": "^1.1.1",
     "cookie-parser": "^1.4.7",
@@ -32,6 +34,8 @@
     "nodemailer": "^8.0.9",
     "pdf-parse": "^2.4.5",
     "pg": "^8.13.1",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
     "telegraf": "^4.16.3",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
@@ -43,6 +47,7 @@
     "@types/node": "^22.9.0",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.11.10",
+    "@types/qrcode": "^1.5.6",
     "@types/ws": "^8.5.13",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"

@@ -591,6 +591,62 @@ router.post('/email/test', async (req, res) => {
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
 
+// WhatsApp
+router.get('/whatsapp/status', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  res.json(m.getWaStatus(req.user!.id));
+});
+router.post('/whatsapp/start', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.startWaForUser(req.user!.id)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/logout', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  await m.logoutWaForUser(req.user!.id);
+  res.json({ ok: true });
+});
+router.post('/whatsapp/chats/merge', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const canon = String(req.body?.canon ?? '');
+  const dups: string[] = Array.isArray(req.body?.dups) ? req.body.dups : [];
+  if (!canon || !dups.length) return res.status(400).json({ ok: false, error: 'canon + dups required' });
+  try { res.json(await m.mergeChats(req.user!.id, canon, dups)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/contacts/refresh', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.refreshContactsAndGroups(req.user!.id)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/sync', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.syncWaForUser(req.user!.id)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.get('/whatsapp/pending', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  res.json({ count: await m.pendingCount(req.user!.id) });
+});
+router.post('/whatsapp/bonify', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const limit = Number(req.body?.limit ?? 100);
+  const onlyChat = req.body?.onlyChat ?? undefined;
+  // fire-and-forget so HTTP returns immediately
+  m.bonifyWaMessages(req.user!.id, { limit, onlyChat })
+    .then((r) => console.log(`[wa:u${req.user!.id}] bonifica done`, r))
+    .catch((e) => console.error('[wa] bonify error', e));
+  res.json({ ok: true, started: true, limit });
+});
+router.get('/whatsapp/chats', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  res.json(await m.listChats(req.user!.id));
+});
+router.get('/whatsapp/chats/:jid/messages', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  res.json(await m.chatMessages(req.user!.id, req.params.jid, Math.min(Number(req.query.limit ?? 200), 500)));
+});
+
 router.get('/mcp/external', async (req, res) => {
   const { listExternalMcps, refreshExternalMcps } = await import('../claude/external_mcps.js');
   if (req.query.refresh === '1') await refreshExternalMcps();
