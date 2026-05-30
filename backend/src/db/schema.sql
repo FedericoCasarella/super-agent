@@ -383,3 +383,15 @@ DO $$ BEGIN
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS wa_contacts_user_lid_idx ON wa_contacts(user_id, lid);
+
+CREATE TABLE IF NOT EXISTS tool_events (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  server TEXT,
+  is_mcp BOOLEAN NOT NULL DEFAULT false,
+  brief TEXT,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS tool_events_user_ts_idx ON tool_events(user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS tool_events_user_mcp_idx ON tool_events(user_id, is_mcp, ts DESC);

@@ -27,7 +27,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/agents', label: 'Agents', icon: Zap },
     { to: '/perks', label: 'Perks', icon: Sparkles },
     { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
-    { to: '/network', label: 'Network', icon: Share2 },
+    // { to: '/network', label: 'Network', icon: Share2 }, // hidden: needs server infra
     { to: '/logs', label: 'Logs', icon: ScrollText },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
   ];

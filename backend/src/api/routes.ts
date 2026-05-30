@@ -606,6 +606,12 @@ router.post('/whatsapp/logout', async (req, res) => {
   await m.logoutWaForUser(req.user!.id);
   res.json({ ok: true });
 });
+router.post('/whatsapp/chats/:jid/sync', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const batches = Number(req.body?.batches ?? 3);
+  try { res.json(await m.syncOneChat(req.user!.id, req.params.jid, batches)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/chats/:jid/suggest', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   try { res.json(await m.suggestReply(req.user!.id, req.params.jid, { hint: req.body?.hint })); }
@@ -656,6 +662,26 @@ router.get('/whatsapp/chats', async (req, res) => {
 router.get('/whatsapp/chats/:jid/messages', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   res.json(await m.chatMessages(req.user!.id, req.params.jid, Math.min(Number(req.query.limit ?? 200), 500)));
+});
+
+router.get('/tool-events', async (req, res) => {
+  const userId = req.user!.id;
+  const filter = String(req.query.filter ?? 'all'); // all|mcp|native
+  const cursor = req.query.cursor ? Number(req.query.cursor) : null;
+  const server = req.query.server ? String(req.query.server) : null;
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+  const parts: string[] = ['user_id=$1'];
+  const params: any[] = [userId];
+  if (filter === 'mcp') parts.push('is_mcp = true');
+  else if (filter === 'native') parts.push('is_mcp = false');
+  if (server) { params.push(server); parts.push(`server = $${params.length}`); }
+  if (cursor) { params.push(cursor); parts.push(`id < $${params.length}`); }
+  params.push(limit);
+  const rows = await query<any>(
+    `SELECT id::int, name, server, is_mcp, brief, ts FROM tool_events WHERE ${parts.join(' AND ')} ORDER BY id DESC LIMIT $${params.length}`,
+    params,
+  );
+  res.json(rows);
 });
 
 router.get('/mcp/external', async (req, res) => {

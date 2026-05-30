@@ -674,6 +674,30 @@ export async function refreshContactsAndGroups(userId: number): Promise<{ ok: bo
   }
 }
 
+export async function syncOneChat(userId: number, chatJid: string, batches = 3): Promise<{ ok: boolean; requested: number; error?: string }> {
+  const s = sessions.get(userId);
+  if (!s || s.status !== 'connected') return { ok: false, requested: 0, error: 'WhatsApp non connesso' };
+  let requested = 0;
+  for (let i = 0; i < batches; i++) {
+    const rows = await query<{ msg_id: string; ts: string }>(
+      `SELECT msg_id, ts FROM wa_messages
+       WHERE user_id=$1 AND chat_jid=$2 AND msg_id NOT LIKE 'chat:%'
+       ORDER BY ts ASC LIMIT 1`, [userId, chatJid]
+    );
+    if (!rows.length) break;
+    try {
+      const key: any = { remoteJid: chatJid, id: rows[0].msg_id, fromMe: false };
+      const ts = Math.floor(new Date(rows[0].ts).getTime() / 1000);
+      await (s.sock as any).fetchMessageHistory?.(50, key, ts);
+      requested++;
+      await new Promise((res) => setTimeout(res, 600));
+    } catch (e: any) {
+      return { ok: false, requested, error: String(e?.message ?? e) };
+    }
+  }
+  return { ok: true, requested };
+}
+
 export async function syncWaForUser(userId: number): Promise<{ ok: boolean; chats: number; requested: number; hint?: string; error?: string }> {
   const s = sessions.get(userId);
   if (!s || s.status !== 'connected') return { ok: false, chats: 0, requested: 0, error: 'WhatsApp non connesso' };

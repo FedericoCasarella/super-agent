@@ -3,6 +3,7 @@ import { api } from '../api';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useWS } from '../ws';
 import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X } from 'lucide-react';
+import BrainLoading from '../components/BrainLoading';
 
 type Chat = {
   chat_jid: string;
@@ -105,6 +106,18 @@ export default function WhatsApp() {
   const [suggesting, setSuggesting] = useState(false);
   const [draftReply, setDraftReply] = useState<string>('');
   const [sending, setSending] = useState(false);
+  const [syncingChat, setSyncingChat] = useState(false);
+  async function syncChat() {
+    if (!selected) return;
+    setSyncingChat(true);
+    try {
+      const r = await api.waSyncChat(selected, 3);
+      if (r.ok) toast.push(`Sync chiesto: ${r.requested} batch`, 'on');
+      else toast.push(`Errore: ${String(r.error ?? '').slice(0, 200)}`, 'err');
+      setTimeout(() => { if (selected) loadMessages(selected); loadChats(); }, 2000);
+    } catch (e: any) { toast.push(e.message, 'err'); }
+    finally { setSyncingChat(false); }
+  }
 
   async function suggest() {
     if (!selected) return;
@@ -298,8 +311,12 @@ export default function WhatsApp() {
             {bonifyProgress.onlyChat && <Chip>{chats.find((c) => c.chat_jid === bonifyProgress.onlyChat)?.sender_name ?? bonifyProgress.onlyChat}</Chip>}
           </div>
           <div className="flex-1 min-w-[200px]">
-            <div className="h-2 rounded-full bg-surface2/60 overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-accent to-accent2 animate-pulse" style={{ width: '100%' }} />
+            <div className="h-2 rounded-full bg-surface2/60 overflow-hidden relative">
+              <div
+                className="absolute inset-y-0 w-1/3 rounded-full bg-gradient-to-r from-accent via-accent2 to-accent"
+                style={{ animation: 'indeterminate 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite' }}
+              />
+              <style>{`@keyframes indeterminate { 0% { left: -33%; } 100% { left: 100%; } }`}</style>
             </div>
           </div>
           <div className="flex items-center gap-4 text-xs font-mono text-muted">
@@ -354,7 +371,16 @@ export default function WhatsApp() {
         </Card>
 
         {/* Chat view */}
-        <Card className="col-span-12 md:col-span-8 lg:col-span-9 p-0 overflow-hidden flex flex-col h-full max-h-[78vh]">
+        <div
+          className="col-span-12 md:col-span-8 lg:col-span-9 rounded-3xl border border-border overflow-hidden flex flex-col h-full max-h-[78vh] relative"
+          style={{
+            backgroundColor: '#0a0a0c',
+            backgroundImage: `linear-gradient(rgba(10,10,12,0.75), rgba(10,10,12,0.75)), url('/pattern-11-themed.svg')`,
+            backgroundSize: 'auto, 33.33% auto',
+            backgroundPosition: 'center, top left',
+            backgroundRepeat: 'no-repeat, repeat',
+          }}
+        >
           {!selected ? (
             <div className="flex-1 flex items-center justify-center text-muted text-sm">
               Seleziona una chat per visualizzare i messaggi.
@@ -377,6 +403,10 @@ export default function WhatsApp() {
                     {c && c.total_count > 0 && c.pending_count === 0 && <Chip tone="on">✓ bonificata</Chip>}
                     {c && c.pending_count > 0 && c.bonified_count > 0 && <Chip tone="warn">{c.bonified_count}/{c.total_count}</Chip>}
                     {c && c.pending_count > 0 && c.bonified_count === 0 && <Chip>nuova</Chip>}
+                    <Button size="sm" variant="ghost" disabled={syncingChat} onClick={syncChat} title="Sincronizza storia di questa chat">
+                      <RefreshCw size={13} className={`inline mr-1 -mt-0.5 ${syncingChat ? 'animate-spin' : ''}`} />
+                      {syncingChat ? 'Sync…' : 'Sync chat'}
+                    </Button>
                     <Button size="sm" variant="ghost" disabled={bonifying} onClick={() => bonify(selected)}>
                       <Sparkles size={13} className="inline mr-1 -mt-0.5" />Bonifica chat
                     </Button>
@@ -387,30 +417,8 @@ export default function WhatsApp() {
                   </div>
                 );
               })()}
-              {draftReply && (
-                <div className="border-b border-accent2/30 bg-accent2/5 p-3">
-                  <div className="flex items-center justify-between mb-2 text-[10px] uppercase tracking-wider text-accent2 font-semibold">
-                    <span className="flex items-center gap-1"><Wand2 size={12} /> Bozza suggerita</span>
-                    <button onClick={() => setDraftReply('')} className="text-muted hover:text-text"><X size={12} /></button>
-                  </div>
-                  <textarea
-                    value={draftReply}
-                    onChange={(e) => setDraftReply(e.target.value)}
-                    rows={3}
-                    className="w-full rounded-xl bg-bg/60 border border-border px-3 py-2 text-sm text-text focus:outline-none focus:border-accent2 resize-y"
-                  />
-                  <div className="flex items-center justify-between gap-2 mt-2">
-                    <Button size="sm" variant="ghost" onClick={suggest} disabled={suggesting}>
-                      <Wand2 size={12} className="inline mr-1 -mt-0.5" />Rigenera
-                    </Button>
-                    <Button size="sm" onClick={sendReply} disabled={sending || !draftReply.trim()}>
-                      <Send size={12} className="inline mr-1 -mt-0.5" />{sending ? 'Invio…' : 'Invia risposta'}
-                    </Button>
-                  </div>
-                </div>
-              )}
-              <div ref={streamRef} className="flex-1 overflow-y-auto p-4 space-y-2 bg-gradient-to-b from-surface2/20 to-transparent">
-                {loading && <div className="text-muted text-sm text-center">Caricamento…</div>}
+              <div ref={streamRef} className="flex-1 overflow-y-auto p-4 space-y-2">
+                {loading && <BrainLoading size={80} label="Caricamento messaggi…" className="my-4" />}
                 {messages.map((m) => (
                   <div key={m.id} className={`flex ${m.from_me ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm ${m.from_me ? 'bg-accent/20 border border-accent/30 rounded-br-md' : 'bg-surface2 border border-border rounded-bl-md'}`}>
@@ -432,7 +440,64 @@ export default function WhatsApp() {
               </div>
             </>
           )}
-        </Card>
+
+          {/* Floating reply drawer — iOS glass style, animates between loading and ready */}
+          {(suggesting || draftReply) && (
+            <div
+              className="absolute bottom-4 right-4 z-30 w-80 max-w-[calc(100%-2rem)] rounded-2xl border border-white/15 shadow-2xl overflow-hidden"
+              style={{
+                background: 'linear-gradient(135deg, rgba(34,211,238,0.12), rgba(192,132,252,0.10))',
+                backdropFilter: 'blur(24px) saturate(160%)',
+                WebkitBackdropFilter: 'blur(24px) saturate(160%)',
+                transition: 'all 0.45s cubic-bezier(0.16, 1, 0.3, 1)',
+              }}
+            >
+              {/* Top bar */}
+              <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-accent2 font-semibold">
+                  <Wand2 size={11} />
+                  {suggesting ? 'Formulando…' : 'Bozza pronta'}
+                </div>
+                <button onClick={() => { setDraftReply(''); setSuggesting(false); }} className="text-muted hover:text-text">
+                  <X size={13} />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div
+                className="p-3"
+                style={{ transition: 'all 0.5s cubic-bezier(0.16, 1, 0.3, 1)' }}
+              >
+                {suggesting && !draftReply ? (
+                  <div className="flex items-center gap-3 py-2">
+                    <BrainLoading size={48} inline />
+                    <span className="text-sm text-muted animate-pulse">Formulando risposta…</span>
+                  </div>
+                ) : (
+                  <>
+                    <textarea
+                      value={draftReply}
+                      onChange={(e) => setDraftReply(e.target.value)}
+                      rows={4}
+                      className="w-full rounded-xl bg-black/30 border border-white/10 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent2 resize-y placeholder-muted"
+                      style={{ animation: 'fade-in 0.4s ease both' }}
+                    />
+                    <div className="flex items-center justify-between gap-2 mt-2.5" style={{ animation: 'fade-in 0.55s ease both' }}>
+                      <Button size="sm" variant="ghost" onClick={suggest} disabled={suggesting}>
+                        <Wand2 size={12} className={`inline mr-1 -mt-0.5 ${suggesting ? 'animate-pulse' : ''}`} />
+                        Rigenera
+                      </Button>
+                      <Button size="sm" onClick={sendReply} disabled={sending || !draftReply.trim()}>
+                        <Send size={12} className="inline mr-1 -mt-0.5" />
+                        {sending ? 'Invio…' : 'Invia'}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

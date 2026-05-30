@@ -3,6 +3,7 @@ import ForceGraph3D, { ForceGraphMethods } from 'react-force-graph-3d';
 import * as THREE from 'three';
 import { api } from '../api';
 import { useWS } from '../ws';
+import BrainLoading from './BrainLoading';
 
 const MRI_GREEN = '#39ff7a';
 const MRI_DURATION_MS = 4200;
@@ -173,12 +174,14 @@ export default function BrainGraph3DConstellation({
     return () => clearInterval(iv);
   }, []);
 
+  const [loaded, setLoaded] = useState(false);
   useEffect(() => {
+    setLoaded(false);
     api.brainGraphFiltered(visibilityFilter, originFilter, vaultFilter).then((g: any) => {
       setData(g);
       if (onOriginsChange) onOriginsChange(g.origins ?? []);
       if (onVaultsChange) onVaultsChange(g.vaults ?? []);
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setLoaded(true));
   }, [visibilityFilter, originFilter, vaultFilter]);
 
   useEffect(() => {
@@ -653,7 +656,10 @@ export default function BrainGraph3DConstellation({
 
   return (
     <div ref={wrapRef} className="w-full h-full relative" style={{ background: '#02030a' }}>
-      {data.nodes.length === 0 && (
+      {!loaded && (
+        <div className="absolute inset-0 flex items-center justify-center z-10"><BrainLoading size={140} label="Caricamento cervello…" /></div>
+      )}
+      {loaded && data.nodes.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center text-muted text-sm z-10">empty vault</div>
       )}
       <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-1">

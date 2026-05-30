@@ -18,6 +18,7 @@ import WhatsApp from './pages/WhatsApp';
 import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
 import MessageSound from './components/MessageSound';
+import BrainLoading from './components/BrainLoading';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -33,9 +34,9 @@ export default function App() {
   }
   useEffect(() => { refresh(); }, [user]);
 
-  if (loading) return <div className="h-full flex items-center justify-center text-muted">loading…</div>;
+  if (loading) return <div className="h-full flex items-center justify-center"><BrainLoading size={140} /></div>;
   if (!user) return <AuthPage />;
-  if (!status) return <div className="h-full flex items-center justify-center text-muted">loading…</div>;
+  if (!status) return <div className="h-full flex items-center justify-center"><BrainLoading size={140} /></div>;
   if (!status.onboarded) return <Onboarding status={status} onDone={refresh} />;
 
   return (

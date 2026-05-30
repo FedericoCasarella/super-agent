@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import ForceGraph2D, { ForceGraphMethods } from 'react-force-graph-2d';
 import { api } from '../api';
+import BrainLoading from './BrainLoading';
 
 type Node = { id: string; title: string; kind: string; tags: string[]; size: number; visibility?: 'protected' | 'public' | null; origin_email?: string | null; x?: number; y?: number };
 type Link = { source: string | Node; target: string | Node };
@@ -83,12 +84,14 @@ export default function BrainGraph3D({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
 
+  const [loaded, setLoaded] = useState(false);
   useEffect(() => {
+    setLoaded(false);
     api.brainGraphFiltered(visibilityFilter, originFilter, vaultFilter).then((g) => {
       setData(g);
       if (onOriginsChange) onOriginsChange(g.origins ?? []);
       if (onVaultsChange) onVaultsChange((g as any).vaults ?? []);
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setLoaded(true));
   }, [visibilityFilter, originFilter, vaultFilter]);
 
   // Spread nodes further apart and add collision so they don't overlap
@@ -280,7 +283,10 @@ export default function BrainGraph3D({
 
   return (
     <div ref={wrapRef} className="w-full h-full relative" style={{ background: '#0f0f12' }}>
-      {data.nodes.length === 0 && (
+      {!loaded && (
+        <div className="absolute inset-0 flex items-center justify-center z-10"><BrainLoading size={140} label="Caricamento cervello…" /></div>
+      )}
+      {loaded && data.nodes.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">empty vault</div>
       )}
       <ForceGraph2D

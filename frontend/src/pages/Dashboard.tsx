@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useWS } from '../ws';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
-import { AlarmClock, Moon, BellOff, Clock, MessageSquare, Hash, Zap } from 'lucide-react';
+import { AlarmClock, Moon, BellOff, Clock, MessageSquare, Hash, Zap, Activity, Coffee } from 'lucide-react';
 
 function fmtRelative(date: Date): string {
   const diffMs = date.getTime() - Date.now();
@@ -31,7 +31,26 @@ function Kpi({ icon, label, value, mono, highlight }: { icon: React.ReactNode; l
 export default function Dashboard() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [events, setEvents] = useState<any[]>([]);
-  const [toolUses, setToolUses] = useState<Array<{ name: string; brief: string; isMcp: boolean; server: string | null; ts: number }>>([]);
+  type ToolEvt = { id?: number; name: string; brief: string | null; isMcp?: boolean; is_mcp?: boolean; server: string | null; ts: string | number };
+  const [toolUses, setToolUses] = useState<ToolEvt[]>([]);
+  const [toolFilter, setToolFilter] = useState<'all' | 'mcp' | 'native'>('all');
+  const [hasMoreEvents, setHasMoreEvents] = useState(true);
+  const [loadingMoreEvents, setLoadingMoreEvents] = useState(false);
+
+  async function loadEvents(reset = false) {
+    if (loadingMoreEvents) return;
+    setLoadingMoreEvents(true);
+    try {
+      const cursor = reset || !toolUses.length ? undefined : (toolUses[toolUses.length - 1]?.id);
+      const list = await api.toolEvents({ filter: toolFilter, cursor, limit: 50 });
+      const normalized: ToolEvt[] = list.map((e: any) => ({ id: e.id, name: e.name, brief: e.brief, isMcp: !!e.is_mcp, server: e.server, ts: e.ts }));
+      if (reset) setToolUses(normalized);
+      else setToolUses((prev) => [...prev, ...normalized]);
+      setHasMoreEvents(normalized.length === 50);
+    } catch {}
+    finally { setLoadingMoreEvents(false); }
+  }
+  useEffect(() => { loadEvents(true); /* eslint-disable-next-line */ }, [toolFilter]);
   const [agentState, setAgentState] = useState<any>(null);
   const [status, setStatus] = useState<any>(null);
   const [activeAgents, setActiveAgents] = useState<any[]>([]);
@@ -73,7 +92,12 @@ export default function Dashboard() {
     if (msg.type === 'message') setMsgs((prev) => [...prev, msg.payload]);
     if (msg.type === 'connector') setEvents((prev) => [msg.payload, ...prev].slice(0, 50));
     if (msg.type === 'subagent') loadState();
-    if (msg.type === 'tool:use') setToolUses((prev) => [msg.payload, ...prev].slice(0, 80));
+    if (msg.type === 'tool:use') {
+      const p = msg.payload;
+      if (toolFilter !== 'all' && (toolFilter === 'mcp') !== !!p.isMcp) return;
+      const evt: ToolEvt = { id: undefined, name: p.name, brief: p.brief ?? null, isMcp: !!p.isMcp, server: p.server ?? null, ts: p.ts ?? Date.now() };
+      setToolUses((prev) => [evt, ...prev]);
+    }
   });
 
   // Derived KPIs
@@ -100,50 +124,46 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4">
-      {(sleepUntil || quietUntil) && (
-        <Card className="relative overflow-hidden border-accent/30 bg-gradient-to-br from-accent/10 via-surface to-surface">
-          <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-accent/20 blur-3xl pointer-events-none" />
-          <div className="relative flex items-start gap-4 flex-wrap">
-            <div className="w-12 h-12 rounded-2xl bg-accent/20 border border-accent/40 flex items-center justify-center text-accent shrink-0">
-              {sleepUntil ? <Moon size={22} /> : <BellOff size={22} />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs uppercase tracking-wider text-accent font-semibold mb-1">
-                {sleepUntil ? 'Agente in pausa' : 'Modalità silenziosa'}
+      {(() => {
+        // Compute always-visible agent status
+        const isSleeping = !!sleepUntil;
+        const isQuiet = !isSleeping && !!quietUntil;
+        const isWorking = !isSleeping && !isQuiet && running > 0;
+        const isIdle = !isSleeping && !isQuiet && !isWorking;
+        const cfg = isSleeping
+          ? { Icon: Moon, label: 'In pausa', tone: 'accent', desc: <>Si risveglierà <span className="text-accent">{fmtRelative(sleepUntil!)}</span></>, sub: `Prossimo wake: ${sleepUntil!.toLocaleString()}` }
+          : isQuiet
+          ? { Icon: BellOff, label: 'Modalità silenziosa', tone: 'warn', desc: <>Silenzio fino a <span className="text-accent">{fmtRelative(quietUntil!)}</span></>, sub: `Fine: ${quietUntil!.toLocaleString()}` }
+          : isWorking
+          ? { Icon: Activity, label: 'In lavoro', tone: 'ok', desc: <>{running} agent{running > 1 ? 'i' : 'e'} in esecuzione</>, sub: pending ? `${pending} in coda` : 'Conductor attivo · MCP in volo' }
+          : { Icon: Coffee, label: 'Idle · pronto', tone: 'default', desc: <>Tutto tranquillo. Aspetto messaggi.</>, sub: 'Scrivimi su Telegram o lancia un task' };
+        return (
+          <Card className="relative overflow-hidden border-accent/30 bg-gradient-to-br from-accent/10 via-surface to-surface">
+            <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-accent/20 blur-3xl pointer-events-none" />
+            <div className="relative flex items-start gap-4 flex-wrap">
+              <div className="w-12 h-12 rounded-2xl bg-accent/20 border border-accent/40 flex items-center justify-center text-accent shrink-0">
+                <cfg.Icon size={22} />
               </div>
-              {sleepUntil && (
-                <>
-                  <div className="text-lg font-semibold text-text">
-                    Si risveglierà <span className="text-accent">{fmtRelative(sleepUntil)}</span>
-                  </div>
-                  <div className="text-sm text-muted mt-1">
-                    Prossimo wake: <span className="font-mono text-text">{sleepUntil.toLocaleString()}</span>
-                  </div>
-                </>
-              )}
-              {quietUntil && !sleepUntil && (
-                <>
-                  <div className="text-lg font-semibold text-text">
-                    Silenzio fino a <span className="text-accent">{fmtRelative(quietUntil)}</span>
-                  </div>
-                  <div className="text-sm text-muted mt-1">
-                    Fine: <span className="font-mono text-text">{quietUntil.toLocaleString()}</span>
-                  </div>
-                </>
-              )}
-              {quietUntil && sleepUntil && (
-                <div className="text-xs text-muted mt-2">Quiet mode attivo fino a {quietUntil.toLocaleString()}</div>
-              )}
-              {agentState?.sleep?.reason && (
-                <div className="text-xs text-muted mt-2 italic">Motivo: {agentState.sleep.reason}</div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-accent font-semibold mb-1">
+                  {cfg.label}
+                  {isWorking && <span className="inline-block w-1.5 h-1.5 rounded-full bg-ok animate-pulse" />}
+                </div>
+                <div className="text-lg font-semibold text-text">{cfg.desc}</div>
+                <div className="text-sm text-muted mt-1 font-mono truncate">{cfg.sub}</div>
+                {agentState?.sleep?.reason && isSleeping && (
+                  <div className="text-xs text-muted mt-2 italic">Motivo: {agentState.sleep.reason}</div>
+                )}
+              </div>
+              {(isSleeping || isQuiet || isIdle) && (
+                <Button onClick={wake} className="shrink-0 self-start">
+                  <AlarmClock size={16} className="inline mr-2 -mt-0.5" />{t('dash.wakeNow')}
+                </Button>
               )}
             </div>
-            <Button onClick={wake} className="shrink-0 self-start">
-              <AlarmClock size={16} className="inline mr-2 -mt-0.5" />{t('dash.wakeNow')}
-            </Button>
-          </div>
-        </Card>
-      )}
+          </Card>
+        );
+      })()}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2 flex flex-col h-[80vh]">
           <div className="flex items-center justify-between mb-4">
@@ -158,17 +178,34 @@ export default function Dashboard() {
             <Kpi icon={<Zap size={14} />} label="Agenti" value={`${running}▸${pending}⏳`} highlight={running > 0} />
             <Kpi icon={<Hash size={14} />} label="Chat ID" value={chatId ? String(chatId) : '—'} mono />
           </div>
-          <div ref={streamRef} onScroll={onStreamScroll} className="flex-1 overflow-y-auto space-y-2 pr-2">
+          <div
+            ref={streamRef}
+            onScroll={onStreamScroll}
+            className="flex-1 overflow-y-auto space-y-2 pr-2 rounded-2xl"
+            style={{
+              backgroundColor: '#0a0a0c',
+              backgroundImage: `linear-gradient(rgba(10,10,12,0.75), rgba(10,10,12,0.75)), url('/pattern-15-themed.svg')`,
+              backgroundSize: 'auto, 33.33% auto',
+              backgroundPosition: 'center, top left',
+              backgroundRepeat: 'no-repeat, repeat',
+              backgroundAttachment: 'local',
+              padding: '0.75rem',
+            }}
+          >
             {msgs.length === 0 && <div className="text-muted text-sm">{t('dash.noMessages')}</div>}
             {msgs.map((m, i) => (
               <div key={m.id ?? i} className={`flex ${m.direction === 'in' ? 'justify-start' : 'justify-end'}`}>
-                <div className={`max-w-[78%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
+                <div className={`max-w-[78%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap shadow-md ${
                   m.direction === 'in'
                     ? 'bg-surface2 border border-border text-text'
                     : m.direction === 'out'
-                    ? 'bg-accent/15 border border-accent/30 text-text'
-                    : 'bg-warn/10 border border-warn/30 text-warn'
-                }`}>
+                    ? 'border border-accent/40 text-text'
+                    : 'border border-warn/40 text-warn'
+                }`} style={
+                  m.direction === 'out' ? { backgroundColor: '#2a1f3d' }
+                  : m.direction === 'system' ? { backgroundColor: '#2a2210' }
+                  : undefined
+                }>
                   {m.content}
                   <div className="text-[10px] text-muted mt-1">{new Date(m.ts).toLocaleTimeString()}</div>
                 </div>
@@ -176,46 +213,70 @@ export default function Dashboard() {
             ))}
           </div>
         </Card>
-        <Card className="h-[80vh] overflow-y-auto">
+        <Card className="h-[80vh] flex flex-col">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">Attività agente</h2>
             <Chip tone="on"><span className="inline-block w-1.5 h-1.5 rounded-full bg-ok mr-1.5 animate-pulse" />live</Chip>
           </div>
-          {toolUses.length === 0 && events.length === 0 && <div className="text-muted text-sm">Nessuna attività ancora.</div>}
-          {toolUses.length > 0 && (
-            <div className="mb-5">
-              <div className="text-[10px] uppercase tracking-wider text-muted mb-2 font-semibold">Tool & MCP usati</div>
+          <div className="flex items-center gap-1 mb-3 bg-surface2/40 border border-border rounded-full p-1 w-fit">
+            {(['all', 'mcp', 'native'] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setToolFilter(f)}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition ${toolFilter === f ? 'bg-accent text-bg' : 'text-muted hover:text-text'}`}
+              >
+                {f === 'all' ? 'Tutto' : f === 'mcp' ? 'MCP' : 'Native'}
+              </button>
+            ))}
+            <button onClick={() => loadEvents(true)} className="ml-1 px-2 py-1 rounded-full text-xs text-muted hover:text-text" title="Ricarica">↻</button>
+          </div>
+          <div className="flex-1 overflow-y-auto -mr-2 pr-2">
+            {toolUses.length === 0 && events.length === 0 && <div className="text-muted text-sm">Nessuna attività ancora.</div>}
+            {toolUses.length > 0 && (
               <ul className="space-y-1.5">
-                {toolUses.slice(0, 25).map((u, i) => (
-                  <li key={i} className={`border rounded-xl p-2.5 text-xs ${u.isMcp ? 'border-accent2/30 bg-accent2/5' : 'border-border bg-surface2/40'}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className={u.isMcp ? 'text-accent2' : 'text-accent'}>{u.isMcp ? '⌬' : '▸'}</span>
-                        <span className="font-mono font-semibold truncate">{u.isMcp && u.server ? `${u.server}` : u.name.replace(/^mcp__/, '')}</span>
-                        {u.isMcp && <span className="font-mono text-muted truncate">{u.name.split('__').slice(2).join('_') || ''}</span>}
-                        {!u.isMcp && u.name && <span className="font-mono text-muted">{u.name}</span>}
+                {toolUses.map((u, i) => {
+                  const isMcp = u.isMcp ?? u.is_mcp ?? false;
+                  const tsMs = typeof u.ts === 'string' ? new Date(u.ts).getTime() : u.ts;
+                  return (
+                    <li key={u.id ?? i} className={`border rounded-xl p-2.5 text-xs ${isMcp ? 'border-accent2/30 bg-accent2/5' : 'border-border bg-surface2/40'}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className={isMcp ? 'text-accent2' : 'text-accent'}>{isMcp ? '⌬' : '▸'}</span>
+                          <span className="font-mono font-semibold truncate">{isMcp && u.server ? `${u.server}` : u.name.replace(/^mcp__/, '')}</span>
+                          {isMcp && <span className="font-mono text-muted truncate">{u.name.split('__').slice(2).join('_') || ''}</span>}
+                          {!isMcp && u.name && <span className="font-mono text-muted">{u.name}</span>}
+                        </div>
+                        <span className="text-[9px] text-muted font-mono shrink-0">{new Date(tsMs).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
-                      <span className="text-[9px] text-muted font-mono shrink-0">{new Date(u.ts).toLocaleTimeString()}</span>
-                    </div>
-                    {u.brief && <div className="text-muted mt-1 truncate font-mono text-[10px]">{u.brief}</div>}
-                  </li>
-                ))}
+                      {u.brief && <div className="text-muted mt-1 truncate font-mono text-[10px]">{u.brief}</div>}
+                    </li>
+                  );
+                })}
               </ul>
-            </div>
-          )}
-          {events.length > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted mb-2 font-semibold">{t('dash.connectorEvents')}</div>
-              <ul className="space-y-2">
-                {events.map((e, i) => (
-                  <li key={i} className="text-sm border border-border rounded-xl p-3 bg-surface2/40">
-                    <div className="text-xs text-accent2 uppercase">{e.connector} · {e.kind}</div>
-                    <pre className="text-xs text-muted whitespace-pre-wrap mt-1">{JSON.stringify(e.payload, null, 2).slice(0, 400)}</pre>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+            )}
+            {hasMoreEvents && toolUses.length > 0 && (
+              <button
+                onClick={() => loadEvents(false)}
+                disabled={loadingMoreEvents}
+                className="w-full mt-3 py-2 rounded-xl border border-border bg-surface2/40 text-xs text-muted hover:text-text hover:border-accent/40 transition"
+              >
+                {loadingMoreEvents ? 'Carico…' : 'Carica più vecchie'}
+              </button>
+            )}
+            {events.length > 0 && (
+              <div className="mt-5">
+                <div className="text-[10px] uppercase tracking-wider text-muted mb-2 font-semibold">{t('dash.connectorEvents')}</div>
+                <ul className="space-y-2">
+                  {events.map((e, i) => (
+                    <li key={i} className="text-sm border border-border rounded-xl p-3 bg-surface2/40">
+                      <div className="text-xs text-accent2 uppercase">{e.connector} · {e.kind}</div>
+                      <pre className="text-xs text-muted whitespace-pre-wrap mt-1">{JSON.stringify(e.payload, null, 2).slice(0, 400)}</pre>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         </Card>
       </div>
     </div>
