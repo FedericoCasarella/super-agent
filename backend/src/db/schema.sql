@@ -145,13 +145,6 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS agent_runs_user_idx ON agent_runs(user_id);
 
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_tasks' AND column_name='user_id') THEN
-    ALTER TABLE scheduled_tasks ADD COLUMN user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
-  END IF;
-EXCEPTION WHEN others THEN NULL; END $$;
-CREATE INDEX IF NOT EXISTS scheduled_tasks_user_idx ON scheduled_tasks(user_id);
-
 CREATE TABLE IF NOT EXISTS internal_agents (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -255,6 +248,15 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS scheduled_tasks_enabled_idx ON scheduled_tasks(enabled);
+
+-- user_id patch: must run AFTER scheduled_tasks exists (fresh installs created the
+-- table without this column; this idempotently backfills it on new and old DBs).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_tasks' AND column_name='user_id') THEN
+    ALTER TABLE scheduled_tasks ADD COLUMN user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS scheduled_tasks_user_idx ON scheduled_tasks(user_id);
 
 -- Sub-agents (human-in-the-loop spawned by main agent)
 CREATE TABLE IF NOT EXISTS agent_proposals (
