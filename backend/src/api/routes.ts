@@ -706,9 +706,10 @@ router.get('/usage', async (req, res) => {
   const os = await import('node:os');
   const root = path.join(os.homedir(), '.claude', 'projects');
   const windowMs = 5 * 3600_000;
-  const cutoff = Date.now() - windowMs;
-  let inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
-  let firstTs: number | null = null;
+  // Scan messages from last 10h (cover both current + previous Anthropic window)
+  const scanCutoff = Date.now() - 2 * windowMs;
+  type Msg = { ts: number; in: number; out: number; cacheR: number; cacheC: number };
+  const msgs: Msg[] = [];
   try {
     const projects = await fs.readdir(root).catch(() => [] as string[]);
     for (const proj of projects) {
@@ -720,30 +721,45 @@ router.get('/usage', async (req, res) => {
         const fp = path.join(dir, f);
         let stat: any;
         try { stat = await fs.stat(fp); } catch { continue; }
-        if (stat.mtimeMs < cutoff) continue; // file untouched in window — skip
+        if (stat.mtimeMs < scanCutoff) continue;
         let raw: string;
         try { raw = await fs.readFile(fp, 'utf8'); } catch { continue; }
         for (const line of raw.split('\n')) {
           if (!line) continue;
           let j: any;
           try { j = JSON.parse(line); } catch { continue; }
-          // Each assistant message carries usage; timestamp string at top-level
           const ts = j.timestamp ? new Date(j.timestamp).getTime() : null;
-          if (ts == null || ts < cutoff) continue;
+          if (ts == null || ts < scanCutoff) continue;
           const u = j?.message?.usage ?? j?.usage;
           if (!u) continue;
-          inTok += Number(u.input_tokens ?? 0);
-          outTok += Number(u.output_tokens ?? 0);
-          cacheRead += Number(u.cache_read_input_tokens ?? 0);
-          cacheCreate += Number(u.cache_creation_input_tokens ?? 0);
-          if (firstTs == null || ts < firstTs) firstTs = ts;
+          msgs.push({
+            ts,
+            in: Number(u.input_tokens ?? 0),
+            out: Number(u.output_tokens ?? 0),
+            cacheR: Number(u.cache_read_input_tokens ?? 0),
+            cacheC: Number(u.cache_creation_input_tokens ?? 0),
+          });
         }
       }
     }
   } catch (e) { console.error('[usage] scan failed', e); }
-  // Note: tokens that count vs subscription = input + output (cache discounted).
+  msgs.sort((a, b) => a.ts - b.ts);
+  // Anthropic window logic: find the earliest msg M such that M + 5h > now → window starts at M.
+  // Any msg older than that is from previous (expired) window.
+  const now = Date.now();
+  let windowStart: number | null = null;
+  for (const m of msgs) {
+    if (m.ts + windowMs > now) { windowStart = m.ts; break; }
+  }
+  let inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
+  if (windowStart != null) {
+    for (const m of msgs) {
+      if (m.ts < windowStart) continue;
+      inTok += m.in; outTok += m.out; cacheRead += m.cacheR; cacheCreate += m.cacheC;
+    }
+  }
   const usedTokens = inTok + outTok;
-  const resetAt = firstTs ? new Date(firstTs + windowMs).toISOString() : null;
+  const resetAt = windowStart != null ? new Date(windowStart + windowMs).toISOString() : null;
   const data = { usedTokens, resetAt, breakdown: { in: inTok, out: outTok, cache_read: cacheRead, cache_create: cacheCreate } };
   usageCache = { ts: Date.now(), data };
   res.json({ plan, ...data });

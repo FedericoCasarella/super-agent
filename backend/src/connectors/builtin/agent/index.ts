@@ -240,6 +240,25 @@ const connector: Connector = {
       handler: async (ctx, { request_id, reason }) => net.denyShareRequest(ctx.userId, request_id, reason),
     },
     {
+      name: 'change_user_password',
+      description: 'Cambia password account web super-agent dell\'utente. USA SOLO SU RICHIESTA ESPLICITA dell\'utente nel messaggio corrente (es. "cambia password a X", "imposta password nuova: X"). MAI in autonomia. MAI inferire. Password min 8 chars. Conferma in chat dopo successo senza ripetere la password.',
+      inputSchema: {
+        type: 'object',
+        properties: { newPassword: { type: 'string', minLength: 8, description: 'Nuova password in chiaro (min 8 char). Non logga.' } },
+        required: ['newPassword'], additionalProperties: false,
+      },
+      handler: async (ctx, { newPassword }) => {
+        const { setUserPassword } = await import('../../../auth/index.js');
+        try {
+          await setUserPassword(ctx.userId, newPassword);
+          console.log(`[agent:u${ctx.userId}] password changed via telegram`);
+          return { ok: true };
+        } catch (e: any) {
+          return { ok: false, error: String(e?.message ?? e) };
+        }
+      },
+    },
+    {
       name: 'telegram_react',
       description: 'React with an emoji to the last incoming Telegram message (or a specific message_id). Use SPARINGLY — only when reaction is more appropriate than a text reply: acknowledgment of a small update ("ok 👍"), agreement (❤️/🔥), celebration (🎉), comprehension (🤔). Do NOT react to every message. If reacting, you can SKIP the text reply (return empty string).',
       inputSchema: {
