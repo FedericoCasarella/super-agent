@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import { useAuth } from '../auth';
 import { Button } from './ui';
+import UsageGauge from './UsageGauge';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
   Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle,
@@ -67,7 +68,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
               <NavLink
                 key={it.to}
                 to={it.to}
-                end={it.to === '/dashboard'}
+                end
                 onClick={onCloseMobile}
                 title={collapsed ? it.label : undefined}
                 style={{ animationDelay: `${i * 30}ms` }}
@@ -94,6 +95,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
         </nav>
 
         <div className="mt-auto px-1 pt-4 border-t border-border/60 space-y-2">
+          <UsageGauge collapsed={collapsed} />
           {!collapsed && <div className="text-xs text-muted truncate font-medium px-1">{user?.name || user?.email}</div>}
           <Button variant="ghost" size="sm" className={`w-full ${collapsed ? 'md:px-2' : ''}`} onClick={logout}>
             {collapsed ? <LogOut size={16} /> : (<><LogOut size={14} className="inline mr-1.5 -mt-0.5" />{t('nav.logout')}</>)}

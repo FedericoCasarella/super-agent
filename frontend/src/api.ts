@@ -49,6 +49,8 @@ export const api = {
   brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
     req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
   brainStats: () => req<any>('/brain/stats'),
+  usage: () => req<any>('/usage'),
+  updatePlan: (name: string, sessionLimitTokens: number) => req<any>('/usage/plan', { method: 'PUT', body: JSON.stringify({ name, sessionLimitTokens }) }),
   toolEvents: (opts: { filter?: 'all' | 'mcp' | 'native'; cursor?: number; server?: string; limit?: number } = {}) => {
     const p = new URLSearchParams();
     if (opts.filter && opts.filter !== 'all') p.set('filter', opts.filter);

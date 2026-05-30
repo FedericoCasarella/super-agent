@@ -691,6 +691,75 @@ router.get('/mcp/external', async (req, res) => {
 });
 
 // Settings
+// Claude plan + 5h session usage — letto direttamente dai jsonl di Claude Code
+// (~/.claude/projects/**/*.jsonl) per allineamento 1:1 con /cost del TUI.
+let usageCache: { ts: number; data: any } | null = null;
+router.get('/usage', async (req, res) => {
+  const userId = req.user!.id;
+  const plan = (await getSetting<any>(userId, 'claude_plan')) ?? { name: 'Max (5x)', sessionLimitTokens: 750_000 };
+  // Cache 25s per evitare scan continui
+  if (usageCache && Date.now() - usageCache.ts < 25_000) {
+    return res.json({ plan, ...usageCache.data });
+  }
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const os = await import('node:os');
+  const root = path.join(os.homedir(), '.claude', 'projects');
+  const windowMs = 5 * 3600_000;
+  const cutoff = Date.now() - windowMs;
+  let inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
+  let firstTs: number | null = null;
+  try {
+    const projects = await fs.readdir(root).catch(() => [] as string[]);
+    for (const proj of projects) {
+      const dir = path.join(root, proj);
+      let files: string[] = [];
+      try { files = await fs.readdir(dir); } catch { continue; }
+      for (const f of files) {
+        if (!f.endsWith('.jsonl')) continue;
+        const fp = path.join(dir, f);
+        let stat: any;
+        try { stat = await fs.stat(fp); } catch { continue; }
+        if (stat.mtimeMs < cutoff) continue; // file untouched in window — skip
+        let raw: string;
+        try { raw = await fs.readFile(fp, 'utf8'); } catch { continue; }
+        for (const line of raw.split('\n')) {
+          if (!line) continue;
+          let j: any;
+          try { j = JSON.parse(line); } catch { continue; }
+          // Each assistant message carries usage; timestamp string at top-level
+          const ts = j.timestamp ? new Date(j.timestamp).getTime() : null;
+          if (ts == null || ts < cutoff) continue;
+          const u = j?.message?.usage ?? j?.usage;
+          if (!u) continue;
+          inTok += Number(u.input_tokens ?? 0);
+          outTok += Number(u.output_tokens ?? 0);
+          cacheRead += Number(u.cache_read_input_tokens ?? 0);
+          cacheCreate += Number(u.cache_creation_input_tokens ?? 0);
+          if (firstTs == null || ts < firstTs) firstTs = ts;
+        }
+      }
+    }
+  } catch (e) { console.error('[usage] scan failed', e); }
+  // Note: tokens that count vs subscription = input + output (cache discounted).
+  const usedTokens = inTok + outTok;
+  const resetAt = firstTs ? new Date(firstTs + windowMs).toISOString() : null;
+  const data = { usedTokens, resetAt, breakdown: { in: inTok, out: outTok, cache_read: cacheRead, cache_create: cacheCreate } };
+  usageCache = { ts: Date.now(), data };
+  res.json({ plan, ...data });
+  void userId;
+});
+router.put('/usage/plan', async (req, res) => {
+  const userId = req.user!.id;
+  const { name, sessionLimitTokens } = req.body ?? {};
+  if (!name || typeof sessionLimitTokens !== 'number' || sessionLimitTokens <= 0) {
+    return res.status(400).json({ error: 'name + sessionLimitTokens (>0) required' });
+  }
+  await setSetting(userId, 'claude_plan', { name, sessionLimitTokens });
+  usageCache = null; // bust cache
+  res.json({ ok: true });
+});
+
 router.get('/settings', async (req, res) => {
   const userId = req.user!.id;
   const profile = await getSetting<any>(userId, 'profile');
