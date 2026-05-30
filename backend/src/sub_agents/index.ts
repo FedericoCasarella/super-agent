@@ -131,7 +131,7 @@ async function runSubAgent(id: number): Promise<void> {
   try {
     const result = await runClaude(sa.user_id, sa.prompt, {
       kind: `subagent:${sa.title.slice(0, 32)}`,
-      timeoutMs: 600_000,
+      timeoutMs: 1_800_000,
       meta: { sub_agent_id: id, title: sa.title },
     });
     const actions = JSON.stringify(result.toolCalls ?? []);

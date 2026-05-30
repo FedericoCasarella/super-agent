@@ -14,9 +14,11 @@ import Tasks from './pages/Tasks';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import LiveAgents from './pages/LiveAgents';
+import WhatsApp from './pages/WhatsApp';
 import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
 import MessageSound from './components/MessageSound';
+import BrainLoading from './components/BrainLoading';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -32,9 +34,9 @@ export default function App() {
   }
   useEffect(() => { refresh(); }, [user]);
 
-  if (loading) return <div className="h-full flex items-center justify-center text-muted">loading…</div>;
+  if (loading) return <div className="h-full flex items-center justify-center"><BrainLoading size={140} /></div>;
   if (!user) return <AuthPage />;
-  if (!status) return <div className="h-full flex items-center justify-center text-muted">loading…</div>;
+  if (!status) return <div className="h-full flex items-center justify-center"><BrainLoading size={140} /></div>;
   if (!status.onboarded) return <Onboarding status={status} onDone={refresh} />;
 
   return (
@@ -73,6 +75,7 @@ export default function App() {
             <Route path="/perks" element={<Agents />} />
             <Route path="/perks/:name" element={<AgentDetail />} />
             <Route path="/agents" element={<LiveAgents />} />
+            <Route path="/whatsapp" element={<WhatsApp />} />
             <Route path="/live-agents" element={<Navigate to="/agents" replace />} />
             <Route path="/network" element={<Network />} />
             <Route path="/logs" element={<Logs />} />

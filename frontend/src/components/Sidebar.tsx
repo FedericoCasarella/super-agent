@@ -4,7 +4,7 @@ import { useAuth } from '../auth';
 import { Button } from './ui';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
-  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight,
+  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -26,7 +26,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/tasks', label: 'Tasks', icon: ListChecks },
     { to: '/agents', label: 'Agents', icon: Zap },
     { to: '/perks', label: 'Perks', icon: Sparkles },
-    { to: '/network', label: 'Network', icon: Share2 },
+    { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
+    // { to: '/network', label: 'Network', icon: Share2 }, // hidden: needs server infra
     { to: '/logs', label: 'Logs', icon: ScrollText },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
   ];

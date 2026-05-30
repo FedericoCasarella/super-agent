@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import BrainLoading from './BrainLoading';
 
 type Stats = {
   totals: { notes: number; files: number; bytes: number; vaults: number; updatedLast7Days: number; lastUpdate: string | null };
@@ -53,7 +54,7 @@ export default function BrainOverview() {
   }, []);
 
   if (err) return <div className="text-sm text-red-300">Errore: {err}</div>;
-  if (!stats) return <div className="text-muted text-sm">Caricamento…</div>;
+  if (!stats) return <BrainLoading size={80} label="Caricamento…" />;
 
   const totalKind = stats.byKind.reduce((a, k) => a + k.n, 0) || 1;
 

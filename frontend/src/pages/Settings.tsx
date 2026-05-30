@@ -3,6 +3,7 @@ import { api } from '../api';
 import { Button, Card, Field, Input, Textarea, Modal, Banner, Chip, Toggle, useToast } from '../components/ui';
 import { useI18n, Lang } from '../i18n';
 import { useAuth } from '../auth';
+import BrainLoading from '../components/BrainLoading';
 
 export default function Settings() {
   const [s, setS] = useState<any>(null);
@@ -86,7 +87,7 @@ export default function Settings() {
     await load();
   }
 
-  if (!s) return <div className="text-muted">loading…</div>;
+  if (!s) return <BrainLoading size={120} label="Caricamento…" />;
 
   const vaultChanged = vault && vault !== s.vault;
 

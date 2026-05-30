@@ -332,3 +332,66 @@ DO $$ BEGIN
     ALTER TABLE email_drafts ADD COLUMN account_label TEXT;
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='people' AND column_name='phones') THEN
+    ALTER TABLE people ADD COLUMN phones TEXT[] NOT NULL DEFAULT '{}';
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS people_phones_idx ON people USING gin(phones);
+
+CREATE TABLE IF NOT EXISTS wa_messages (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  msg_id TEXT NOT NULL,
+  chat_jid TEXT NOT NULL,
+  sender_jid TEXT NOT NULL,
+  sender_phone TEXT,
+  sender_name TEXT,
+  person_slug TEXT,
+  is_group BOOLEAN NOT NULL DEFAULT false,
+  group_jid TEXT,
+  from_me BOOLEAN NOT NULL DEFAULT false,
+  text TEXT NOT NULL DEFAULT '',
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id, msg_id)
+);
+CREATE INDEX IF NOT EXISTS wa_messages_user_chat_ts_idx ON wa_messages(user_id, chat_jid, ts DESC);
+CREATE INDEX IF NOT EXISTS wa_messages_user_ts_idx ON wa_messages(user_id, ts DESC);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_messages' AND column_name='processed_at') THEN
+    ALTER TABLE wa_messages ADD COLUMN processed_at TIMESTAMPTZ;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS wa_messages_user_processed_idx ON wa_messages(user_id, processed_at);
+
+CREATE TABLE IF NOT EXISTS wa_contacts (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  jid TEXT NOT NULL,
+  name TEXT,
+  notify TEXT,
+  verified_name TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(user_id, jid)
+);
+CREATE INDEX IF NOT EXISTS wa_contacts_user_idx ON wa_contacts(user_id);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='lid') THEN
+    ALTER TABLE wa_contacts ADD COLUMN lid TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS wa_contacts_user_lid_idx ON wa_contacts(user_id, lid);
+
+CREATE TABLE IF NOT EXISTS tool_events (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  server TEXT,
+  is_mcp BOOLEAN NOT NULL DEFAULT false,
+  brief TEXT,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS tool_events_user_ts_idx ON tool_events(user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS tool_events_user_mcp_idx ON tool_events(user_id, is_mcp, ts DESC);
