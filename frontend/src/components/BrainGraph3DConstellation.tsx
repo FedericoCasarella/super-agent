@@ -162,9 +162,10 @@ export default function BrainGraph3DConstellation({
     focusDirtyRef.current = true;
     setMriTick((t) => t + 1);
   });
-  // Tick while MRI active so nodeColor callback re-runs + auto-clear
+  // Tick only when MRI active — skip otherwise to keep idle CPU low
   useEffect(() => {
     const iv = setInterval(() => {
+      if (mriRef.current.size === 0) return;
       const now = Date.now();
       for (const [k, v] of mriRef.current) {
         if (v.end <= now) mriRef.current.delete(k);
@@ -213,7 +214,7 @@ export default function BrainGraph3DConstellation({
     } catch {}
   }, [data]);
 
-  // Build / rebuild particle field whenever data changes — particles flow node→node
+  // Particle field DISABLED — no flowing dots between nodes
   useEffect(() => {
     const fg: any = fgRef.current;
     if (!fg) return;
@@ -224,14 +225,11 @@ export default function BrainGraph3DConstellation({
       (fieldRef.current.points.material as THREE.Material).dispose();
       fieldRef.current = null;
     }
-    const N = data.nodes.length;
-    if (N === 0) return;
-
-    // Build neighbor map from links (index-based)
+    // Still need neighbor map for MRI focus highlighting
     const idToIdx = new Map<string, number>();
     data.nodes.forEach((n, i) => idToIdx.set(n.id, i));
     const neighbors = new Map<number, number[]>();
-    for (let i = 0; i < N; i++) neighbors.set(i, []);
+    for (let i = 0; i < data.nodes.length; i++) neighbors.set(i, []);
     for (const l of data.links) {
       const s = typeof l.source === 'object' ? (l.source as Node).id : l.source;
       const t = typeof l.target === 'object' ? (l.target as Node).id : l.target;
@@ -241,67 +239,7 @@ export default function BrainGraph3DConstellation({
       neighbors.get(ti)!.push(si);
     }
     neighborsRef.current = neighbors;
-
-    const total = N * PER_NODE;
-    const positions = new Float32Array(total * 3);
-    const colors = new Float32Array(total * 3);
-    const sourceIdx = new Int32Array(total);
-    const targetIdx = new Int32Array(total);
-    const t = new Float32Array(total);
-    const speed = new Float32Array(total);
-    const curveAmp = new Float32Array(total);
-    const curveAxis = new Float32Array(total * 3);
-    const tmp = new THREE.Color();
-
-    for (let i = 0; i < N; i++) {
-      const node = data.nodes[i] as any;
-      tmp.set(colorFor(node));
-      const nbrs = neighbors.get(i)!;
-      for (let j = 0; j < PER_NODE; j++) {
-        const idx = i * PER_NODE + j;
-        sourceIdx[idx] = i;
-        // Pick a target neighbor — fallback to self for isolated nodes
-        targetIdx[idx] = nbrs.length ? nbrs[Math.floor(Math.random() * nbrs.length)] : i;
-        t[idx] = Math.random();
-        speed[idx] = 0.18 + Math.random() * 0.32; // seconds⁻¹
-        curveAmp[idx] = 0.15 + Math.random() * 0.45;
-        // random unit perpendicular axis
-        const u = Math.random() * 2 - 1;
-        const theta = Math.random() * Math.PI * 2;
-        const m = Math.sqrt(1 - u * u);
-        curveAxis[idx * 3]     = m * Math.cos(theta);
-        curveAxis[idx * 3 + 1] = u;
-        curveAxis[idx * 3 + 2] = m * Math.sin(theta);
-        // initial position will be set by anim loop on first frame
-        positions[idx * 3]     = 0;
-        positions[idx * 3 + 1] = 0;
-        positions[idx * 3 + 2] = 0;
-        // color = source node tint
-        colors[idx * 3]     = tmp.r;
-        colors[idx * 3 + 1] = tmp.g;
-        colors[idx * 3 + 2] = tmp.b;
-      }
-    }
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-    const mat = new THREE.PointsMaterial({
-      size: 1.4,
-      sizeAttenuation: true,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.85,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const points = new THREE.Points(geo, mat);
-    (points as any).raycast = () => {};
-    scene.add(points);
-    const baseColors = new Float32Array(colors); // copy for re-modulation on focus
     idToIdxRef.current = idToIdx;
-    fieldRef.current = { points, positions, colors, baseColors, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis };
-    focusDirtyRef.current = true;
   }, [data, PER_NODE]);
 
   // Build focus index set + mark dirty whenever hover/select changes
@@ -327,7 +265,7 @@ export default function BrainGraph3DConstellation({
     if (!fg) return;
     // Auto-rotate ON (slow), edge particle animations OFF
     const ctrls0: any = fg.controls?.();
-    if (ctrls0) { ctrls0.autoRotate = true; ctrls0.autoRotateSpeed = 0.12; }
+    if (ctrls0) { ctrls0.autoRotate = true; ctrls0.autoRotateSpeed = 0.04; }
 
     // Track user interaction to pause manual orbit
     const lastInteractRef = { current: 0 };
@@ -479,7 +417,7 @@ export default function BrainGraph3DConstellation({
           const dz = cam.position.z - target.z;
           const r = Math.hypot(dx, dz);
           if (r > 0.01) {
-            const ang = Math.atan2(dz, dx) + 0.035 * dt;
+            const ang = Math.atan2(dz, dx) + 0.012 * dt;
             cam.position.x = target.x + Math.cos(ang) * r;
             cam.position.z = target.z + Math.sin(ang) * r;
             cam.lookAt(target);
@@ -554,8 +492,9 @@ export default function BrainGraph3DConstellation({
   // Force library re-application of nodeColor on focus or MRI change
   useEffect(() => {
     const fg: any = fgRef.current;
+    // Only refresh when focus changes — mriTick handled by anim loop directly
     try { fg?.refresh?.(); } catch {}
-  }, [hover, selected, mriTick]);
+  }, [hover, selected]);
 
   function mriEnvForLink(l: any): number {
     const sId = typeof l.source === 'object' ? l.source.id : l.source;
@@ -571,26 +510,28 @@ export default function BrainGraph3DConstellation({
   }
   const linkColor = useCallback((l: any) => {
     const focus = hover ?? selected;
-    const sNode0: any = typeof l.source === 'object' ? l.source : null;
-    const tNode0: any = typeof l.target === 'object' ? l.target : null;
+    const resolveNode = (ref: any): any => {
+      if (ref && typeof ref === 'object') return ref;
+      const i = idToIdxRef.current.get(ref);
+      return i != null ? (data.nodes as any[])[i] : null;
+    };
+    const sNode0: any = resolveNode(l.source);
+    const tNode0: any = resolveNode(l.target);
     const mriEnv = mriEnvForLink(l);
     if (mriEnv > 0) return `rgba(57,255,122,${(0.95 * mriEnv).toFixed(3)})`;
     if (!focus) {
-      if (showParticles) return 'rgba(0,0,0,0)';
-      // Line mode: tint by source node base color
       const ref = sNode0 ?? tNode0;
-      if (!ref) return 'rgba(170,180,210,0.35)';
+      if (!ref) return 'rgba(192,132,252,0.4)';
       const c = new THREE.Color(colorFor(ref));
       return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.55)`;
     }
     const s = typeof l.source === 'object' ? l.source.id : l.source;
     const t = typeof l.target === 'object' ? l.target.id : l.target;
     if (s !== focus && t !== focus) {
-      if (showParticles) return 'rgba(0,0,0,0)';
       const ref = sNode0 ?? tNode0;
       if (!ref) return 'rgba(120,130,160,0.22)';
       const c = new THREE.Color(colorFor(ref));
-      return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.30)`;
+      return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.28)`;
     }
     // hot link tinted by the other endpoint (neighbor) — vivid, not grey
     const sNode: any = typeof l.source === 'object' ? l.source : null;
@@ -600,7 +541,7 @@ export default function BrainGraph3DConstellation({
     // convert hex → rgba w/ moderate alpha so particles overlay reads as glow
     const c = new THREE.Color(base);
     return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.55)`;
-  }, [hover, selected, showParticles, mriTick]);
+  }, [hover, selected, showParticles, mriTick, data]);
   const linkWidthCb = useCallback((l: any) => {
     const focus = hover ?? selected;
     const sId = typeof l.source === 'object' ? l.source.id : l.source;
@@ -708,43 +649,6 @@ export default function BrainGraph3DConstellation({
           linkOpacity={1}
           linkWidth={linkWidthCb}
           linkDirectionalParticles={0}
-          linkDirectionalParticleSpeed={(l: any) => {
-            const focus = hover ?? selected;
-            const sId = typeof l.source === 'object' ? l.source.id : l.source;
-            const tId = typeof l.target === 'object' ? l.target.id : l.target;
-            const now = Date.now();
-            const mriS = mriRef.current.get(sId);
-            const mriT = mriRef.current.get(tId);
-            if ((mriS && mriS.end > now) || (mriT && mriT.end > now)) return 0.014;
-            if (!focus) return 0;
-            return (sId === focus || tId === focus) ? 0.011 : 0;
-          }}
-          linkDirectionalParticleWidth={(l: any) => {
-            const focus = hover ?? selected;
-            const sId = typeof l.source === 'object' ? l.source.id : l.source;
-            const tId = typeof l.target === 'object' ? l.target.id : l.target;
-            const now = Date.now();
-            const mriS = mriRef.current.get(sId);
-            const mriT = mriRef.current.get(tId);
-            if ((mriS && mriS.end > now) || (mriT && mriT.end > now)) return 3.2;
-            if (!focus) return 0;
-            return (sId === focus || tId === focus) ? 2.6 : 0;
-          }}
-          linkDirectionalParticleColor={(l: any) => {
-            const focus = hover ?? selected;
-            const sId = typeof l.source === 'object' ? l.source.id : l.source;
-            const tId = typeof l.target === 'object' ? l.target.id : l.target;
-            const now = Date.now();
-            const mriS = mriRef.current.get(sId);
-            const mriT = mriRef.current.get(tId);
-            if ((mriS && mriS.end > now) || (mriT && mriT.end > now)) return MRI_GREEN;
-            if (!focus) return '#ffffff';
-            const sNode: any = typeof l.source === 'object' ? l.source : null;
-            const tNode: any = typeof l.target === 'object' ? l.target : null;
-            const other = sNode && sNode.id === focus ? tNode : sNode;
-            return other ? colorFor(other) : '#7dd3fc';
-          }}
-          linkDirectionalParticleResolution={6}
           onNodeHover={(n: any) => setHover(n?.id ?? null)}
           onNodeClick={(n: any) => {
             setSelected(n.id);
@@ -759,8 +663,8 @@ export default function BrainGraph3DConstellation({
           }}
           onBackgroundClick={() => { setSelected(null); onDeselect?.(); }}
           enableNodeDrag
-          cooldownTicks={Infinity}
-          cooldownTime={Infinity}
+          cooldownTicks={300}
+          cooldownTime={8000}
           warmupTicks={80}
         />
       )}

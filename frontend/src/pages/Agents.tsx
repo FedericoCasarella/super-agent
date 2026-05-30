@@ -30,6 +30,28 @@ function pad(n: number) { return n.toString().padStart(2, '0'); }
 export default function Agents() {
   const [items, setItems] = useState<Agent[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [cooldown, setCooldown] = useState<Record<string, number>>({});
+  const COOLDOWN_S = 60;
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCooldown((prev) => {
+        const next: Record<string, number> = {};
+        let changed = false;
+        for (const [k, ts] of Object.entries(prev)) {
+          const left = Math.max(0, Math.ceil((ts - Date.now()) / 1000));
+          if (left > 0) next[k] = ts;
+          else changed = true;
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+  function cdLeft(name: string): number {
+    const ts = cooldown[name];
+    if (!ts) return 0;
+    return Math.max(0, Math.ceil((ts - Date.now()) / 1000));
+  }
   const toast = useToast();
   const nav = useNavigate();
   const { t } = useI18n();
@@ -44,12 +66,17 @@ export default function Agents() {
   }
   async function run(a: Agent, e: React.MouseEvent) {
     e.stopPropagation();
+    if (cdLeft(a.name) > 0) return;
     setBusy(a.name);
+    setCooldown((prev) => ({ ...prev, [a.name]: Date.now() + COOLDOWN_S * 1000 }));
     try {
       await api.runInternalAgent(a.name);
-      toast.push(`${a.title} run complete`, 'on');
+      toast.push(`${a.title} attivato`, 'on');
       await load();
-    } catch (e: any) { toast.push(e.message, 'err'); }
+    } catch (e: any) {
+      toast.push(e.message, 'err');
+      setCooldown((prev) => { const n = { ...prev }; delete n[a.name]; return n; }); // failed → no cooldown
+    }
     finally { setBusy(null); }
   }
 
@@ -111,7 +138,9 @@ export default function Agents() {
                 )}
                 <div className="mt-auto pt-4 flex gap-2 flex-wrap">
                   <Button variant="ghost" size="sm" onClick={() => nav(`/perks/${a.name}`)}>{t('agents.openDetail')}</Button>
-                  <Button variant="ghost" size="sm" onClick={(e) => run(a, e)} disabled={busy === a.name}>{busy === a.name ? '…' : t('agents.runNow')}</Button>
+                  <Button variant="ghost" size="sm" onClick={(e) => run(a, e)} disabled={busy === a.name || cdLeft(a.name) > 0}>
+                    {busy === a.name ? 'Attivando…' : cdLeft(a.name) > 0 ? `Riattivabile in ${cdLeft(a.name)}s` : 'Attiva il Perk'}
+                  </Button>
                 </div>
               </div>
             </div>

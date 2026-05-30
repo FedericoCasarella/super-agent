@@ -20,7 +20,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
   const { t } = useI18n();
   const { user, logout } = useAuth();
   const items: { to: string; label: string; icon: LucideIcon }[] = [
-    { to: '/dashboard', label: t('nav.live'), icon: Activity },
+    { to: '/', label: t('nav.live'), icon: Activity },
     { to: '/connectors', label: t('nav.connectors'), icon: Plug },
     { to: '/brain', label: t('nav.brain'), icon: Brain },
     { to: '/roadmap', label: t('nav.roadmap'), icon: MapIcon },
