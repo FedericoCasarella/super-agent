@@ -376,6 +376,79 @@ export async function bonifyWaMessages(userId: number, opts: { limit?: number; o
   return { ok: true, processed: ids.length, runId: res.runId, cost: res.costUsd };
 }
 
+// Generate a draft reply using Claude + brain context. Does NOT send.
+export async function suggestReply(userId: number, chatJid: string, opts: { hint?: string } = {}): Promise<{ ok: boolean; draft?: string; error?: string }> {
+  const msgs = await query<any>(
+    `SELECT sender_jid, sender_phone, sender_name, person_slug, is_group, from_me, text, ts
+     FROM wa_messages WHERE user_id=$1 AND chat_jid=$2 AND msg_id NOT LIKE 'chat:%' AND text <> ''
+     ORDER BY ts DESC LIMIT 30`, [userId, chatJid]
+  );
+  if (!msgs.length) return { ok: false, error: 'no messages in chat' };
+  msgs.reverse();
+  const last = msgs[msgs.length - 1];
+  const personSlug = last.person_slug ?? msgs.find((m: any) => m.person_slug)?.person_slug;
+  const senderName = last.sender_name ?? last.sender_phone ?? 'utente';
+
+  // Pull person notes if available
+  let personContext = '';
+  if (personSlug) {
+    try {
+      const { readNote } = await import('../../../brain/vault.js');
+      const note = await readNote(userId, `people/${personSlug}.md`);
+      if (note?.content) personContext = note.content.slice(0, 6000);
+    } catch {}
+  }
+
+  const transcript = msgs.map((m: any) =>
+    `[${new Date(m.ts).toLocaleString('it-IT')}] ${m.from_me ? 'TU' : (m.sender_name ?? m.sender_phone)}: ${m.text}`
+  ).join('\n');
+
+  const { runClaude } = await import('../../../claude/runner.js');
+  const { getVaultRoot } = await import('../../../brain/vault.js');
+  const { buildScheduledTaskContext } = await import('../../../claude/prompts.js');
+  const sys = await buildScheduledTaskContext(userId);
+  const vault = await getVaultRoot(userId);
+
+  const prompt = `${sys}\n\n=== SUGGERISCI RISPOSTA WHATSAPP ===\n\nDestinatario: ${senderName}${personSlug ? ` (slug: ${personSlug})` : ''}.\nChat JID: ${chatJid}.\n\n${personContext ? `CONTESTO PERSONA (dal second brain):\n\`\`\`\n${personContext}\n\`\`\`\n\n` : ''}TRANSCRIPT ULTIMI ${msgs.length} MESSAGGI:\n\`\`\`\n${transcript}\n\`\`\`\n\n${opts.hint ? `HINT UTENTE: ${opts.hint}\n\n` : ''}REGOLE:\n- Rispondi all'ULTIMO messaggio. Se è una domanda, rispondi alla domanda. Se è uno statement, reagisci appropriato.\n- Mirror del tone usato dall'utente nei suoi messaggi precedenti (vedi righe "TU").\n- Italiano informale ma asciutto. NO emoji a raffica. NO formattazione markdown.\n- Lunghezza simile ai messaggi precedenti dell'utente. Non scrivere papiri.\n- Se ti manca contesto critico, output solo: \`MISSING_CONTEXT: <cosa serve>\`.\n\nOUTPUT: solo il testo della risposta, NULL'ALTRO. Niente preamboli, niente "Ecco la risposta", niente quote.`;
+
+  const res = await runClaude(userId, prompt, {
+    cwd: vault ?? process.cwd(),
+    timeoutMs: 120_000,
+    kind: 'wa-suggest-reply',
+    meta: { chatJid, personSlug },
+  });
+  if (!res.ok) return { ok: false, error: res.stderr?.slice(0, 300) };
+  const draft = res.text.trim();
+  if (!draft || /^MISSING_CONTEXT:/i.test(draft)) return { ok: false, error: draft || 'empty' };
+  return { ok: true, draft };
+}
+
+export async function sendWaMessage(userId: number, chatJid: string, text: string): Promise<{ ok: boolean; error?: string }> {
+  const s = sessions.get(userId);
+  if (!s || s.status !== 'connected') return { ok: false, error: 'WhatsApp non connesso' };
+  if (!text || !text.trim()) return { ok: false, error: 'empty text' };
+  try {
+    const sent: any = await (s.sock as any).sendMessage(chatJid, { text });
+    // Persist as outgoing
+    const id = sent?.key?.id ?? `${Date.now()}`;
+    try {
+      await query(
+        `INSERT INTO wa_messages(user_id, msg_id, chat_jid, sender_jid, sender_phone, sender_name, person_slug, is_group, group_jid, from_me, text, ts, processed_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+         ON CONFLICT(user_id, msg_id) DO NOTHING`,
+        [userId, id, chatJid, s.me?.jid ?? '', null, 'TU', null, chatJid.endsWith('@g.us'), chatJid.endsWith('@g.us') ? chatJid : null, true, text, new Date().toISOString()],
+      );
+    } catch {}
+    bus.emit('wa:message', {
+      userId,
+      msg: { id, chat_jid: chatJid, sender_jid: s.me?.jid ?? '', sender_phone: null, sender_name: 'TU', person_slug: null, is_group: chatJid.endsWith('@g.us'), group_jid: chatJid.endsWith('@g.us') ? chatJid : null, from_me: true, text, ts: new Date().toISOString() },
+    });
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e).slice(0, 500) };
+  }
+}
+
 export async function pendingCount(userId: number): Promise<number> {
   const rows = await query<{ n: number }>(
     `SELECT count(*)::int AS n FROM wa_messages WHERE user_id=$1 AND processed_at IS NULL AND msg_id NOT LIKE 'chat:%' AND text <> ''`, [userId]
@@ -599,6 +672,30 @@ export async function refreshContactsAndGroups(userId: number): Promise<{ ok: bo
   } catch (e: any) {
     return { ok: false, groups: 0, error: String(e?.message ?? e) };
   }
+}
+
+export async function syncOneChat(userId: number, chatJid: string, batches = 3): Promise<{ ok: boolean; requested: number; error?: string }> {
+  const s = sessions.get(userId);
+  if (!s || s.status !== 'connected') return { ok: false, requested: 0, error: 'WhatsApp non connesso' };
+  let requested = 0;
+  for (let i = 0; i < batches; i++) {
+    const rows = await query<{ msg_id: string; ts: string }>(
+      `SELECT msg_id, ts FROM wa_messages
+       WHERE user_id=$1 AND chat_jid=$2 AND msg_id NOT LIKE 'chat:%'
+       ORDER BY ts ASC LIMIT 1`, [userId, chatJid]
+    );
+    if (!rows.length) break;
+    try {
+      const key: any = { remoteJid: chatJid, id: rows[0].msg_id, fromMe: false };
+      const ts = Math.floor(new Date(rows[0].ts).getTime() / 1000);
+      await (s.sock as any).fetchMessageHistory?.(50, key, ts);
+      requested++;
+      await new Promise((res) => setTimeout(res, 600));
+    } catch (e: any) {
+      return { ok: false, requested, error: String(e?.message ?? e) };
+    }
+  }
+  return { ok: true, requested };
 }
 
 export async function syncWaForUser(userId: number): Promise<{ ok: boolean; chats: number; requested: number; hint?: string; error?: string }> {

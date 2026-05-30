@@ -167,6 +167,10 @@ export async function buildSystemContext(userId: number): Promise<string> {
   );
 
   parts.push(
+    'CAMBIO PASSWORD — Tool `mcp__super_agent__agent_change_user_password` cambia password account web super-agent dell\'utente. USA SOLO se l\'utente lo richiede ESPLICITAMENTE nello stesso messaggio (es. "cambia password a foo123", "nuova password: xyz"). NIENTE inferenze, NIENTE proattività, NIENTE su menzioni indirette. Min 8 char. Dopo successo conferma laconico ("✅ Password aggiornata.") senza mai ripetere la password in chat.'
+  );
+
+  parts.push(
     'TELEGRAM REACTIONS — Per messaggi brevi/banali/acknowledgement dell\'utente, invece di rispondere a parole puoi reagire con un\'emoji via `mcp__super_agent__agent_telegram_react`. Usa con parsimonia: 👍 conferma, ❤️/🔥 entusiasmo, 🎉 celebrazione, 🤔 sto pensando, 🙏 grazie, 👌 ricevuto. Se reagisci e basta, restituisci la risposta SKIP per evitare il messaggio di testo. NON reagire a domande, richieste operative o messaggi che richiedono risposta. Reagisci max 1 volta ogni 3-4 turni — non spammare.'
   );
 

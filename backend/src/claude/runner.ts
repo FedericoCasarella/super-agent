@@ -30,7 +30,92 @@ export type ClaudeResult = {
   durationMs?: number;
   runId?: number;
   toolCalls?: Array<{ name: string; brief: string; ts: number }>;
+  diagnosis?: { title: string; hint: string; rawTail?: string } | null;
 };
+
+function diagnose(opts: {
+  exitCode: number | null;
+  parsed: any;
+  stderr: string;
+  stdout: string;
+}): { title: string; hint: string; rawTail?: string } | null {
+  const { exitCode, parsed, stderr, stdout } = opts;
+  const tail = stdout.split('\n').filter(Boolean).slice(-6).join('\n');
+  const subtype = parsed?.subtype ?? '';
+
+  // Exit 143 = SIGTERM (timeout)
+  if (exitCode === 143) {
+    return {
+      title: '⏱️ Timeout',
+      hint: 'Operazione superata il limite di tempo. Probabile MCP esterno lento (Canva, Notion, ecc.) o conversazione molto lunga. Riprova o spezza la richiesta in step più piccoli.',
+      rawTail: tail,
+    };
+  }
+  // Hook failure (SessionStart, PostToolUse, ecc.)
+  if (/hook_response|hook_name|SessionStart|PreToolUse|PostToolUse/i.test(tail)) {
+    const hookName = tail.match(/"hook_name":"([^"]+)"/)?.[1] ?? 'sconosciuto';
+    return {
+      title: '🪝 Hook fallito',
+      hint: `Hook Claude "${hookName}" ha risposto con errore. Controlla la config dei plugin/hooks installati su Claude Code (~/.claude). Potrebbe essere un hook che si aspetta input o credenziali mancanti.`,
+      rawTail: tail,
+    };
+  }
+  // Max turns reached
+  if (subtype === 'error_max_turns' || /max_turns|maximum.*turns/i.test(stderr + tail)) {
+    return {
+      title: '🔁 Limite turni raggiunto',
+      hint: 'L\'agente ha esaurito il budget di turni interni senza concludere. Probabile loop. Riformula la richiesta in modo più specifico o limita l\'ambito.',
+      rawTail: tail,
+    };
+  }
+  // MCP server connect error
+  const mcpMatch = /MCP.*server.*"([^"]+)".*(fail|error|disconnect)/i.exec(stderr + tail);
+  if (mcpMatch) {
+    return {
+      title: `🔌 MCP server "${mcpMatch[1]}" non raggiungibile`,
+      hint: 'Riconnetti il server MCP dalla pagina Connettori (sezione MCP esterni → Aggiorna) o ricarica il binario Claude CLI.',
+      rawTail: tail,
+    };
+  }
+  // Rate limit / quota
+  if (/rate.?limit|quota|429|insufficient_quota/i.test(stderr + tail)) {
+    return {
+      title: '🚫 Rate limit / quota',
+      hint: 'Hai superato il rate limit dell\'API Claude. Aspetta qualche minuto e riprova, oppure controlla credito/quota sulla console Anthropic.',
+      rawTail: tail,
+    };
+  }
+  // Auth / API key
+  if (/authentication|unauthorized|401|403|invalid.*api.?key/i.test(stderr + tail)) {
+    return {
+      title: '🔑 Autenticazione fallita',
+      hint: 'API key Claude mancante, scaduta o invalida. Verifica `~/.claude` o variabili ambiente `ANTHROPIC_API_KEY`.',
+      rawTail: tail,
+    };
+  }
+  // Network
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|fetch failed|network/i.test(stderr + tail)) {
+    return {
+      title: '🌐 Rete non disponibile',
+      hint: 'Errore di connessione. Verifica la rete o se un firewall sta bloccando le chiamate API.',
+      rawTail: tail,
+    };
+  }
+  // is_error true with success subtype (the screenshot case)
+  if (subtype === 'success' && parsed?.is_error) {
+    return {
+      title: '⚠️ Risposta vuota o tool error',
+      hint: 'Il CLI ha chiuso senza output utile. Spesso causato da un hook che intercetta la sessione o da uno strumento che ha fallito silently. Riprova il prompt.',
+      rawTail: tail,
+    };
+  }
+  // Fallback: exit + subtype
+  return {
+    title: `Errore runtime (exit=${exitCode}${subtype ? `, ${subtype}` : ''})`,
+    hint: 'Errore non classificato. Controlla i log del backend per dettagli completi.',
+    rawTail: tail,
+  };
+}
 
 export async function runClaude(userId: number, prompt: string, opts: ClaudeRunOptions = {}): Promise<ClaudeResult> {
   const started = Date.now();
@@ -159,16 +244,17 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   const usage = parsed?.usage ?? {};
   const ok = result.code === 0 && !!parsed && parsed.subtype !== 'error_during_execution';
 
-  // Build richer stderr when failure: include error subtype + last stdout lines for diagnosis
   let combinedStderr = result.stderr.trim();
+  let diagnosis: ReturnType<typeof diagnose> = null;
   if (!ok) {
+    diagnosis = diagnose({ exitCode: result.code, parsed, stderr: result.stderr, stdout: result.stdout });
     const tail = result.stdout.split('\n').filter(Boolean).slice(-6).join('\n');
     const subtype = parsed?.subtype ? `subtype=${parsed.subtype}` : '';
     const isErr = parsed?.is_error ? 'is_error=true' : '';
     const exit = `exit=${result.code}`;
     combinedStderr = [combinedStderr, subtype, isErr, exit, tail ? `tail:\n${tail}` : '']
       .filter(Boolean).join(' · ').slice(0, 4000);
-    console.error(`[runner:u${userId}:${kind}] failed`, { exit: result.code, subtype: parsed?.subtype, stderrLen: result.stderr.length, stdoutLen: result.stdout.length });
+    console.error(`[runner:u${userId}:${kind}] failed`, { exit: result.code, subtype: parsed?.subtype, diagnosis: diagnosis?.title, stderrLen: result.stderr.length, stdoutLen: result.stdout.length });
   }
 
   const out: ClaudeResult = {
@@ -181,6 +267,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     numTurns: parsed?.num_turns,
     toolCalls,
     durationMs,
+    diagnosis,
   };
 
   try {

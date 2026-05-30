@@ -1,4 +1,5 @@
 import { ButtonHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes, ReactNode, createContext, useCallback, useContext, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type Variant = 'primary' | 'ghost' | 'danger';
 type Size = 'sm' | 'md';
@@ -55,8 +56,8 @@ export function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: 
   return (
     <label className="inline-flex items-center cursor-pointer">
       <input type="checkbox" className="sr-only peer" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <div className="w-12 h-6 bg-surface2 border border-border peer-checked:bg-gradient-to-r peer-checked:from-accent peer-checked:to-accent2 peer-checked:border-transparent peer-checked:shadow-[0_0_18px_-4px_rgba(192,132,252,0.6)] rounded-full relative transition-all duration-300 ease-out-expo">
-        <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-text shadow-md transition-all duration-300 ease-out-expo ${checked ? 'translate-x-6' : ''}`} />
+      <div className="w-12 h-6 bg-surface2 border border-border peer-checked:bg-gradient-to-r peer-checked:from-accent peer-checked:to-accent2 peer-checked:border-transparent peer-checked:shadow-[0_0_18px_-4px_rgba(192,132,252,0.6)] rounded-full relative transition-all duration-300 ease-out-expo overflow-hidden">
+        <div className={`absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-text shadow-md transition-all duration-300 ease-out-expo ${checked ? 'left-[calc(100%-1.375rem)]' : 'left-[0.125rem]'}`} />
       </div>
     </label>
   );
@@ -68,14 +69,15 @@ export function Modal({
   open: boolean; title: string; children: ReactNode; onClose: () => void; footer?: ReactNode;
 }) {
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70 backdrop-blur-sm animate-fade-in" onClick={onClose}>
-      <div className="glass border border-border rounded-xl3 p-6 w-full max-w-lg mx-4 ring-soft gradient-border animate-slide-up" onClick={(e) => e.stopPropagation()}>
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="glass border border-border rounded-xl3 p-6 w-full max-w-lg mx-4 ring-soft gradient-border animate-slide-up max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="text-lg font-semibold mb-3 text-gradient">{title}</div>
         <div className="text-sm text-text/90">{children}</div>
         {footer && <div className="flex gap-2 justify-end mt-6">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

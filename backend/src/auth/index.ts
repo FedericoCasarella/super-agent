@@ -24,6 +24,12 @@ export function verifyToken(token: string): { uid: number; email: string } | nul
   try { return jwt.verify(token, config.jwtSecret) as any; } catch { return null; }
 }
 
+export async function setUserPassword(userId: number, newPassword: string): Promise<void> {
+  if (!newPassword || newPassword.length < 8) throw new Error('Password troppo corta (min 8 caratteri)');
+  const hash = await hashPassword(newPassword);
+  await query(`UPDATE users SET pass_hash=$1 WHERE id=$2`, [hash, userId]);
+}
+
 export async function getUserById(id: number): Promise<User | null> {
   const rows = await query<User>('SELECT id::int, email, name FROM users WHERE id=$1', [id]);
   return rows[0] ?? null;

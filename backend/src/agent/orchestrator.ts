@@ -29,10 +29,12 @@ async function handleIncoming({ userId, text }: { userId: number; chatId: number
   let reply: string;
   if (res.ok) {
     reply = res.text.trim();
+  } else if (res.diagnosis) {
+    reply = `${res.diagnosis.title}\n\n${res.diagnosis.hint}`;
   } else if (res.exitCode === 143) {
-    reply = '⏱️ Timeout: ho impiegato troppo (probabile MCP esterno lento). Riprova o spezza la richiesta in step più piccoli.';
+    reply = '⏱️ Timeout: ho impiegato troppo. Riprova o spezza la richiesta.';
   } else {
-    reply = `(error: ${res.stderr.slice(0, 300)})`;
+    reply = `⚠️ Errore: ${res.stderr.slice(0, 250)}`;
   }
   if (!reply || reply === 'SKIP') return;
   try {

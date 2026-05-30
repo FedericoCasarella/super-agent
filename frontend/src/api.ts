@@ -49,6 +49,17 @@ export const api = {
   brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
     req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
   brainStats: () => req<any>('/brain/stats'),
+  usage: () => req<any>('/usage'),
+  updatePlan: (name: string, sessionLimitTokens: number) => req<any>('/usage/plan', { method: 'PUT', body: JSON.stringify({ name, sessionLimitTokens }) }),
+  toolEvents: (opts: { filter?: 'all' | 'mcp' | 'native'; cursor?: number; server?: string; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.filter && opts.filter !== 'all') p.set('filter', opts.filter);
+    if (opts.cursor) p.set('cursor', String(opts.cursor));
+    if (opts.server) p.set('server', opts.server);
+    if (opts.limit) p.set('limit', String(opts.limit));
+    const qs = p.toString();
+    return req<any[]>(`/tool-events${qs ? `?${qs}` : ''}`);
+  },
   vaultsList: () => req<any[]>('/vaults'),
   vaultsCreate: (data: { name: string; path: string; seed?: boolean; makePrimary?: boolean }) => req<any>('/vaults', { method: 'POST', body: JSON.stringify(data) }),
   vaultsSetPrimary: (id: number) => req<any>(`/vaults/${id}/primary`, { method: 'POST' }),
@@ -83,6 +94,9 @@ export const api = {
   waSync: () => req<any>('/whatsapp/sync', { method: 'POST' }),
   waRefreshContacts: () => req<any>('/whatsapp/contacts/refresh', { method: 'POST' }),
   waMergeChats: (canon: string, dups: string[]) => req<any>('/whatsapp/chats/merge', { method: 'POST', body: JSON.stringify({ canon, dups }) }),
+  waSuggestReply: (jid: string, hint?: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
+  waSyncChat: (jid: string, batches = 3) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/sync`, { method: 'POST', body: JSON.stringify({ batches }) }),
+  waSendMessage: (jid: string, text: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/send`, { method: 'POST', body: JSON.stringify({ text }) }),
   waChats: () => req<any[]>('/whatsapp/chats'),
   waChatMessages: (jid: string) => req<any[]>(`/whatsapp/chats/${encodeURIComponent(jid)}/messages`),
   waPending: () => req<any>('/whatsapp/pending'),

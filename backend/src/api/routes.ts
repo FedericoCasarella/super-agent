@@ -606,6 +606,23 @@ router.post('/whatsapp/logout', async (req, res) => {
   await m.logoutWaForUser(req.user!.id);
   res.json({ ok: true });
 });
+router.post('/whatsapp/chats/:jid/sync', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const batches = Number(req.body?.batches ?? 3);
+  try { res.json(await m.syncOneChat(req.user!.id, req.params.jid, batches)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/:jid/suggest', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.suggestReply(req.user!.id, req.params.jid, { hint: req.body?.hint })); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/:jid/send', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const text = String(req.body?.text ?? '');
+  try { res.json(await m.sendWaMessage(req.user!.id, req.params.jid, text)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/chats/merge', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const canon = String(req.body?.canon ?? '');
@@ -647,6 +664,26 @@ router.get('/whatsapp/chats/:jid/messages', async (req, res) => {
   res.json(await m.chatMessages(req.user!.id, req.params.jid, Math.min(Number(req.query.limit ?? 200), 500)));
 });
 
+router.get('/tool-events', async (req, res) => {
+  const userId = req.user!.id;
+  const filter = String(req.query.filter ?? 'all'); // all|mcp|native
+  const cursor = req.query.cursor ? Number(req.query.cursor) : null;
+  const server = req.query.server ? String(req.query.server) : null;
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+  const parts: string[] = ['user_id=$1'];
+  const params: any[] = [userId];
+  if (filter === 'mcp') parts.push('is_mcp = true');
+  else if (filter === 'native') parts.push('is_mcp = false');
+  if (server) { params.push(server); parts.push(`server = $${params.length}`); }
+  if (cursor) { params.push(cursor); parts.push(`id < $${params.length}`); }
+  params.push(limit);
+  const rows = await query<any>(
+    `SELECT id::int, name, server, is_mcp, brief, ts FROM tool_events WHERE ${parts.join(' AND ')} ORDER BY id DESC LIMIT $${params.length}`,
+    params,
+  );
+  res.json(rows);
+});
+
 router.get('/mcp/external', async (req, res) => {
   const { listExternalMcps, refreshExternalMcps } = await import('../claude/external_mcps.js');
   if (req.query.refresh === '1') await refreshExternalMcps();
@@ -654,6 +691,91 @@ router.get('/mcp/external', async (req, res) => {
 });
 
 // Settings
+// Claude plan + 5h session usage — letto direttamente dai jsonl di Claude Code
+// (~/.claude/projects/**/*.jsonl) per allineamento 1:1 con /cost del TUI.
+let usageCache: { ts: number; data: any } | null = null;
+router.get('/usage', async (req, res) => {
+  const userId = req.user!.id;
+  const plan = (await getSetting<any>(userId, 'claude_plan')) ?? { name: 'Max (5x)', sessionLimitTokens: 750_000 };
+  // Cache 25s per evitare scan continui
+  if (usageCache && Date.now() - usageCache.ts < 25_000) {
+    return res.json({ plan, ...usageCache.data });
+  }
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const os = await import('node:os');
+  const root = path.join(os.homedir(), '.claude', 'projects');
+  const windowMs = 5 * 3600_000;
+  // Scan messages from last 10h (cover both current + previous Anthropic window)
+  const scanCutoff = Date.now() - 2 * windowMs;
+  type Msg = { ts: number; in: number; out: number; cacheR: number; cacheC: number };
+  const msgs: Msg[] = [];
+  try {
+    const projects = await fs.readdir(root).catch(() => [] as string[]);
+    for (const proj of projects) {
+      const dir = path.join(root, proj);
+      let files: string[] = [];
+      try { files = await fs.readdir(dir); } catch { continue; }
+      for (const f of files) {
+        if (!f.endsWith('.jsonl')) continue;
+        const fp = path.join(dir, f);
+        let stat: any;
+        try { stat = await fs.stat(fp); } catch { continue; }
+        if (stat.mtimeMs < scanCutoff) continue;
+        let raw: string;
+        try { raw = await fs.readFile(fp, 'utf8'); } catch { continue; }
+        for (const line of raw.split('\n')) {
+          if (!line) continue;
+          let j: any;
+          try { j = JSON.parse(line); } catch { continue; }
+          const ts = j.timestamp ? new Date(j.timestamp).getTime() : null;
+          if (ts == null || ts < scanCutoff) continue;
+          const u = j?.message?.usage ?? j?.usage;
+          if (!u) continue;
+          msgs.push({
+            ts,
+            in: Number(u.input_tokens ?? 0),
+            out: Number(u.output_tokens ?? 0),
+            cacheR: Number(u.cache_read_input_tokens ?? 0),
+            cacheC: Number(u.cache_creation_input_tokens ?? 0),
+          });
+        }
+      }
+    }
+  } catch (e) { console.error('[usage] scan failed', e); }
+  msgs.sort((a, b) => a.ts - b.ts);
+  // Anthropic window logic: find the earliest msg M such that M + 5h > now → window starts at M.
+  // Any msg older than that is from previous (expired) window.
+  const now = Date.now();
+  let windowStart: number | null = null;
+  for (const m of msgs) {
+    if (m.ts + windowMs > now) { windowStart = m.ts; break; }
+  }
+  let inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
+  if (windowStart != null) {
+    for (const m of msgs) {
+      if (m.ts < windowStart) continue;
+      inTok += m.in; outTok += m.out; cacheRead += m.cacheR; cacheCreate += m.cacheC;
+    }
+  }
+  const usedTokens = inTok + outTok;
+  const resetAt = windowStart != null ? new Date(windowStart + windowMs).toISOString() : null;
+  const data = { usedTokens, resetAt, breakdown: { in: inTok, out: outTok, cache_read: cacheRead, cache_create: cacheCreate } };
+  usageCache = { ts: Date.now(), data };
+  res.json({ plan, ...data });
+  void userId;
+});
+router.put('/usage/plan', async (req, res) => {
+  const userId = req.user!.id;
+  const { name, sessionLimitTokens } = req.body ?? {};
+  if (!name || typeof sessionLimitTokens !== 'number' || sessionLimitTokens <= 0) {
+    return res.status(400).json({ error: 'name + sessionLimitTokens (>0) required' });
+  }
+  await setSetting(userId, 'claude_plan', { name, sessionLimitTokens });
+  usageCache = null; // bust cache
+  res.json({ ok: true });
+});
+
 router.get('/settings', async (req, res) => {
   const userId = req.user!.id;
   const profile = await getSetting<any>(userId, 'profile');
