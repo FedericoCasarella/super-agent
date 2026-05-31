@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
+import { usePerkCooldown } from '../hooks/usePerkCooldown';
 
 // Per-agent icon map. Drop new PNGs in `frontend/public/` and add here.
 const AGENT_ICON: Record<string, string> = {
@@ -31,28 +32,7 @@ function pad(n: number) { return n.toString().padStart(2, '0'); }
 export default function Agents() {
   const [items, setItems] = useState<Agent[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
-  const [cooldown, setCooldown] = useState<Record<string, number>>({});
-  const COOLDOWN_S = 60;
-  useEffect(() => {
-    const id = setInterval(() => {
-      setCooldown((prev) => {
-        const next: Record<string, number> = {};
-        let changed = false;
-        for (const [k, ts] of Object.entries(prev)) {
-          const left = Math.max(0, Math.ceil((ts - Date.now()) / 1000));
-          if (left > 0) next[k] = ts;
-          else changed = true;
-        }
-        return changed ? next : prev;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
-  function cdLeft(name: string): number {
-    const ts = cooldown[name];
-    if (!ts) return 0;
-    return Math.max(0, Math.ceil((ts - Date.now()) / 1000));
-  }
+  const { left: cdLeft, start: cdStart } = usePerkCooldown(60);
   const toast = useToast();
   const nav = useNavigate();
   const { t } = useI18n();
@@ -67,16 +47,15 @@ export default function Agents() {
   }
   async function run(a: Agent, e: React.MouseEvent) {
     e.stopPropagation();
-    if (cdLeft(a.name) > 0) return;
+    if (cdLeft(a.name) > 0 || busy === a.name) return;
     setBusy(a.name);
-    setCooldown((prev) => ({ ...prev, [a.name]: Date.now() + COOLDOWN_S * 1000 }));
     try {
       await api.runInternalAgent(a.name);
       toast.push(`${a.title} attivato`, 'on');
+      cdStart(a.name); // 60s lock starts ONLY after successful execution
       await load();
     } catch (e: any) {
       toast.push(e.message, 'err');
-      setCooldown((prev) => { const n = { ...prev }; delete n[a.name]; return n; }); // failed → no cooldown
     }
     finally { setBusy(null); }
   }

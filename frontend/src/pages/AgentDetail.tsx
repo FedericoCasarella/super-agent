@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
+import { usePerkCooldown } from '../hooks/usePerkCooldown';
 
 function pad(n: number) { return n.toString().padStart(2, '0'); }
 
@@ -22,6 +23,8 @@ export default function AgentDetail() {
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   const { t } = useI18n();
+  const { left: cdLeft, start: cdStart } = usePerkCooldown(60);
+  const cd = cdLeft(name);
 
   async function load() {
     const all = await api.internalAgents();
@@ -48,10 +51,12 @@ export default function AgentDetail() {
     load();
   }
   async function run() {
+    if (cdLeft(name) > 0 || busy) return;
     setBusy(true);
     try {
       await api.runInternalAgent(name);
       toast.push(`${agent.title} run complete`, 'on');
+      cdStart(name); // 60s lock after successful execution (shared with Perks list)
       await load();
     } catch (e: any) { toast.push(e.message, 'err'); }
     finally { setBusy(false); }
@@ -93,7 +98,7 @@ export default function AgentDetail() {
         </div>
         <div className="flex items-center gap-2">
           <Toggle checked={agent.enabled} onChange={toggle} />
-          <Button onClick={run} disabled={busy}>{busy ? '…' : t('agents.runNow')}</Button>
+          <Button onClick={run} disabled={busy || cd > 0}>{busy ? '…' : cd > 0 ? `Riattivabile in ${cd}s` : t('agents.runNow')}</Button>
         </div>
       </div>
 

@@ -67,7 +67,7 @@ export const api = {
   updateBranding: (b: { title: string; subtitle?: string | null; logoDataUrl?: string | null; syncTelegram?: boolean }) =>
     req<any>('/branding', { method: 'PUT', body: JSON.stringify(b) }),
   usage: () => req<any>('/usage'),
-  updatePlan: (name: string, sessionLimitTokens: number) => req<any>('/usage/plan', { method: 'PUT', body: JSON.stringify({ name, sessionLimitTokens }) }),
+  updatePlan: (data: { name: string; sessionLimitTokens?: number; costBudgetUsd?: number }) => req<any>('/usage/plan', { method: 'PUT', body: JSON.stringify(data) }),
   toolEvents: (opts: { filter?: 'all' | 'mcp' | 'native'; cursor?: number; server?: string; limit?: number } = {}) => {
     const p = new URLSearchParams();
     if (opts.filter && opts.filter !== 'all') p.set('filter', opts.filter);

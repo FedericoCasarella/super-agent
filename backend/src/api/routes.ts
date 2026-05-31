@@ -863,15 +863,24 @@ router.get('/usage', async (req, res) => {
   const userId = req.user!.id;
   // Default sessionLimitTokens matches ccusage `totalTokens` scale (cache_read dominates,
   // ~hundreds of millions per 5h block on Max 5x). Empirical median Max 5x ≈ 500M tokens.
-  let plan = (await getSetting<any>(userId, 'claude_plan')) ?? { name: 'Max (5x)', sessionLimitTokens: 500_000_000 };
-  // Auto-migrate stale plan (old scale where we counted only input+output ≈ 750k).
-  // If saved limit < 10M, it was set for the old metric — bump to new default and persist.
-  if (Number(plan.sessionLimitTokens ?? 0) < 10_000_000) {
-    plan = { name: plan.name ?? 'Max (5x)', sessionLimitTokens: 500_000_000 };
+  // Plan budget is COST-based (USD), not token-based. Tokens mix input/output/cache_read with
+  // very different weights — only the cost number matches /cost's % display 1:1.
+  // Default cost budget for Max 5x derived empirically: ccusage costUSD ≈ $87 at 37% → ~$235.
+  // Round to $250 as starting default; user fine-tunes with one calibrate click.
+  const DEFAULT_BUDGET_USD = 250;
+  let plan: any = (await getSetting<any>(userId, 'claude_plan')) ?? { name: 'Max (5x)', costBudgetUsd: DEFAULT_BUDGET_USD, sessionLimitTokens: 500_000_000 };
+  // Auto-migrate: add costBudgetUsd if missing on legacy plans.
+  if (plan.costBudgetUsd == null || Number(plan.costBudgetUsd) <= 0) {
+    plan = { ...plan, costBudgetUsd: DEFAULT_BUDGET_USD };
     await setSetting(userId, 'claude_plan', plan);
   }
-  // Cache 25s per evitare scan continui
-  if (usageCache && Date.now() - usageCache.ts < 25_000) {
+  // Auto-migrate old token-scale plans.
+  if (Number(plan.sessionLimitTokens ?? 0) < 10_000_000) {
+    plan = { ...plan, sessionLimitTokens: 500_000_000 };
+    await setSetting(userId, 'claude_plan', plan);
+  }
+  // Cache 60s (frontend polls every minute, see UsageGauge)
+  if (usageCache && Date.now() - usageCache.ts < 60_000) {
     return res.json({ plan, ...usageCache.data });
   }
   // Use ccusage CLI (https://github.com/ryoppippi/ccusage) as canonical data source.
@@ -912,7 +921,50 @@ router.get('/usage', async (req, res) => {
         cache_create: Number(tc.cacheCreationInputTokens ?? 0),
       };
       usedTokens = Number(active.totalTokens ?? 0);
-      resetAt = active.endTime ?? null;
+      // ccusage `endTime` is hour-rounded (block boundary). Real Anthropic 5h window =
+      // first-message-of-block + 5h. Scan jsonl for earliest msg with usage inside
+      // this block window to align reset clock with /cost output.
+      const blockStartMs = active.startTime ? new Date(active.startTime).getTime() : (Date.now() - 5 * 3600_000);
+      try {
+        const fs = await import('node:fs/promises');
+        const pathMod = await import('node:path');
+        const os = await import('node:os');
+        const root = pathMod.join(os.homedir(), '.claude', 'projects');
+        let earliest: number | null = null;
+        const projects = await fs.readdir(root).catch(() => [] as string[]);
+        for (const proj of projects) {
+          const dir = pathMod.join(root, proj);
+          let files: string[] = [];
+          try { files = await fs.readdir(dir); } catch { continue; }
+          for (const f of files) {
+            if (!f.endsWith('.jsonl')) continue;
+            const fp = pathMod.join(dir, f);
+            let stat: any;
+            try { stat = await fs.stat(fp); } catch { continue; }
+            if (stat.mtimeMs < blockStartMs) continue;
+            let raw: string;
+            try { raw = await fs.readFile(fp, 'utf8'); } catch { continue; }
+            for (const line of raw.split('\n')) {
+              if (!line) continue;
+              let j: any;
+              try { j = JSON.parse(line); } catch { continue; }
+              const ts = j.timestamp ? new Date(j.timestamp).getTime() : null;
+              if (ts == null || ts < blockStartMs) continue;
+              const u = j?.message?.usage ?? j?.usage;
+              if (!u) continue;
+              if (earliest == null || ts < earliest) earliest = ts;
+            }
+          }
+        }
+        if (earliest != null) {
+          resetAt = new Date(earliest + 5 * 3600_000).toISOString();
+        } else {
+          resetAt = active.endTime ?? null;
+        }
+      } catch (e: any) {
+        console.error('[usage] reset scan failed', e?.message ?? e);
+        resetAt = active.endTime ?? null;
+      }
       costUsd = Number(active.costUSD ?? 0);
       burnRate = active.burnRate ?? null;
     }
@@ -926,13 +978,15 @@ router.get('/usage', async (req, res) => {
 });
 router.put('/usage/plan', async (req, res) => {
   const userId = req.user!.id;
-  const { name, sessionLimitTokens } = req.body ?? {};
-  if (!name || typeof sessionLimitTokens !== 'number' || sessionLimitTokens <= 0) {
-    return res.status(400).json({ error: 'name + sessionLimitTokens (>0) required' });
-  }
-  await setSetting(userId, 'claude_plan', { name, sessionLimitTokens });
+  const { name, sessionLimitTokens, costBudgetUsd } = req.body ?? {};
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const existing = (await getSetting<any>(userId, 'claude_plan')) ?? {};
+  const next: any = { ...existing, name };
+  if (typeof sessionLimitTokens === 'number' && sessionLimitTokens > 0) next.sessionLimitTokens = sessionLimitTokens;
+  if (typeof costBudgetUsd === 'number' && costBudgetUsd > 0) next.costBudgetUsd = costBudgetUsd;
+  await setSetting(userId, 'claude_plan', next);
   usageCache = null; // bust cache
-  res.json({ ok: true });
+  res.json({ ok: true, plan: next });
 });
 
 router.get('/settings', async (req, res) => {
