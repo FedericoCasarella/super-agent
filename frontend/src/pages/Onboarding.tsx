@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Field, Input, Textarea } from '../components/ui';
+import BrandingEditor from '../components/BrandingEditor';
 
 type Props = { status: any; onDone: () => void };
 
-const steps = ['You', 'Business', 'Vault', 'Telegram'] as const;
+const steps = ['Branding', 'You', 'Business', 'Vault', 'Telegram'] as const;
 
 export default function Onboarding({ status, onDone }: Props) {
   const [step, setStep] = useState(0);
@@ -35,10 +36,11 @@ export default function Onboarding({ status, onDone }: Props) {
 
   async function next() {
     try {
-      if (step === 0) { await api.setProfile({ name, role, tone }); setStep(1); return; }
-      if (step === 1) { await api.setBusiness({ company, what, audience, goals }); setStep(2); return; }
-      if (step === 2) { await api.setVault(vaultPath); setStep(3); return; }
-      if (step === 3) {
+      if (step === 0) { setStep(1); return; } // Branding step (saved via BrandingEditor own button)
+      if (step === 1) { await api.setProfile({ name, role, tone }); setStep(2); return; }
+      if (step === 2) { await api.setBusiness({ company, what, audience, goals }); setStep(3); return; }
+      if (step === 3) { await api.setVault(vaultPath); setStep(4); return; }
+      if (step === 4) {
         // If we already have a linked chat, finish immediately.
         if (tgChat) {
           stopPolling();
@@ -86,13 +88,20 @@ export default function Onboarding({ status, onDone }: Props) {
         <Card>
           {step === 0 && (
             <div className="space-y-4">
+              <h2 className="text-lg sm:text-xl font-semibold">Personalizza l'app</h2>
+              <p className="text-sm text-muted">Dai un nome e un logo alla tua istanza. Puoi cambiarli in qualsiasi momento dalle impostazioni.</p>
+              <BrandingEditor />
+            </div>
+          )}
+          {step === 1 && (
+            <div className="space-y-4">
               <h2 className="text-lg sm:text-xl font-semibold">Tell me about you</h2>
               <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
               <Field label="Role"><Input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Founder, dev, …" /></Field>
               <Field label="Preferred tone"><Input value={tone} onChange={(e) => setTone(e.target.value)} /></Field>
             </div>
           )}
-          {step === 1 && (
+          {step === 2 && (
             <div className="space-y-4">
               <h2 className="text-lg sm:text-xl font-semibold">Your business</h2>
               <Field label="Company"><Input value={company} onChange={(e) => setCompany(e.target.value)} /></Field>
@@ -101,14 +110,14 @@ export default function Onboarding({ status, onDone }: Props) {
               <Field label="Current goals"><Textarea value={goals} onChange={(e) => setGoals(e.target.value)} /></Field>
             </div>
           )}
-          {step === 2 && (
+          {step === 3 && (
             <div className="space-y-4">
               <h2 className="text-lg sm:text-xl font-semibold">Second-brain vault</h2>
               <p className="text-muted text-sm">Absolute path. Created if missing. Standard subfolders seeded (inbox, people, projects, daily, meta).</p>
               <Field label="Vault folder"><Input className="font-mono" value={vaultPath} onChange={(e) => setVaultPath(e.target.value)} placeholder="/Users/you/Documents/brain" /></Field>
             </div>
           )}
-          {step === 3 && (
+          {step === 4 && (
             <div className="space-y-4">
               <h2 className="text-lg sm:text-xl font-semibold">Link Telegram</h2>
               <ol className="text-sm text-muted space-y-1 list-decimal list-inside">
@@ -125,7 +134,7 @@ export default function Onboarding({ status, onDone }: Props) {
 
           <div className="flex justify-between mt-8 gap-2">
             <Button variant="ghost" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}>Back</Button>
-            <Button onClick={next} disabled={step === 3 && !token && !tgChat}>
+            <Button onClick={next} disabled={step === 4 && !token && !tgChat}>
               {step === steps.length - 1 ? (tgChat ? 'Finish' : 'Save token') : 'Continue'}
             </Button>
           </div>

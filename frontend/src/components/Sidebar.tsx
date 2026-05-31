@@ -3,6 +3,7 @@ import { useI18n } from '../i18n';
 import { useAuth } from '../auth';
 import { Button } from './ui';
 import UsageGauge from './UsageGauge';
+import { useBranding } from '../branding';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
   Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle,
@@ -19,6 +20,7 @@ type Props = {
 export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onCloseMobile }: Props) {
   const { t } = useI18n();
   const { user, logout } = useAuth();
+  const { branding } = useBranding();
   const items: { to: string; label: string; icon: LucideIcon }[] = [
     { to: '/', label: t('nav.live'), icon: Activity },
     { to: '/connectors', label: t('nav.connectors'), icon: Plug },
@@ -53,11 +55,11 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
         <div className={`flex items-center gap-3 px-2 py-3 animate-fade-in ${collapsed ? 'md:justify-center' : ''}`}>
           <div className="relative shrink-0">
             <div className="absolute inset-0 rounded-2xl bg-accent/30 blur-xl animate-soft-pulse" />
-            <img src="/rounded-image.png" alt="super-agent" className="relative w-11 h-11 rounded-2xl ring-1 ring-white/10 shadow-lg" />
+            <img src={branding.logoDataUrl || '/rounded-image.png'} alt={branding.title} className="relative w-11 h-11 rounded-2xl ring-1 ring-white/10 shadow-lg object-cover" />
           </div>
           <div className={collapsed ? 'md:hidden' : ''}>
-            <div className="text-base font-semibold tracking-tight text-gradient">super-agent</div>
-            <div className="text-[10px] uppercase tracking-[0.18em] text-muted">personal · brain</div>
+            <div className="text-base font-semibold tracking-tight text-gradient truncate">{branding.title}</div>
+            {branding.subtitle && <div className="text-[10px] uppercase tracking-[0.18em] text-muted truncate">{branding.subtitle}</div>}
           </div>
         </div>
 

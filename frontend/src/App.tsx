@@ -19,6 +19,17 @@ import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
 import MessageSound from './components/MessageSound';
 import BrainLoading from './components/BrainLoading';
+import { useBranding } from './branding';
+
+function MobileBrand() {
+  const { branding } = useBranding();
+  return (
+    <>
+      <img src={branding.logoDataUrl || '/rounded-image.png'} alt="" className="w-7 h-7 rounded-lg ring-1 ring-white/10 object-cover" />
+      <span className="text-sm font-semibold text-gradient truncate max-w-[60vw]">{branding.title}</span>
+    </>
+  );
+}
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -59,8 +70,7 @@ export default function App() {
             <span className="text-lg">≡</span>
           </button>
           <div className="flex items-center gap-2">
-            <img src="/rounded-image.png" alt="" className="w-7 h-7 rounded-lg ring-1 ring-white/10" />
-            <span className="text-sm font-semibold text-gradient">super-agent</span>
+            <MobileBrand />
           </div>
           <div className="w-10" />
         </div>

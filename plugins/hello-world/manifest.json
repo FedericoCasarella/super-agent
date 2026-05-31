@@ -1,0 +1,9 @@
+{
+  "slug": "hello-world",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "description": "Plugin di esempio. Espone un tool MCP `hello_say` che ritorna un saluto.",
+  "author": "super-agent",
+  "entry": "index.js",
+  "permissions": []
+}

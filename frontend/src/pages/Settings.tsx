@@ -4,6 +4,7 @@ import { Button, Card, Field, Input, Textarea, Modal, Banner, Chip, Toggle, useT
 import { useI18n, Lang } from '../i18n';
 import { useAuth } from '../auth';
 import BrainLoading from '../components/BrainLoading';
+import BrandingEditor from '../components/BrandingEditor';
 
 export default function Settings() {
   const [s, setS] = useState<any>(null);
@@ -94,6 +95,12 @@ export default function Settings() {
   return (
     <div className="space-y-6 max-w-3xl">
       <h1 className="text-2xl font-semibold">{t('settings.title')}</h1>
+
+      <Card>
+        <h2 className="text-lg font-semibold mb-1">Branding app</h2>
+        <p className="text-sm text-muted mb-4">Personalizza nome e logo. Visibile in sidebar, login e tab del browser.</p>
+        <BrandingEditor onSaved={() => toast.push('Branding salvato', 'on')} />
+      </Card>
 
       <Card>
         <h2 className="text-lg font-semibold mb-1">{t('settings.language')}</h2>

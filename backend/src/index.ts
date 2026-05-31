@@ -26,6 +26,7 @@ async function main() {
   attachWs(server);
 
   await loadConnectors();
+  try { const { loadAllPlugins } = await import('./plugins/index.js'); await loadAllPlugins(); } catch (e) { console.error('[plugins] boot load failed', e); }
   const mcpPath = await writeMcpConfig();
   console.log(`[mcp] config written: ${mcpPath}`);
   await refreshExternalMcps();

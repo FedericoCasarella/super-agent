@@ -684,6 +684,39 @@ router.get('/tool-events', async (req, res) => {
   res.json(rows);
 });
 
+// Plugins (.skill)
+import multer from 'multer';
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+router.get('/plugins', async (_req, res) => {
+  const m = await import('../plugins/index.js');
+  res.json(await m.listPlugins());
+});
+router.post('/plugins/install', upload.single('file'), async (req, res) => {
+  const m = await import('../plugins/index.js');
+  if (!req.file?.buffer) return res.status(400).json({ error: 'file mancante' });
+  try { res.json(await m.installFromZip(req.file.buffer)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/plugins/:slug', async (req, res) => {
+  const m = await import('../plugins/index.js');
+  try { await m.setEnabled(req.params.slug, !!req.body?.enabled); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/plugins/:slug', async (req, res) => {
+  const m = await import('../plugins/index.js');
+  try { await m.uninstall(req.params.slug); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/plugins/:slug/export', async (req, res) => {
+  const m = await import('../plugins/index.js');
+  try {
+    const buf = await m.exportToZip(req.params.slug);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.slug}.skill"`);
+    res.send(buf);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 router.get('/mcp/external', async (req, res) => {
   const { listExternalMcps, refreshExternalMcps } = await import('../claude/external_mcps.js');
   if (req.query.refresh === '1') await refreshExternalMcps();
@@ -786,6 +819,28 @@ router.get('/settings', async (req, res) => {
   const sound_on_message = (await getSetting<boolean>(userId, 'sound_on_message')) ?? true;
   res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message });
 });
+// Branding (per-user customizable title + logo)
+router.get('/branding', async (req, res) => {
+  const b = (await getSetting<any>(req.user!.id, 'branding')) ?? null;
+  res.json(b ?? { title: 'super-agent', subtitle: 'personal · brain', logoDataUrl: null });
+});
+router.put('/branding', async (req, res) => {
+  const { title, subtitle, logoDataUrl, syncTelegram } = req.body ?? {};
+  if (typeof title !== 'string' || !title.trim()) return res.status(400).json({ error: 'title required' });
+  if (logoDataUrl && typeof logoDataUrl === 'string' && logoDataUrl.length > 600_000) {
+    return res.status(400).json({ error: 'logo troppo grande (max ~400KB base64)' });
+  }
+  await setSetting(req.user!.id, 'branding', { title: title.trim(), subtitle: (subtitle ?? '').trim() || null, logoDataUrl: logoDataUrl || null });
+  let telegram: any = null;
+  if (syncTelegram) {
+    try {
+      const { updateBotProfile } = await import('../telegram/bot.js');
+      telegram = await updateBotProfile(req.user!.id, { name: title.trim(), shortDescription: (subtitle ?? '').trim() });
+    } catch (e: any) { telegram = { ok: false, error: String(e?.message ?? e) }; }
+  }
+  res.json({ ok: true, telegram });
+});
+
 router.put('/settings/language', async (req, res) => {
   const { language } = req.body ?? {};
   if (!['it', 'en'].includes(language)) return res.status(400).json({ error: 'language must be it|en' });

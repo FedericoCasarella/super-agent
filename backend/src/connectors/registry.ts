@@ -26,6 +26,14 @@ export async function loadConnectors() {
   }
 }
 
+export function registerConnector(conn: Connector) {
+  if (!conn?.manifest?.name) throw new Error('connector missing manifest.name');
+  registry.set(conn.manifest.name, conn);
+}
+export function unregisterConnector(name: string) {
+  registry.delete(name);
+}
+
 export function listConnectors(): Connector[] {
   return [...registry.values()];
 }
