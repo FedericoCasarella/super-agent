@@ -8,6 +8,7 @@ import { useI18n } from '../i18n';
 const AGENT_ICON: Record<string, string> = {
   brain_classifier: '/shield.png',
   link_weaver: '/brain-icon.png',
+  people_analyzer: '/people-analyzer.png',
 };
 const FALLBACK_ICON = '/rounded-image.png';
 

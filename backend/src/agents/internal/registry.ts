@@ -3,9 +3,10 @@ import { query, listActiveUsers, getSetting } from '../../db/index.js';
 import type { InternalAgent, Lang } from './types.js';
 import brainClassifier from './brain_classifier.js';
 import linkWeaver from './link_weaver.js';
+import peopleAnalyzer from './people_analyzer.js';
 import { sendTelegram } from '../../telegram/bot.js';
 
-const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver];
+const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer];
 
 export function listInternalAgents(): InternalAgent[] {
   return REGISTRY;

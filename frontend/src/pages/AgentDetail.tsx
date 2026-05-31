@@ -9,6 +9,7 @@ function pad(n: number) { return n.toString().padStart(2, '0'); }
 const AGENT_ICON: Record<string, string> = {
   brain_classifier: '/shield.png',
   link_weaver: '/brain-icon.png',
+  people_analyzer: '/people-analyzer.png',
 };
 const FALLBACK_ICON = '/rounded-image.png';
 
