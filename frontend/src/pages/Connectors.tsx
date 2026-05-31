@@ -4,6 +4,7 @@ import AccountsEditor from '../components/AccountsEditor';
 import { Button, Card, Chip, Field, Input, Modal, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 import { useWS } from '../ws';
+import ConnectorIcon from '../components/ConnectorIcon';
 
 export default function Connectors() {
   const [items, setItems] = useState<any[]>([]);
@@ -69,8 +70,10 @@ export default function Connectors() {
         {items.map((c) => (
           <Card key={c.manifest.name}>
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
+              <div className="flex items-start gap-3 flex-1 min-w-0">
+                <ConnectorIcon name={c.manifest.name} title={c.manifest.title} size={28} className="shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-lg font-semibold">{c.manifest.title}</h3>
                   {c.manifest.name === 'imap' ? (
                     <>
@@ -83,6 +86,7 @@ export default function Connectors() {
                 </div>
                 <p className="text-sm text-muted mt-1">{c.manifest.description}</p>
                 {c.manifest.schedule && <div className="text-xs text-muted mt-2">{t('connectors.schedule')}: <span className="font-mono">{c.manifest.schedule}</span></div>}
+                </div>
               </div>
               <Toggle checked={c.enabled} onChange={(v) => toggle(c.manifest.name, v)} />
             </div>
@@ -142,9 +146,12 @@ export default function Connectors() {
         {externals.map((e) => (
           <Card key={e.serverName}>
             <div className="flex items-center justify-between">
-              <div>
-                <div className="font-semibold">{e.rawName}</div>
-                <div className="text-xs text-muted font-mono truncate max-w-[26rem]">{e.url}</div>
+              <div className="flex items-center gap-3 min-w-0">
+                <ConnectorIcon name={e.rawName} title={e.serverName} size={24} className="shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-semibold">{e.rawName}</div>
+                  <div className="text-xs text-muted font-mono truncate max-w-[26rem]">{e.url}</div>
+                </div>
               </div>
               <Chip tone={e.status === 'connected' ? 'on' : e.status === 'needs_auth' ? 'warn' : 'err'}>
                 {e.status === 'connected' ? t('connectors.connected') : e.status === 'needs_auth' ? t('connectors.needsAuth') : t('connectors.error')}
