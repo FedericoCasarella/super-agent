@@ -861,71 +861,65 @@ router.get('/mcp/external', async (req, res) => {
 let usageCache: { ts: number; data: any } | null = null;
 router.get('/usage', async (req, res) => {
   const userId = req.user!.id;
-  const plan = (await getSetting<any>(userId, 'claude_plan')) ?? { name: 'Max (5x)', sessionLimitTokens: 750_000 };
+  // Default sessionLimitTokens matches ccusage `totalTokens` scale (cache_read dominates,
+  // ~hundreds of millions per 5h block on Max 5x). Empirical median Max 5x ≈ 500M tokens.
+  let plan = (await getSetting<any>(userId, 'claude_plan')) ?? { name: 'Max (5x)', sessionLimitTokens: 500_000_000 };
+  // Auto-migrate stale plan (old scale where we counted only input+output ≈ 750k).
+  // If saved limit < 10M, it was set for the old metric — bump to new default and persist.
+  if (Number(plan.sessionLimitTokens ?? 0) < 10_000_000) {
+    plan = { name: plan.name ?? 'Max (5x)', sessionLimitTokens: 500_000_000 };
+    await setSetting(userId, 'claude_plan', plan);
+  }
   // Cache 25s per evitare scan continui
   if (usageCache && Date.now() - usageCache.ts < 25_000) {
     return res.json({ plan, ...usageCache.data });
   }
-  const fs = await import('node:fs/promises');
-  const path = await import('node:path');
-  const os = await import('node:os');
-  const root = path.join(os.homedir(), '.claude', 'projects');
-  const windowMs = 5 * 3600_000;
-  // Scan messages from last 10h (cover both current + previous Anthropic window)
-  const scanCutoff = Date.now() - 2 * windowMs;
-  type Msg = { ts: number; in: number; out: number; cacheR: number; cacheC: number };
-  const msgs: Msg[] = [];
+  // Use ccusage CLI (https://github.com/ryoppippi/ccusage) as canonical data source.
+  // Matches Claude Code's /cost / /usage output 1:1 (parses same ~/.claude/projects/**/*.jsonl
+  // with proper dedup, billing-block windows, cache token weighting).
+  const { spawn } = await import('node:child_process');
+  function runCcusage(): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const p = spawn('npx', ['-y', 'ccusage@latest', 'blocks', '--active', '--json'], {
+        env: { ...process.env, NO_COLOR: '1' },
+      });
+      let out = '', err = '';
+      p.stdout.on('data', (b) => { out += b.toString(); });
+      p.stderr.on('data', (b) => { err += b.toString(); });
+      p.on('close', (code) => {
+        if (code !== 0) return reject(new Error(`ccusage exit ${code}: ${err.slice(0, 200)}`));
+        try { resolve(JSON.parse(out)); }
+        catch (e: any) { reject(new Error(`ccusage parse: ${e.message}`)); }
+      });
+      p.on('error', reject);
+      setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('ccusage timeout')); }, 20_000);
+    });
+  }
+  let usedTokens = 0;
+  let resetAt: string | null = null;
+  let costUsd = 0;
+  let breakdown: any = { in: 0, out: 0, cache_read: 0, cache_create: 0 };
+  let burnRate: any = null;
   try {
-    const projects = await fs.readdir(root).catch(() => [] as string[]);
-    for (const proj of projects) {
-      const dir = path.join(root, proj);
-      let files: string[] = [];
-      try { files = await fs.readdir(dir); } catch { continue; }
-      for (const f of files) {
-        if (!f.endsWith('.jsonl')) continue;
-        const fp = path.join(dir, f);
-        let stat: any;
-        try { stat = await fs.stat(fp); } catch { continue; }
-        if (stat.mtimeMs < scanCutoff) continue;
-        let raw: string;
-        try { raw = await fs.readFile(fp, 'utf8'); } catch { continue; }
-        for (const line of raw.split('\n')) {
-          if (!line) continue;
-          let j: any;
-          try { j = JSON.parse(line); } catch { continue; }
-          const ts = j.timestamp ? new Date(j.timestamp).getTime() : null;
-          if (ts == null || ts < scanCutoff) continue;
-          const u = j?.message?.usage ?? j?.usage;
-          if (!u) continue;
-          msgs.push({
-            ts,
-            in: Number(u.input_tokens ?? 0),
-            out: Number(u.output_tokens ?? 0),
-            cacheR: Number(u.cache_read_input_tokens ?? 0),
-            cacheC: Number(u.cache_creation_input_tokens ?? 0),
-          });
-        }
-      }
+    const j = await runCcusage();
+    const active = (j.blocks ?? []).find((b: any) => b.isActive) ?? null;
+    if (active) {
+      const tc = active.tokenCounts ?? {};
+      breakdown = {
+        in: Number(tc.inputTokens ?? 0),
+        out: Number(tc.outputTokens ?? 0),
+        cache_read: Number(tc.cacheReadInputTokens ?? 0),
+        cache_create: Number(tc.cacheCreationInputTokens ?? 0),
+      };
+      usedTokens = Number(active.totalTokens ?? 0);
+      resetAt = active.endTime ?? null;
+      costUsd = Number(active.costUSD ?? 0);
+      burnRate = active.burnRate ?? null;
     }
-  } catch (e) { console.error('[usage] scan failed', e); }
-  msgs.sort((a, b) => a.ts - b.ts);
-  // Anthropic window logic: find the earliest msg M such that M + 5h > now → window starts at M.
-  // Any msg older than that is from previous (expired) window.
-  const now = Date.now();
-  let windowStart: number | null = null;
-  for (const m of msgs) {
-    if (m.ts + windowMs > now) { windowStart = m.ts; break; }
+  } catch (e: any) {
+    console.error('[usage] ccusage failed', e?.message ?? e);
   }
-  let inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
-  if (windowStart != null) {
-    for (const m of msgs) {
-      if (m.ts < windowStart) continue;
-      inTok += m.in; outTok += m.out; cacheRead += m.cacheR; cacheCreate += m.cacheC;
-    }
-  }
-  const usedTokens = inTok + outTok;
-  const resetAt = windowStart != null ? new Date(windowStart + windowMs).toISOString() : null;
-  const data = { usedTokens, resetAt, breakdown: { in: inTok, out: outTok, cache_read: cacheRead, cache_create: cacheCreate } };
+  const data = { usedTokens, resetAt, costUsd, burnRate, breakdown };
   usageCache = { ts: Date.now(), data };
   res.json({ plan, ...data });
   void userId;
