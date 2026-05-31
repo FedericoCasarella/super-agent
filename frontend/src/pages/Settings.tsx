@@ -5,6 +5,7 @@ import { useI18n, Lang } from '../i18n';
 import { useAuth } from '../auth';
 import BrainLoading from '../components/BrainLoading';
 import BrandingEditor from '../components/BrandingEditor';
+import BrainColorsEditor from '../components/BrainColorsEditor';
 
 export default function Settings() {
   const [s, setS] = useState<any>(null);
@@ -100,6 +101,12 @@ export default function Settings() {
         <h2 className="text-lg font-semibold mb-1">Branding app</h2>
         <p className="text-sm text-muted mb-4">Personalizza nome e logo. Visibile in sidebar, login e tab del browser.</p>
         <BrandingEditor onSaved={() => toast.push('Branding salvato', 'on')} />
+      </Card>
+
+      <Card>
+        <h2 className="text-lg font-semibold mb-1">Colori cervello (neuroni)</h2>
+        <p className="text-sm text-muted mb-4">Personalizza i colori dei nodi nel grafo 3D per visibilità e categoria. Color picker o hex.</p>
+        <BrainColorsEditor onSaved={() => toast.push('Colori salvati', 'on')} />
       </Card>
 
       <Card>

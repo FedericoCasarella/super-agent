@@ -40,11 +40,10 @@ function hashHue(s: string): number {
 function originColor(email: string): string {
   return `hsl(${hashHue(email)}, 70%, 65%)`;
 }
+import { colorForNode as paletteColor } from '../brainColors';
 function colorFor(node: any): string {
-  if (node.origin_email)              return originColor(node.origin_email);
-  if (node.visibility === 'protected') return VIS_PROTECTED;
-  if (node.visibility === 'public')    return VIS_PUBLIC;
-  return KIND_COLOR[node.kind] ?? DEFAULT_COLOR;
+  if (node.origin_email) return originColor(node.origin_email);
+  return paletteColor(node);
 }
 
 // Particles per node emitter (firing axons) — selectable density

@@ -824,6 +824,30 @@ router.get('/branding', async (req, res) => {
   const b = (await getSetting<any>(req.user!.id, 'branding')) ?? null;
   res.json(b ?? { title: 'super-agent', subtitle: 'personal · brain', logoDataUrl: null });
 });
+// Brain colors per category
+const DEFAULT_BRAIN_COLORS = {
+  visibility: { protected: '#d946ef', public: '#67e8f9' },
+  kind: { person: '#22d3ee', email: '#c084fc', project: '#34d399', note: '#fbbf24', daily: '#f0abfc', roadmap: '#f97316', task: '#a78bfa', attachment: '#94a3b8', whatsapp: '#25d366' },
+  default: '#c084fc',
+};
+router.get('/brain/colors', async (req, res) => {
+  const c = (await getSetting<any>(req.user!.id, 'brain_colors')) ?? null;
+  res.json(c ?? DEFAULT_BRAIN_COLORS);
+});
+router.put('/brain/colors', async (req, res) => {
+  const body = req.body ?? {};
+  const isHex = (v: any) => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
+  const safe: any = { visibility: {}, kind: {}, default: DEFAULT_BRAIN_COLORS.default };
+  for (const k of Object.keys(DEFAULT_BRAIN_COLORS.visibility)) {
+    safe.visibility[k] = isHex(body.visibility?.[k]) ? body.visibility[k] : (DEFAULT_BRAIN_COLORS.visibility as any)[k];
+  }
+  for (const k of Object.keys(DEFAULT_BRAIN_COLORS.kind)) {
+    safe.kind[k] = isHex(body.kind?.[k]) ? body.kind[k] : (DEFAULT_BRAIN_COLORS.kind as any)[k];
+  }
+  if (isHex(body.default)) safe.default = body.default;
+  await setSetting(req.user!.id, 'brain_colors', safe);
+  res.json({ ok: true, colors: safe });
+});
 router.put('/branding', async (req, res) => {
   const { title, subtitle, logoDataUrl, syncTelegram } = req.body ?? {};
   if (typeof title !== 'string' || !title.trim()) return res.status(400).json({ error: 'title required' });

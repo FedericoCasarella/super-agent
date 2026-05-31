@@ -49,6 +49,8 @@ export const api = {
   brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
     req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
   brainStats: () => req<any>('/brain/stats'),
+  brainColors: () => req<any>('/brain/colors'),
+  updateBrainColors: (c: any) => req<any>('/brain/colors', { method: 'PUT', body: JSON.stringify(c) }),
   branding: () => req<{ title: string; subtitle: string | null; logoDataUrl: string | null }>('/branding'),
   updateBranding: (b: { title: string; subtitle?: string | null; logoDataUrl?: string | null; syncTelegram?: boolean }) =>
     req<any>('/branding', { method: 'PUT', body: JSON.stringify(b) }),

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api } from './api';
+import { setBrainColors } from './brainColors';
 
 export type Branding = { title: string; subtitle: string | null; logoDataUrl: string | null };
 
@@ -11,6 +12,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   const [branding, setBranding] = useState<Branding>(DEFAULT);
   const reload = useCallback(async () => {
     try { setBranding(await api.branding()); } catch {}
+    try { const c = await api.brainColors(); if (c) setBrainColors(c); } catch {}
   }, []);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => { try { document.title = branding.title || 'super-agent'; } catch {} }, [branding.title]);
