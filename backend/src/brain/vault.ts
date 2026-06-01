@@ -2,6 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { getSetting, setSetting, query } from '../db/index.js';
+import { bus } from '../bus.js';
+
+// Best-effort emit for MRI animation on any vault read/write.
+function emitBrainAccess(userId: number, rel: string, tool: 'read' | 'write') {
+  // Use 'default' as vaultName fallback; FE matches by rel-suffix tolerance.
+  bus.emit('brain:access', { userId, vaultName: 'default', rel, tool, ts: Date.now() });
+}
 
 export type VaultNote = {
   path: string;
@@ -49,6 +56,7 @@ export async function writeNote(userId: number, relPath: string, frontmatter: Re
   const fm = matter.stringify(body.trimEnd() + '\n', frontmatter);
   await fs.writeFile(full, fm, 'utf8');
   await indexNote(userId, relPath, frontmatter, body);
+  emitBrainAccess(userId, relPath, 'write');
   return full;
 }
 
@@ -65,6 +73,7 @@ export async function appendNote(userId: number, relPath: string, line: string, 
   } else {
     await fs.appendFile(full, '\n' + line + '\n', 'utf8');
   }
+  emitBrainAccess(userId, relPath, 'write');
   return full;
 }
 
@@ -74,6 +83,7 @@ export async function readNote(userId: number, relPath: string): Promise<VaultNo
   try {
     const raw = await fs.readFile(path.join(root, relPath), 'utf8');
     const parsed = matter(raw);
+    emitBrainAccess(userId, relPath, 'read');
     return {
       path: relPath,
       title: parsed.data.title,

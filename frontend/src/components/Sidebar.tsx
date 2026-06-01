@@ -3,6 +3,7 @@ import { useI18n } from '../i18n';
 import { useAuth } from '../auth';
 import { Button } from './ui';
 import UsageGauge from './UsageGauge';
+import ActiveAgentsBadge from './ActiveAgentsBadge';
 import { useBranding } from '../branding';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
@@ -98,6 +99,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
         </nav>
 
         <div className="mt-auto px-1 pt-4 border-t border-border/60 space-y-2">
+          <ActiveAgentsBadge collapsed={collapsed} />
           <UsageGauge collapsed={collapsed} />
           {!collapsed && <div className="text-xs text-muted truncate font-medium px-1">{user?.name || user?.email}</div>}
           <Button variant="ghost" size="sm" className={`w-full ${collapsed ? 'md:px-2' : ''}`} onClick={logout}>

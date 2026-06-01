@@ -33,7 +33,7 @@ function Kpi({ icon, label, value, mono, highlight }: { icon: React.ReactNode; l
 export default function Dashboard() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [events, setEvents] = useState<any[]>([]);
-  type ToolEvt = { id?: number; name: string; brief: string | null; isMcp?: boolean; is_mcp?: boolean; server: string | null; ts: string | number };
+  type ToolEvt = { id?: number; name: string; brief: string | null; isMcp?: boolean; is_mcp?: boolean; server: string | null; kind?: string | null; ts: string | number };
   const [toolUses, setToolUses] = useState<ToolEvt[]>([]);
   const [toolFilter, setToolFilter] = useState<'all' | 'mcp' | 'native'>('all');
   const [hasMoreEvents, setHasMoreEvents] = useState(true);
@@ -45,7 +45,7 @@ export default function Dashboard() {
     try {
       const cursor = reset || !toolUses.length ? undefined : (toolUses[toolUses.length - 1]?.id);
       const list = await api.toolEvents({ filter: toolFilter, cursor, limit: 50 });
-      const normalized: ToolEvt[] = list.map((e: any) => ({ id: e.id, name: e.name, brief: e.brief, isMcp: !!e.is_mcp, server: e.server, ts: e.ts }));
+      const normalized: ToolEvt[] = list.map((e: any) => ({ id: e.id, name: e.name, brief: e.brief, isMcp: !!e.is_mcp, server: e.server, kind: e.kind ?? null, ts: e.ts }));
       if (reset) setToolUses(normalized);
       else setToolUses((prev) => [...prev, ...normalized]);
       setHasMoreEvents(normalized.length === 50);
@@ -99,7 +99,7 @@ export default function Dashboard() {
     if (msg.type === 'tool:use') {
       const p = msg.payload;
       if (toolFilter !== 'all' && (toolFilter === 'mcp') !== !!p.isMcp) return;
-      const evt: ToolEvt = { id: undefined, name: p.name, brief: p.brief ?? null, isMcp: !!p.isMcp, server: p.server ?? null, ts: p.ts ?? Date.now() };
+      const evt: ToolEvt = { id: undefined, name: p.name, brief: p.brief ?? null, isMcp: !!p.isMcp, server: p.server ?? null, kind: p.kind ?? null, ts: p.ts ?? Date.now() };
       setToolUses((prev) => [evt, ...prev]);
     }
   });
@@ -298,9 +298,14 @@ export default function Dashboard() {
                         </div>
                         <span className="text-[9px] text-muted font-mono shrink-0">{new Date(tsMs).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
+                      {u.kind && (
+                        <span className={`inline-block mt-1 mr-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-wider ${u.kind.startsWith('subagent:') ? 'bg-accent2/15 text-accent2 border border-accent2/30' : (u.kind.includes('-') || /^(vault|people|brain|link)_/.test(u.kind) || /^(vault|people|brain|link)-/.test(u.kind)) ? 'bg-accent/15 text-accent border border-accent/30' : 'bg-surface2 text-muted border border-border'}`}>
+                          {u.kind.startsWith('subagent:') ? `🤖 ${u.kind.slice(9).trim().slice(0, 24)}` : `🧩 ${u.kind}`}
+                        </span>
+                      )}
                       {u.brief && (
                         <Tooltip content={u.brief}>
-                          <span className="block text-muted mt-1 truncate font-mono text-[10px]">{u.brief}</span>
+                          <span className="block text-muted mt-1 whitespace-pre-wrap break-all font-mono text-[10px]">{u.brief}</span>
                         </Tooltip>
                       )}
                     </li>

@@ -154,10 +154,17 @@ export default function BrainGraph3DConstellation({
   useWS((msg) => {
     if (msg?.type !== 'brain:access') return;
     const p = msg.payload ?? {};
-    if (!p.vaultName || !p.rel) return;
-    const id = `${p.vaultName}::${p.rel}`;
+    if (!p.rel) return;
+    const rel = String(p.rel);
     const now = Date.now();
-    mriRef.current.set(id, { start: now, end: now + MRI_DURATION_MS });
+    // Match by exact <vault>::<rel> AND by rel-suffix fallback — graph may use a different
+    // vault label than the emitter (e.g. legacy 'default' vs renamed primary).
+    const ids = new Set<string>();
+    if (p.vaultName) ids.add(`${p.vaultName}::${rel}`);
+    for (const [nid] of idToIdxRef.current) {
+      if (nid === rel || nid.endsWith(`::${rel}`)) ids.add(nid);
+    }
+    for (const id of ids) mriRef.current.set(id, { start: now, end: now + MRI_DURATION_MS });
     focusDirtyRef.current = true;
     setMriTick((t) => t + 1);
   });

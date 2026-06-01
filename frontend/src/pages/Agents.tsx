@@ -10,6 +10,9 @@ const AGENT_ICON: Record<string, string> = {
   brain_classifier: '/shield.png',
   link_weaver: '/brain-icon.png',
   people_analyzer: '/people-analyzer.png',
+  vault_dreamer: '/garden.png',
+  vault_librarian: '/axe.png',
+  vault_gardener: '/dreamer.png',
 };
 const FALLBACK_ICON = '/rounded-image.png';
 
@@ -25,6 +28,7 @@ type Agent = {
   last_run_at: string | null;
   last_status: string | null;
   last_report: any;
+  running?: boolean;
 };
 
 function pad(n: number) { return n.toString().padStart(2, '0'); }
@@ -32,13 +36,20 @@ function pad(n: number) { return n.toString().padStart(2, '0'); }
 export default function Agents() {
   const [items, setItems] = useState<Agent[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
-  const { left: cdLeft, start: cdStart } = usePerkCooldown(60);
+  const { left: cdLeft, start: cdStart, clear: cdClear } = usePerkCooldown(60);
   const toast = useToast();
   const nav = useNavigate();
   const { t } = useI18n();
 
   async function load() { setItems(await api.internalAgents()); }
   useEffect(() => { load(); }, []);
+  // Poll every 5s while at least one perk is running, so the disabled button + label sync.
+  useEffect(() => {
+    const anyRunning = items.some((i) => i.running);
+    if (!anyRunning) return;
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  }, [items]);
 
   async function toggle(a: Agent) {
     await api.updateInternalAgent(a.name, { enabled: !a.enabled });
@@ -47,15 +58,26 @@ export default function Agents() {
   }
   async function run(a: Agent, e: React.MouseEvent) {
     e.stopPropagation();
-    if (cdLeft(a.name) > 0 || busy === a.name) return;
+    if (a.running) {
+      toast.push(`⏳ ${a.title} ancora in esecuzione`, 'warn');
+      return;
+    }
+    const left = cdLeft(a.name);
+    if (left > 0) {
+      toast.push(`⏳ ${a.title} riattivabile tra ${left}s`, 'warn');
+      return;
+    }
+    if (busy === a.name) return;
     setBusy(a.name);
+    // Optimistic: start cooldown immediately so reload during long-running execution still locks UI
+    cdStart(a.name);
     try {
       await api.runInternalAgent(a.name);
       toast.push(`${a.title} attivato`, 'on');
-      cdStart(a.name); // 60s lock starts ONLY after successful execution
       await load();
     } catch (e: any) {
       toast.push(e.message, 'err');
+      cdClear(a.name); // failed → release lock
     }
     finally { setBusy(null); }
   }
@@ -118,8 +140,8 @@ export default function Agents() {
                 )}
                 <div className="mt-auto pt-4 flex gap-2 flex-wrap">
                   <Button variant="ghost" size="sm" onClick={() => nav(`/perks/${a.name}`)}>{t('agents.openDetail')}</Button>
-                  <Button variant="ghost" size="sm" onClick={(e) => run(a, e)} disabled={busy === a.name || cdLeft(a.name) > 0}>
-                    {busy === a.name ? 'Attivando…' : cdLeft(a.name) > 0 ? `Riattivabile in ${cdLeft(a.name)}s` : 'Attiva il Perk'}
+                  <Button variant="ghost" size="sm" onClick={(e) => run(a, e)} disabled={!!a.running || busy === a.name || cdLeft(a.name) > 0}>
+                    {a.running ? '⏳ In esecuzione…' : busy === a.name ? 'Attivando…' : cdLeft(a.name) > 0 ? `Riattivabile in ${cdLeft(a.name)}s` : 'Attiva il Perk'}
                   </Button>
                 </div>
               </div>

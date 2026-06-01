@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Input, Modal, Field, useToast } from '../components/ui';
 import BrainGraph3D from '../components/BrainGraph3D';
@@ -60,6 +61,20 @@ export default function Brain() {
   useEffect(() => { reloadList(); /* eslint-disable-next-line */ }, [filter]);
 
   async function open(p: string) { setNote(await api.brainNote(p)); }
+
+  // Deep-link: ?note=<path> opens the note on mount and switches to list tab (panel visible).
+  const [sp, setSp] = useSearchParams();
+  useEffect(() => {
+    const np = sp.get('note');
+    if (!np) return;
+    setTab('list');
+    open(np).catch(() => {});
+    // Strip param after consuming so refresh doesn't loop
+    const next = new URLSearchParams(sp);
+    next.delete('note');
+    setSp(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const FilterBar = (
     <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">

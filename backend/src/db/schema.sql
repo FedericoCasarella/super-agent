@@ -174,6 +174,21 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 ALTER TABLE internal_agents ALTER COLUMN notify_on_run SET DEFAULT true;
 
+-- Optional sub-daily cadence: when > 0, agent fires every N hours
+-- (in addition to the daily hour:minute anchor). NULL/0 = daily only.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='internal_agents' AND column_name='interval_hours') THEN
+    ALTER TABLE internal_agents ADD COLUMN interval_hours INTEGER;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+-- Live "running" flag — toggled by runInternalAgent so sidebar can show active perks
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='internal_agents' AND column_name='running') THEN
+    ALTER TABLE internal_agents ADD COLUMN running BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
 -- P2P Brain Network
 CREATE TABLE IF NOT EXISTS user_connections (
   id BIGSERIAL PRIMARY KEY,
@@ -395,6 +410,13 @@ CREATE TABLE IF NOT EXISTS tool_events (
 );
 CREATE INDEX IF NOT EXISTS tool_events_user_ts_idx ON tool_events(user_id, ts DESC);
 CREATE INDEX IF NOT EXISTS tool_events_user_mcp_idx ON tool_events(user_id, is_mcp, ts DESC);
+
+-- Origin tag (perk name, "agent", sub-agent title prefix) — populated by runClaude
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tool_events' AND column_name='kind') THEN
+    ALTER TABLE tool_events ADD COLUMN kind TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS plugins (
   id BIGSERIAL PRIMARY KEY,

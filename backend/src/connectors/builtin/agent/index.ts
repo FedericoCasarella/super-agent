@@ -1,6 +1,8 @@
 import type { Connector } from '../../types.js';
-import { getSetting, setSetting } from '../../../db/index.js';
+import { getSetting, setSetting, query } from '../../../db/index.js';
 import { readNote, writeNote } from '../../../brain/vault.js';
+import { bus } from '../../../bus.js';
+import { getPrimaryVault } from '../../../brain/vaults.js';
 import * as net from '../../../network/index.js';
 import * as subAgents from '../../../sub_agents/index.js';
 
@@ -40,6 +42,60 @@ const connector: Connector = {
     configSchema: [],
   },
   tools: [
+    {
+      name: 'brain_search',
+      description: 'MANDATORY first step on EVERY user turn. Fast full-text + tag search over the second-brain index. Returns top-N matching notes with path, title, tags, summary. Emits brain:access events for the MRI animation. Call this BEFORE composing your reply, for ANY topic (person, project, fact, decision, history). If user mentions a name → also call people_search. NEVER answer from memory if the brain might know.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          q: { type: 'string', description: 'Free-text query. Use 1-5 keywords or a person/entity name.' },
+          limit: { type: 'number', description: 'Max results (default 8, max 20).' },
+        },
+        required: ['q'], additionalProperties: false,
+      },
+      handler: async (ctx, { q, limit }) => {
+        const lim = Math.max(1, Math.min(20, Number(limit ?? 8)));
+        const term = String(q ?? '').trim();
+        if (!term) return { results: [], note: 'empty query' };
+        const like = `%${term.toLowerCase()}%`;
+        const rows = await query<any>(
+          `SELECT path, kind, title, tags, summary, visibility, updated_at
+           FROM brain_index
+           WHERE user_id=$1 AND (
+             lower(coalesce(title,'')) LIKE $2
+             OR lower(coalesce(summary,'')) LIKE $2
+             OR lower(path) LIKE $2
+             OR EXISTS(SELECT 1 FROM unnest(coalesce(tags, ARRAY[]::text[])) t WHERE lower(t) LIKE $2)
+           )
+           ORDER BY
+             CASE WHEN lower(coalesce(title,'')) LIKE $2 THEN 0 ELSE 1 END,
+             updated_at DESC
+           LIMIT $3`,
+          [ctx.userId, like, lim],
+        );
+        // Emit brain:access for MRI animation — use real primary vault name
+        const primary = await getPrimaryVault(ctx.userId).catch(() => null);
+        const vaultName = primary?.name ?? 'default';
+        for (const r of rows) {
+          bus.emit('brain:access', {
+            userId: ctx.userId,
+            vaultName,
+            rel: r.path,
+            tool: 'brain_search',
+            ts: Date.now(),
+          });
+        }
+        return {
+          count: rows.length,
+          results: rows.map((r) => ({
+            path: r.path, title: r.title, kind: r.kind, tags: r.tags,
+            summary: (r.summary ?? '').slice(0, 200), visibility: r.visibility,
+            updated_at: r.updated_at,
+          })),
+          hint: rows.length === 0 ? 'No match — try broader keywords or call Glob/Grep directly.' : `Read full content via Read tool on top results.`,
+        };
+      },
+    },
     {
       name: 'set_quiet',
       description: 'Stop proactive pings until a given timestamp.',

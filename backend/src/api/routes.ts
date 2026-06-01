@@ -810,7 +810,7 @@ router.get('/tool-events', async (req, res) => {
   if (cursor) { params.push(cursor); parts.push(`id < $${params.length}`); }
   params.push(limit);
   const rows = await query<any>(
-    `SELECT id::int, name, server, is_mcp, brief, ts FROM tool_events WHERE ${parts.join(' AND ')} ORDER BY id DESC LIMIT $${params.length}`,
+    `SELECT id::int, name, server, is_mcp, brief, kind, ts FROM tool_events WHERE ${parts.join(' AND ')} ORDER BY id DESC LIMIT $${params.length}`,
     params,
   );
   res.json(rows);
