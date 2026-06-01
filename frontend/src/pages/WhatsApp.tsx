@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { Button, Card, Chip, useToast } from '../components/ui';
+import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
 import { useWS } from '../ws';
 import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X } from 'lucide-react';
 import BrainLoading from '../components/BrainLoading';
@@ -16,6 +16,7 @@ type Chat = {
   total_count: number;
   bonified_count: number;
   pending_count: number;
+  auto_bonify?: boolean;
 };
 
 type Msg = {
@@ -362,6 +363,12 @@ export default function WhatsApp() {
                       {c.pending_count > 0 && c.bonified_count > 0 && (
                         <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-400/30">{c.bonified_count}/{c.total_count}</span>
                       )}
+                      {c.auto_bonify && (
+                        <span className="shrink-0 inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-400/40 font-semibold uppercase tracking-wider" title="Auto-sync attivo">
+                          <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />
+                          auto-sync
+                        </span>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -410,6 +417,23 @@ export default function WhatsApp() {
                     <Button size="sm" variant="ghost" disabled={bonifying} onClick={() => bonify(selected)}>
                       <Sparkles size={13} className="inline mr-1 -mt-0.5" />Bonifica chat
                     </Button>
+                    <div className="inline-flex items-center gap-2 text-[11px] select-none" title="Auto-bonifica ogni 5 minuti i messaggi pending di questa chat">
+                      <span className="text-muted">Auto-sync</span>
+                      <Toggle
+                        checked={!!c?.auto_bonify}
+                        onChange={(v) => {
+                          // Optimistic: flip local state instantly, request in background.
+                          setChats((prev) => prev.map((x) => x.chat_jid === selected ? { ...x, auto_bonify: v } : x));
+                          api.waSetChatAutoBonify(selected, v)
+                            .then(() => toast.push(v ? '✓ Auto-sync attivo' : 'Auto-sync disattivato', v ? 'on' : 'warn'))
+                            .catch((err: any) => {
+                              // Revert on failure
+                              setChats((prev) => prev.map((x) => x.chat_jid === selected ? { ...x, auto_bonify: !v } : x));
+                              toast.push(err.message, 'err');
+                            });
+                        }}
+                      />
+                    </div>
                     <Button size="sm" disabled={suggesting} onClick={suggest}>
                       <Wand2 size={13} className={`inline mr-1 -mt-0.5 ${suggesting ? 'animate-pulse' : ''}`} />
                       {suggesting ? 'Penso…' : 'Suggerisci risposta'}

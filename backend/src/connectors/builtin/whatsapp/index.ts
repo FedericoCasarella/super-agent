@@ -449,6 +449,18 @@ export async function sendWaMessage(userId: number, chatJid: string, text: strin
   }
 }
 
+// Toggle auto-bonify for a specific chat. Upserts wa_contacts row so flag persists
+// even for chats whose contact has never been written before.
+export async function setChatAutoBonify(userId: number, chatJid: string, enabled: boolean): Promise<{ ok: boolean }> {
+  await query(
+    `INSERT INTO wa_contacts(user_id, jid, auto_bonify, updated_at)
+     VALUES($1, $2, $3, now())
+     ON CONFLICT (user_id, jid) DO UPDATE SET auto_bonify=EXCLUDED.auto_bonify, updated_at=now()`,
+    [userId, chatJid, !!enabled],
+  );
+  return { ok: true };
+}
+
 export async function pendingCount(userId: number): Promise<number> {
   const rows = await query<{ n: number }>(
     `SELECT count(*)::int AS n FROM wa_messages WHERE user_id=$1 AND processed_at IS NULL AND msg_id NOT LIKE 'chat:%' AND text <> ''`, [userId]
@@ -514,7 +526,8 @@ export async function listChats(userId: number): Promise<any[]> {
             l.sender_phone, l.person_slug, l.is_group, l.text, l.ts,
             COALESCE(s.total, 0)::int AS total_count,
             COALESCE(s.bonified, 0)::int AS bonified_count,
-            COALESCE(s.pending, 0)::int AS pending_count
+            COALESCE(s.pending, 0)::int AS pending_count,
+            COALESCE(c_chat.auto_bonify, false) AS auto_bonify
      FROM last_per_chat l
      LEFT JOIN wa_contacts c_chat ON c_chat.user_id=$1 AND c_chat.jid = l.chat_jid
      LEFT JOIN wa_contacts c_sender ON c_sender.user_id=$1 AND c_sender.jid = l.sender_jid

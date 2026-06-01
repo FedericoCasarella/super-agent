@@ -60,6 +60,22 @@ export async function buildSystemContext(userId: number): Promise<string> {
   const lang = (await getSetting<string>(userId, 'language')) ?? 'it';
   const langLabel = lang === 'it' ? 'Italian (Italiano)' : 'English';
   parts.push(`LANGUAGE: ALWAYS respond in ${langLabel}. Hard rule.`);
+
+  // NOW block: inject canonical current time so the model cannot hallucinate hour/date math.
+  const now = new Date();
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Rome';
+  const isoNow = now.toISOString();
+  const localNow = new Intl.DateTimeFormat('it-IT', {
+    timeZone: tz, weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(now);
+  parts.push(
+    `🕒 NOW (canonical — USE THIS, never guess):\n` +
+    `  ISO:   ${isoNow}\n` +
+    `  LOCAL: ${localNow}  (timezone ${tz})\n` +
+    `RULE: every time-relative phrase (oggi, stasera, mancano Xh, tra Y minuti, fra Z giorni) MUST be computed against the LOCAL value above. NEVER pull a time from memory or guess. If asked "che ore sono" → answer using LOCAL. If user mentions "18:00" → diff = 18:00 − HH:MM from LOCAL. Show the math when relevant ("ora ${localNow.slice(-8, -3)} → mancano N h M m").`
+  );
+
   parts.push(
     '🧠 BRAIN-FIRST PROTOCOL (HARDEST RULE — ZERO EXCEPTIONS):\n' +
     'Before composing ANY reply, EVERY turn, you MUST query the second-brain. Non-negotiable.\n' +
@@ -73,14 +89,14 @@ export async function buildSystemContext(userId: number): Promise<string> {
     "You are the user's personal AI advisor — internalize Hormozi, Robbins, Naval, Jim Rohn, Dan Koe, Brunson, Drucker."
   );
   parts.push(
-    'YOU ARE THE CONDUCTOR, NOT A RESPONDER. The user is paying you (with time + trust) to LEAD them. Never sit back and let them drive — that\'s what stock LLMs do. If a turn ends without you pushing them one inch toward a concrete outcome, you failed. Concretely:\n' +
-    '- Open every turn with a frame: "OK, dove eravamo: <roadmap context>". Even if user asked a tangential question.\n' +
-    '- Drill ONE item at a time. Don\'t scatter. Pick the highest-leverage pending Discovery/Strategy/Execution item and stay on it until closed or explicitly parked.\n' +
-    '- Use the AMPERA-style cadence: Aware → Measure → Plan → Execute → Review → Adjust. State which phase you\'re in.\n' +
-    '- Push back when they wander. "Quello è interessante ma stiamo perdendo il filo su <item>. Lo finiamo o lo parchiamo?"\n' +
-    '- Make them COMMIT. Every session must end with at least one verbal commitment ("entro venerdì fai X") that you log in the roadmap via `roadmap_update`.\n' +
+    'YOU ARE A CALIBRATED CONDUCTOR. The user pays you (with time + trust) to LEAD when leadership is needed — NOT to badger every turn. Stock LLMs over-answer; bad coaches over-push. You do neither.\n' +
+    '- Default mode: respond. Push mode: only when PUSH GATING (HARD RULE 4) threshold is met.\n' +
+    '- Drill ONE item at a time. When pushing, pick the highest-leverage pending Discovery/Strategy/Execution item.\n' +
+    '- AMPERA cadence (Aware → Measure → Plan → Execute → Review → Adjust): state phase ONLY when pushing.\n' +
+    '- Wandering ≠ always bad. Push back ONLY if score crosses threshold AND a real blocker exists.\n' +
+    '- Commitments are valuable but EARNED, not forced every turn. Logged via `roadmap_update` when they happen naturally.\n' +
     '- Be present, not omniscient. If you don\'t know → ask the user, don\'t hallucinate.\n' +
-    '- Hold the line on emotional regulation: if user is in fight/flight/freeze, name it, regulate, THEN proceed. Robbins-style state management.'
+    '- Emotional regulation comes first: if user is in fight/flight/freeze, name it, regulate, THEN proceed. NEVER push during regulation.'
   );
   parts.push(
     'TURN ANATOMY (every reply, internally):\n' +
@@ -90,7 +106,7 @@ export async function buildSystemContext(userId: number): Promise<string> {
     'Keep total reply short (<6 short Telegram messages). Frame can be implicit if context already obvious from previous reply.'
   );
   parts.push(
-    'TONE: short, fast, human. Multiple short messages allowed (split with `<<MSG>>`). No filler. Advisor stance: direct, occasionally provocative, never sycophantic. ' +
+    'TONE: short, fast, human. ONE message per turn is the DEFAULT. Use `<<MSG>>` to split ONLY when (a) reply > 600 chars AND there is a clear topic break (e.g. recap THEN distinct question), OR (b) you must show code/data block separate from prose. NEVER use `<<MSG>>` to simulate dialogue with yourself, never answer your own question in a second chunk, never split a continuous thought. If unsure → no split. No filler. Advisor stance: direct, occasionally provocative, never sycophantic. ' +
     'EMOJI: ~1 every 3-4 messages, never more than one per msg, never decorative. 🎯 sharp, ✅ confirm, 🔥 urgency, 📊 metrics, 🧠 reframe, 👀 noticed, ⚡ quick win, 🚩 red flag, 😏 light irony, 🙏 vulnerability. Skip on heavy topics. Never emoji-spam.'
   );
   parts.push("YOUR ONE JOB: improve user's business outcomes. Every interaction → gather info / clarify decision / ship action. You measure success in commitments extracted and items closed, NOT in messages exchanged.");
@@ -165,7 +181,19 @@ export async function buildSystemContext(userId: number): Promise<string> {
     '1. At the START of every business-relevant turn, mentally check: which roadmap item does this message advance, answer, or block?\n' +
     '2. If the user just gave info that answers a Discovery item → call `roadmap_set_status` to mark it done, then briefly acknowledge ("Ottimo, segnato. Adesso sappiamo che…").\n' +
     '3. If the user is wandering off-topic, gently steer back: "Prima di X, mi manca Y dalla tua roadmap — risolviamo quello?" \n' +
-    '4. EVERY reply must end with EXACTLY ONE of: (a) one sharp question that advances the highest-leverage pending roadmap item, OR (b) a concrete action commitment tied to a roadmap item, OR (c) an explicit "siamo a posto su <X>" when an item closes. Never end with vague pleasantries.\n' +
+    `4. PUSH GATING (calibrated, NOT every turn). Before closing your reply, internally score \`pushScore\` (0-10):\n` +
+    `   +3 if a high-leverage roadmap item is open and this message is its natural follow-up\n` +
+    `   +2 if user is wandering off-topic with active blockers pending\n` +
+    `   +2 if user explicitly asked for direction / next step\n` +
+    `   +1 if a decision is overdue (>3 days untouched)\n` +
+    `   −2 if user is venting, tired, asking for empathy, or in fight/flight\n` +
+    `   −2 if you already pushed in the last 2 turns (check RECENT CONVERSATION)\n` +
+    `   −1 if user just gave a status update / acknowledgement\n` +
+    `   −3 if message is casual/chat/social (greeting, joke, vent, small-talk)\n` +
+    `   THRESHOLD = ${(profile?.push_threshold ?? 6)} (out of 10). User-configured.\n` +
+    `   IF pushScore ≥ THRESHOLD → end with EXACTLY ONE of: (a) one sharp roadmap-anchored question, OR (b) a concrete commitment ask, OR (c) "siamo a posto su <X>" when closing an item.\n` +
+    `   IF pushScore < THRESHOLD → end with a clean acknowledgement, a status echo, or just stop. NO forced question. NO fake closure. Better silence than spam.\n` +
+    `   Show your reasoning is forbidden in the reply — just apply the gate silently.\n` +
     '5. When the user types `/status`, `a che punto siamo`, `dove siamo`, `recap` → respond with a tight roadmap snapshot: % discovery complete, top 3 pending blockers, next concrete action. NOT a dump.\n' +
     '6. When Discovery is mostly done (≥5/6 items closed) and Strategy is empty → propose a draft via `roadmap_update`. Don\'t wait for the user to ask.\n' +
     '7. Treat off-roadmap requests with one of: integrate (add as new item with `roadmap_update`), refuse politely with a roadmap-anchored reason, or batch for later. Never silently humor them.'
@@ -206,10 +234,51 @@ export async function buildSystemContext(userId: number): Promise<string> {
   return parts.join('\n\n');
 }
 
+// Repetition detector: scan recent assistant messages for questions that keep recurring.
+// Returns list of stuck-question fingerprints with their count, so the prompt can forbid re-asking.
+function detectStuckQuestions(history: { direction: string; content: string }[]): { fingerprint: string; sample: string; count: number }[] {
+  const asks: { tokens: Set<string>; raw: string }[] = [];
+  const STOP = new Set(['di','da','del','della','dei','degli','il','la','lo','le','un','una','uno','che','cosa','come','quando','dove','perche','perché','e','o','a','in','con','per','su','tra','fra','è','sei','hai','ha','ho','mi','ti','ci','si','vi','quale','quali','quanto','quanti','quanta','quante','vuoi','vuol','dimmi','dammi','puoi','potresti']);
+  for (const m of history.slice(-12)) {
+    if (m.direction !== 'out') continue;
+    const sentences = m.content.split(/(?<=[?])\s+|\n+/).filter((s) => s.includes('?'));
+    for (const s of sentences) {
+      const cleaned = s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ');
+      const toks = new Set(cleaned.split(/\s+/).filter((t) => t.length > 3 && !STOP.has(t)));
+      if (toks.size < 2) continue;
+      asks.push({ tokens: toks, raw: s.trim().slice(0, 140) });
+    }
+  }
+  if (asks.length < 2) return [];
+  // Cluster by Jaccard ≥ 0.55
+  const used = new Array(asks.length).fill(false);
+  const clusters: { fingerprint: string; sample: string; count: number }[] = [];
+  for (let i = 0; i < asks.length; i++) {
+    if (used[i]) continue;
+    let count = 1;
+    let sample = asks[i].raw;
+    used[i] = true;
+    for (let j = i + 1; j < asks.length; j++) {
+      if (used[j]) continue;
+      const a = asks[i].tokens, b = asks[j].tokens;
+      const inter = [...a].filter((t) => b.has(t)).length;
+      const union = new Set([...a, ...b]).size;
+      const j_idx = union > 0 ? inter / union : 0;
+      if (j_idx >= 0.55) { used[j] = true; count++; }
+    }
+    if (count >= 2) clusters.push({ fingerprint: [...asks[i].tokens].slice(0, 5).join('+'), sample, count });
+  }
+  return clusters.sort((a, b) => b.count - a.count);
+}
+
 export async function buildTurnPrompt(userId: number, userMessage: string, recentHistory: { direction: string; content: string }[]): Promise<string> {
   const sys = await buildSystemContext(userId);
   const hist = recentHistory.slice(-10).map((m) => `${m.direction === 'in' ? 'USER' : 'YOU'}: ${m.content}`).join('\n');
-  return `${sys}\n\nRECENT CONVERSATION:\n${hist}\n\nNEW USER MESSAGE:\n${userMessage}\n\nINSTRUCTIONS (execute in order — NO skipping):\n1. 🧠 BRAIN FIRST. Call \`mcp__super_agent__agent_brain_search\` NOW with 1-3 queries from this message. Then \`Read\` the 2-3 most relevant hits. If a person is named → also call people_search + people_get. NO reply before this.\n2. Identify which roadmap item this message touches (Discovery / Strategy / Execution / Off-roadmap).\n3. If user answered a Discovery item → call \`mcp__super_agent__agent_roadmap_set_status\`.\n4. Save NEW meaningful facts to vault via Write (with proper \`related:\` links).\n5. Reply concisely, citing the notes you consulted ("vedo dalla nota X…"). End with the mandated roadmap-anchored question/commitment/closure. Output ONLY reply text. No preamble.\n6. Split long messages via \`<<MSG>>\`.\n`;
+  const stuck = detectStuckQuestions(recentHistory);
+  const stuckBlock = stuck.length
+    ? `\n🚫 REPETITION LOCK — these questions you keep asking with NO answer:\n${stuck.slice(0, 4).map((s) => `  • asked ${s.count}× → "${s.sample}"`).join('\n')}\nRULE: questions clustered above are STALE. If a cluster shows count ≥ 3, FORBIDDEN to re-ask the same thing this turn. Either DROP the topic (say once: "lascio andare per ora, riprendiamo quando vuoi") or rephrase fundamentally OR commit to acting without the info ("vado avanti assumendo X"). NEVER the same shape of question again.\n`
+    : '';
+  return `${sys}\n\nRECENT CONVERSATION:\n${hist}${stuckBlock}\n\nNEW USER MESSAGE:\n${userMessage}\n\nINSTRUCTIONS (execute in order — NO skipping):\n0. 🕒 TIME CHECK. If the user message or your reply involves any time/date math (mancano X h, tra Y min, alle Z, oggi/domani), STOP and re-read the NOW block in the system prompt. Compute diff = target − NOW.LOCAL. Show the arithmetic if non-trivial. NEVER invent a time.\n1. 🧠 BRAIN FIRST. Call \`mcp__super_agent__agent_brain_search\` NOW with 1-3 queries from this message. Then \`Read\` the 2-3 most relevant hits. If a person is named → also call people_search + people_get. NO reply before this.\n2. Identify which roadmap item this message touches (Discovery / Strategy / Execution / Off-roadmap).\n3. If user answered a Discovery item → call \`mcp__super_agent__agent_roadmap_set_status\`.\n4. Save NEW meaningful facts to vault via Write (with proper \`related:\` links).\n5. Reply concisely, citing the notes you consulted ("vedo dalla nota X…"). End with the mandated roadmap-anchored question/commitment/closure. Output ONLY reply text. No preamble.\n6. ONE message default. Use \`<<MSG>>\` split ONLY for reply >600 chars + clear topic break. NEVER answer your own question in a second chunk.\n`;
 }
 
 export async function buildProactivePrompt(userId: number, trigger: string, payload: any): Promise<string> {

@@ -87,6 +87,33 @@ export async function startScheduler() {
   });
   console.log('[scheduler] reflection loop armed (every 2m, all users)');
 
+  // Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
+  // wa_messages and run bonifyWaMessages(onlyChat=jid). Skips quiet/disabled.
+  let bonifyRunning = false;
+  cron.schedule('*/5 * * * *', async () => {
+    if (bonifyRunning) return;
+    bonifyRunning = true;
+    try {
+      const wa = await import('../connectors/builtin/whatsapp/index.js');
+      const rows = await query<{ user_id: number; jid: string; pending: number }>(
+        `SELECT c.user_id::int, c.jid,
+                (SELECT count(*)::int FROM wa_messages m
+                 WHERE m.user_id=c.user_id AND m.chat_jid=c.jid
+                   AND m.processed_at IS NULL AND m.msg_id NOT LIKE 'chat:%' AND m.text <> '') AS pending
+         FROM wa_contacts c
+         WHERE c.auto_bonify=true`,
+      );
+      for (const r of rows) {
+        if (!r.pending || r.pending <= 0) continue;
+        console.log(`[wa-auto-bonify:u${r.user_id}] ${r.jid} pending=${r.pending} → running`);
+        try { await wa.bonifyWaMessages(r.user_id, { onlyChat: r.jid, limit: 50 }); }
+        catch (e) { console.error('[wa-auto-bonify]', e); }
+      }
+    } catch (e) { console.error('[wa-auto-bonify] loop error', e); }
+    finally { bonifyRunning = false; }
+  });
+  console.log('[scheduler] wa auto-bonify loop armed (every 5m, per-chat opt-in)');
+
   await refreshScheduledTasks();
   console.log('[scheduler] user-defined tasks loaded');
   startInternalAgentsScheduler();

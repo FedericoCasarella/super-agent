@@ -744,6 +744,12 @@ router.post('/whatsapp/chats/:jid/sync', async (req, res) => {
   try { res.json(await m.syncOneChat(req.user!.id, req.params.jid, batches)); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
+router.post('/whatsapp/chats/:jid/auto-bonify', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const enabled = !!req.body?.enabled;
+  try { res.json(await m.setChatAutoBonify(req.user!.id, req.params.jid, enabled)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/chats/:jid/suggest', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   try { res.json(await m.suggestReply(req.user!.id, req.params.jid, { hint: req.body?.hint })); }
