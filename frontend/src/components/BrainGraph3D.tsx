@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import ForceGraph2D, { ForceGraphMethods } from 'react-force-graph-2d';
 import { api } from '../api';
 import BrainLoading from './BrainLoading';
+import { useWS } from '../ws';
+
+const MRI_GREEN = '#39ff7a';
+const MRI_DURATION_MS = 4200;
 
 type Node = { id: string; title: string; kind: string; tags: string[]; size: number; visibility?: 'protected' | 'public' | null; origin_email?: string | null; x?: number; y?: number };
 type Link = { source: string | Node; target: string | Node };
@@ -78,11 +82,48 @@ export default function BrainGraph3D({
   onVaultsChange?: (vaults: string[]) => void;
 }) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
+  const dataRef = useRef<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
+  useEffect(() => { dataRef.current = data; }, [data]);
   const [hover, setHover] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
+
+  // MRI map: nodeId → expiry-ms. Lit when agent reads/writes a vault note via brain:access WS.
+  const mriRef = useRef<Map<string, number>>(new Map());
+  const [mriTick, setMriTick] = useState(0);
+  useWS((msg) => {
+    if (msg?.type !== 'brain:access') return;
+    const p = msg.payload ?? {};
+    if (!p.rel) return;
+    const now = Date.now();
+    const expire = now + MRI_DURATION_MS;
+    const rel = String(p.rel);
+    // Primary id format: <vault>::<rel>. Also match by rel-only for tolerance.
+    const ids = new Set<string>();
+    if (p.vaultName) ids.add(`${p.vaultName}::${rel}`);
+    // Tolerant fallback: scan current graph for any node whose id endsWith rel
+    for (const n of dataRef.current.nodes) {
+      if (n.id === rel || n.id.endsWith(`::${rel}`)) ids.add(n.id);
+    }
+    for (const id of ids) mriRef.current.set(id, expire);
+    setMriTick((t) => t + 1);
+  });
+  // Tick every ~80ms while MRI active to redraw fades
+  useEffect(() => {
+    if (mriRef.current.size === 0) return;
+    const iv = setInterval(() => {
+      const now = Date.now();
+      let changed = false;
+      for (const [id, end] of mriRef.current) {
+        if (end <= now) { mriRef.current.delete(id); changed = true; }
+      }
+      setMriTick((t) => t + 1);
+      if (changed && fgRef.current) fgRef.current.refresh?.();
+    }, 80);
+    return () => clearInterval(iv);
+  }, [mriTick]);
 
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
@@ -175,6 +216,26 @@ export default function BrainGraph3D({
 
     ctx.save();
     ctx.globalAlpha = dim ? 0.3 : 1;
+
+    // MRI pulse: green halo + brighter fill envelope when this node was just accessed
+    const mriEnd = mriRef.current.get(node.id);
+    if (mriEnd && mriEnd > Date.now()) {
+      const remaining = mriEnd - Date.now();
+      const phase = 1 - remaining / MRI_DURATION_MS; // 0→1
+      // sin envelope: 0 → 1 → 0
+      const env = Math.sin(phase * Math.PI);
+      const haloR = r + (10 + env * 14) / scale;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, haloR, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(57,255,122,${0.10 + 0.25 * env})`;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, haloR * 0.65, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(57,255,122,${0.5 + 0.5 * env})`;
+      ctx.lineWidth = (1.5 + 1.5 * env) / scale;
+      ctx.stroke();
+    }
+    void mriTick;
 
     if (isForeign) {
       // Foreign brain: lucide brain icon stroked in peer hue, NO background

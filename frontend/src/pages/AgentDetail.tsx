@@ -11,6 +11,9 @@ const AGENT_ICON: Record<string, string> = {
   brain_classifier: '/shield.png',
   link_weaver: '/brain-icon.png',
   people_analyzer: '/people-analyzer.png',
+  vault_dreamer: '/garden.png',
+  vault_librarian: '/axe.png',
+  vault_gardener: '/dreamer.png',
 };
 const FALLBACK_ICON = '/rounded-image.png';
 
@@ -23,7 +26,7 @@ export default function AgentDetail() {
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   const { t } = useI18n();
-  const { left: cdLeft, start: cdStart } = usePerkCooldown(60);
+  const { left: cdLeft, start: cdStart, clear: cdClear } = usePerkCooldown(60);
   const cd = cdLeft(name);
 
   async function load() {
@@ -33,6 +36,13 @@ export default function AgentDetail() {
     setAgent(a); setHour(a.hour); setMinute(a.minute);
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [name]);
+  // Poll while running so UI flips back to "runNow" when execution completes
+  useEffect(() => {
+    if (!agent?.running) return;
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent?.running]);
 
   async function saveSchedule() {
     await api.updateInternalAgent(name, { hour, minute });
@@ -51,28 +61,73 @@ export default function AgentDetail() {
     load();
   }
   async function run() {
-    if (cdLeft(name) > 0 || busy) return;
+    if (agent?.running) {
+      toast.push(`⏳ ${agent.title} ancora in esecuzione`, 'warn');
+      return;
+    }
+    const left = cdLeft(name);
+    if (left > 0) {
+      toast.push(`⏳ ${agent.title} riattivabile tra ${left}s`, 'warn');
+      return;
+    }
+    if (busy) return;
     setBusy(true);
+    cdStart(name); // optimistic lock — survives reload during long-running execution
     try {
       await api.runInternalAgent(name);
       toast.push(`${agent.title} run complete`, 'on');
-      cdStart(name); // 60s lock after successful execution (shared with Perks list)
       await load();
-    } catch (e: any) { toast.push(e.message, 'err'); }
+    } catch (e: any) {
+      toast.push(e.message, 'err');
+      cdClear(name);
+    }
     finally { setBusy(false); }
   }
 
   if (!agent) return <div className="text-muted">{t('common.loading')}</div>;
   const r = agent.last_report ?? {};
-  const stats: [string, any][] = [
-    [t('agents.scanned'), r.scanned],
-    [t('agents.classified'), r.classified],
-    [`◆ ${t('agents.protected')}`, r.protected],
-    [`◇ ${t('agents.public')}`, r.public],
-    [t('agents.skipped'), r.skipped],
-    [t('agents.errors'), r.errors],
-    [t('agents.duration'), r.durationMs != null ? `${r.durationMs} ms` : null],
-  ];
+
+  // Generic stat extraction: collect every scalar field at top level (numbers/strings/bools).
+  // Hide internal-only fields. Format durations nicely.
+  const HIDE = new Set(['error', 'details', 'created_paths', 'modified_paths', 'paths', 'path']);
+  const PRETTY_LABEL: Record<string, string> = {
+    scanned: t('agents.scanned'),
+    classified: t('agents.classified'),
+    protected: `◆ ${t('agents.protected')}`,
+    public: `◇ ${t('agents.public')}`,
+    skipped: t('agents.skipped'),
+    errors: t('agents.errors'),
+    durationMs: t('agents.duration'),
+    total_people: 'Persone tot.',
+    analyzed: 'Analizzate',
+    total_notes: 'Note tot.',
+    sampled: 'Campionate',
+    written: 'Scritte',
+    pruned: '🌿 Potate',
+    enriched: '💧 Annaffiate',
+    seeded: '🌱 Semi',
+    sources: 'Fonti',
+    fetched: 'Item raccolti',
+    candidates: 'Nuovi candidati',
+    saved: 'Schede salvate',
+  };
+  const fmtVal = (k: string, v: any): string => {
+    if (k === 'durationMs') return `${v} ms`;
+    if (typeof v === 'boolean') return v ? '✓' : '✗';
+    if (Array.isArray(v)) return `${v.length}`;
+    return String(v);
+  };
+  const stats: [string, any][] = Object.entries(r)
+    .filter(([k, v]) => !HIDE.has(k) && (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean' || Array.isArray(v)))
+    .map(([k, v]) => [PRETTY_LABEL[k] ?? k, fmtVal(k, v)]);
+
+  // Collect created/modified paths for "File" section
+  const allPaths: string[] = [
+    ...(Array.isArray(r.created_paths) ? r.created_paths : []),
+    ...(Array.isArray(r.modified_paths) ? r.modified_paths : []),
+    ...(Array.isArray(r.paths) ? r.paths : []),
+    ...(typeof r.path === 'string' ? [r.path] : []),
+  ].filter((p, i, a) => a.indexOf(p) === i);
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -98,7 +153,7 @@ export default function AgentDetail() {
         </div>
         <div className="flex items-center gap-2">
           <Toggle checked={agent.enabled} onChange={toggle} />
-          <Button onClick={run} disabled={busy || cd > 0}>{busy ? '…' : cd > 0 ? `Riattivabile in ${cd}s` : t('agents.runNow')}</Button>
+          <Button onClick={run} disabled={!!agent.running || busy || cd > 0}>{agent.running ? '⏳ In esecuzione…' : busy ? '…' : cd > 0 ? `Riattivabile in ${cd}s` : t('agents.runNow')}</Button>
         </div>
       </div>
 
@@ -150,18 +205,55 @@ export default function AgentDetail() {
             {r.error && (
               <div className="mt-4 text-err text-xs font-mono whitespace-pre-wrap bg-err/10 border border-err/30 rounded-2xl p-3">{r.error}</div>
             )}
+            {allPaths.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold mb-3">📂 File ({allPaths.length})</h3>
+                <div className="space-y-1 max-h-[40vh] overflow-y-auto pr-1">
+                  {allPaths.slice(0, 50).map((p) => (
+                    <a
+                      key={p}
+                      href={`/brain?note=${encodeURIComponent(p)}`}
+                      className="block font-mono text-xs text-accent hover:underline border border-border rounded-xl p-2.5 bg-surface2/30 truncate"
+                      title={p}
+                    >
+                      {p}
+                    </a>
+                  ))}
+                  {allPaths.length > 50 && <div className="text-[10px] text-muted pl-1">+{allPaths.length - 50} altri</div>}
+                </div>
+              </div>
+            )}
             {Array.isArray(r.details) && r.details.length > 0 && (
               <div className="mt-6">
                 <h3 className="text-sm font-semibold mb-3">{t('agents.changes')} ({r.details.length})</h3>
                 <div className="space-y-1 max-h-[50vh] overflow-y-auto pr-1">
-                  {r.details.map((d: any, i: number) => (
-                    <div key={i} className="flex items-center gap-2 text-sm border border-border rounded-xl p-2.5 bg-surface2/30">
-                      <span className="font-mono text-xs text-muted truncate flex-1">{d.path}</span>
-                      <Chip>{d.from ?? '—'}</Chip>
-                      <span className="text-muted">→</span>
-                      <Chip tone={d.to === 'protected' ? 'err' : d.to === 'public' ? 'on' : 'default'}>{d.to}</Chip>
-                    </div>
-                  ))}
+                  {r.details.map((d: any, i: number) => {
+                    // Generic detail row: show all interesting fields. brain_classifier-style from→to keeps its richer chip render.
+                    if (d && typeof d === 'object' && 'from' in d && 'to' in d) {
+                      return (
+                        <div key={i} className="flex items-center gap-2 text-sm border border-border rounded-xl p-2.5 bg-surface2/30">
+                          <span className="font-mono text-xs text-muted truncate flex-1">{d.path ?? d.slug ?? ''}</span>
+                          <Chip>{String(d.from ?? '—')}</Chip>
+                          <span className="text-muted">→</span>
+                          <Chip tone={d.to === 'protected' ? 'err' : d.to === 'public' ? 'on' : 'default'}>{String(d.to)}</Chip>
+                        </div>
+                      );
+                    }
+                    const label = d?.path ?? d?.slug ?? d?.title ?? d?.source ?? `#${i + 1}`;
+                    const tag = d?.action ?? d?.source ?? null;
+                    const meta = [d?.relevance != null ? `rel ${d.relevance}` : null, d?.ok === true ? 'ok' : null, d?.error ? `err` : null].filter(Boolean).join(' · ');
+                    return (
+                      <div key={i} className="flex items-center gap-2 text-sm border border-border rounded-xl p-2.5 bg-surface2/30">
+                        {d?.path ? (
+                          <a href={`/brain?note=${encodeURIComponent(d.path)}`} className="font-mono text-xs text-accent hover:underline truncate flex-1">{label}</a>
+                        ) : (
+                          <span className="font-mono text-xs text-muted truncate flex-1">{String(label)}</span>
+                        )}
+                        {tag && <Chip>{String(tag)}</Chip>}
+                        {meta && <span className="text-[10px] text-muted font-mono">{meta}</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

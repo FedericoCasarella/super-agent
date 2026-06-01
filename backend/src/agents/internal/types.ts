@@ -18,6 +18,8 @@ export type InternalAgent = {
   description: string;
   defaultHour: number;
   defaultMinute: number;
+  // Optional: sub-daily cadence. When set, agent fires every N hours regardless of hour:minute anchor.
+  defaultIntervalHours?: number;
   run: (userId: number) => Promise<AgentReport>;
   // Human-friendly summary for the Telegram notification (localized).
   humanize?: (report: AgentReport, lang: Lang, status: 'ok' | 'error') => string;

@@ -209,6 +209,8 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
                 isMcp,
                 // pretty server: mcp__<server>__tool → <server>
                 server: isMcp ? (name.split('__')[1] ?? null) : null,
+                // Origin tag — perk name, sub-agent title prefix, or generic "agent"
+                kind: opts.kind ?? null,
                 ts: Date.now(),
               });
               const candidatePaths: string[] = [];

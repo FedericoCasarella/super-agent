@@ -219,7 +219,7 @@ export default function LiveAgents() {
                         <span className="text-xs text-muted">{fmtAgo(a.ended_at ?? a.created_at)}</span>
                       </div>
                     </div>
-                    {a.brief && <div className="text-xs text-muted mt-1 truncate">{a.brief}</div>}
+                    {a.brief && <div className="text-xs text-muted mt-1 break-words line-clamp-3">{a.brief}</div>}
                   </div>
                 </button>
               </li>
@@ -255,10 +255,19 @@ export default function LiveAgents() {
                 <div className="text-xs text-muted mb-2 font-semibold uppercase">Azioni eseguite ({open.actions.length})</div>
                 <ol className="text-xs space-y-1 max-h-60 overflow-y-auto border border-border rounded-xl p-2 bg-surface2/30">
                   {open.actions.map((a, i) => (
-                    <li key={i} className="flex items-start gap-2 font-mono">
+                    <li key={i} className="flex items-start gap-2 font-mono min-w-0">
                       <span className="text-muted w-6 shrink-0 text-right">{i + 1}.</span>
-                      <span className="text-accent shrink-0">{a.name}</span>
-                      <span className="text-muted truncate">{a.brief}</span>
+                      <div className="flex-1 min-w-0 overflow-hidden">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-accent">{a.name}</span>
+                          <span className="px-1.5 py-0.5 rounded-full text-[9px] uppercase tracking-wider bg-accent2/15 text-accent2 border border-accent2/30">
+                            🤖 {open.title.slice(0, 24)}
+                          </span>
+                        </div>
+                        {a.brief && (
+                          <span className="block text-muted whitespace-pre-wrap break-all mt-0.5">{a.brief}</span>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ol>

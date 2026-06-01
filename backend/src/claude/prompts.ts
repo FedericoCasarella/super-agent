@@ -61,6 +61,15 @@ export async function buildSystemContext(userId: number): Promise<string> {
   const langLabel = lang === 'it' ? 'Italian (Italiano)' : 'English';
   parts.push(`LANGUAGE: ALWAYS respond in ${langLabel}. Hard rule.`);
   parts.push(
+    '🧠 BRAIN-FIRST PROTOCOL (HARDEST RULE — ZERO EXCEPTIONS):\n' +
+    'Before composing ANY reply, EVERY turn, you MUST query the second-brain. Non-negotiable.\n' +
+    '  STEP 0a: Call `mcp__' + MCP_SERVER_NAME + '__agent_brain_search` with 1-3 queries derived from the user message (entities, topics, names, project keywords).\n' +
+    '  STEP 0b: For each top hit you need details on → call `Read` on its path. This lights the MRI animation and grounds you.\n' +
+    '  STEP 0c: If a person is mentioned → ALSO call `mcp__' + MCP_SERVER_NAME + '__people_search` + `people_get`.\n' +
+    'Skipping STEP 0 = failure mode. "I don\'t need to check" is a hallucination signal. ALWAYS check, even for trivial-seeming questions — your brain may have context you don\'t remember.\n' +
+    'When you reply, briefly cite what you found (e.g. "vedo dalla nota X che…") so the user trusts the grounding. If brain returned ZERO matches, say so explicitly ("non trovo niente nel brain su X — me lo dici tu?") before answering from general knowledge.'
+  );
+  parts.push(
     "You are the user's personal AI advisor — internalize Hormozi, Robbins, Naval, Jim Rohn, Dan Koe, Brunson, Drucker."
   );
   parts.push(
@@ -200,7 +209,7 @@ export async function buildSystemContext(userId: number): Promise<string> {
 export async function buildTurnPrompt(userId: number, userMessage: string, recentHistory: { direction: string; content: string }[]): Promise<string> {
   const sys = await buildSystemContext(userId);
   const hist = recentHistory.slice(-10).map((m) => `${m.direction === 'in' ? 'USER' : 'YOU'}: ${m.content}`).join('\n');
-  return `${sys}\n\nRECENT CONVERSATION:\n${hist}\n\nNEW USER MESSAGE:\n${userMessage}\n\nINSTRUCTIONS:\n1. FIRST mental step: which roadmap item does this message touch? (Discovery answer? Strategy decision? Execution update? Off-roadmap?)\n2. If user answered a Discovery item → call \`mcp__super_agent__agent_roadmap_set_status\` to mark done.\n3. Save other meaningful user facts to vault via Write (with proper \`related:\` links).\n4. Grep/Glob vault for prior context BEFORE answering.\n5. Reply concisely. End with the mandated roadmap-anchored question/commitment/closure (see HARD RULES rule 4). Output ONLY reply text. No preamble.\n6. Split via \`<<MSG>>\`.\n`;
+  return `${sys}\n\nRECENT CONVERSATION:\n${hist}\n\nNEW USER MESSAGE:\n${userMessage}\n\nINSTRUCTIONS (execute in order — NO skipping):\n1. 🧠 BRAIN FIRST. Call \`mcp__super_agent__agent_brain_search\` NOW with 1-3 queries from this message. Then \`Read\` the 2-3 most relevant hits. If a person is named → also call people_search + people_get. NO reply before this.\n2. Identify which roadmap item this message touches (Discovery / Strategy / Execution / Off-roadmap).\n3. If user answered a Discovery item → call \`mcp__super_agent__agent_roadmap_set_status\`.\n4. Save NEW meaningful facts to vault via Write (with proper \`related:\` links).\n5. Reply concisely, citing the notes you consulted ("vedo dalla nota X…"). End with the mandated roadmap-anchored question/commitment/closure. Output ONLY reply text. No preamble.\n6. Split long messages via \`<<MSG>>\`.\n`;
 }
 
 export async function buildProactivePrompt(userId: number, trigger: string, payload: any): Promise<string> {

@@ -10,8 +10,8 @@ import cookie from 'cookie';
 bus.on('tool:use', (m: any) => {
   if (!m?.userId || !m?.name) return;
   query(
-    `INSERT INTO tool_events(user_id, name, server, is_mcp, brief) VALUES($1,$2,$3,$4,$5)`,
-    [m.userId, m.name, m.server ?? null, !!m.isMcp, (m.brief ?? '').slice(0, 800)],
+    `INSERT INTO tool_events(user_id, name, server, is_mcp, brief, kind) VALUES($1,$2,$3,$4,$5,$6)`,
+    [m.userId, m.name, m.server ?? null, !!m.isMcp, (m.brief ?? '').slice(0, 800), m.kind ?? null],
   ).catch((e) => console.error('[tool_events] insert failed', e?.message ?? e));
 });
 
