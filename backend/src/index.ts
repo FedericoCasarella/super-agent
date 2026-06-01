@@ -51,6 +51,10 @@ async function main() {
     }
   } catch (e) { console.error('[wa] boot scan failed', e); }
 
+  if (config.devAutoLogin) {
+    console.warn('⚠️  [auth] DEV_AUTOLOGIN attivo — login BYPASSATO, auto-auth come utente locale. NON usare in produzione/distribuzione.');
+  }
+
   server.listen(config.port, config.host, () => {
     console.log(`[backend] http://${config.host}:${config.port}`);
   });

@@ -16,4 +16,9 @@ export const config = {
   rootDir: path.resolve(process.cwd()),
   jwtSecret: process.env.JWT_SECRET ?? 'dev-insecure-change-me',
   cookieName: 'super_agent_session',
+  // Local-dev only: when DEV_AUTOLOGIN=1 the login screen is bypassed and the
+  // single existing user (or DEV_USER_EMAIL) is auto-authenticated. OFF by
+  // default — never ships enabled in an OSS/production build.
+  devAutoLogin: process.env.DEV_AUTOLOGIN === '1' && process.env.NODE_ENV !== 'production',
+  devUserEmail: process.env.DEV_USER_EMAIL ?? null,
 };

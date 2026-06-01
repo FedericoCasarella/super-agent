@@ -1,15 +1,12 @@
 import { Router } from 'express';
-import { countUsers, createUser, getUserByEmail, getUserById, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, verifyToken } from './index.js';
-import { config } from '../config.js';
+import { countUsers, createUser, getUserByEmail, claimOrphanData, signToken, setAuthCookie, clearAuthCookie, requireUser, verifyPassword, resolveUser } from './index.js';
 
 export const authRouter = Router();
 
 authRouter.get('/me', async (req, res) => {
-  const token = (req as any).cookies?.[config.cookieName];
-  if (!token) return res.json({ user: null });
-  const data = verifyToken(token);
-  if (!data) return res.json({ user: null });
-  const user = await getUserById(data.uid);
+  // resolveUser honors the cookie first, then falls back to the dev user
+  // when DEV_AUTOLOGIN is on (local dev only). In prod it's cookie-only.
+  const user = await resolveUser(req);
   res.json({ user });
 });
 

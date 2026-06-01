@@ -1,6 +1,6 @@
 # super-agent
 
-> A personal AI agent that lives in your Telegram, thinks with Claude Code, and remembers everything in a second brain.
+> A personal AI agent that lives in your Telegram, thinks with Claude Code, and grows a second brain that maintains itself.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)
@@ -9,6 +9,16 @@
 ![Claude](https://img.shields.io/badge/Claude%20Code-D97757?logo=anthropic&logoColor=white)
 
 Chat with it on Telegram. It reasons with the Claude Code CLI, keeps a growing Obsidian-style knowledge vault, and acts through pluggable connectors — reading your email, transcribing voice notes, spawning parallel sub-agents — always asking before it does anything irreversible.
+
+### Why it's different
+
+Two products already own half of this idea. **Obsidian** gives you a knowledge vault and a graph — but it doesn't *think*. **OpenClaw** gives you an autonomous agent across channels — but it doesn't *remember* in a navigable brain. super-agent is the only one that fuses both: **a living second brain that is also an agent.**
+
+| | Knowledge brain (vault + graph) | Autonomous agent | Connectors / messaging |
+|---|:---:|:---:|:---:|
+| **Obsidian** | ✅ static, no agent | ❌ | ❌ plugins only |
+| **OpenClaw** | ❌ | ✅ | ✅ 10+ channels |
+| **super-agent** | ✅ vault + 3D graph | ✅ | ✅ imap · whatsapp · telegram · voice |
 
 ---
 
@@ -25,6 +35,23 @@ Chat with it on Telegram. It reasons with the Claude Code CLI, keeps a growing O
 
 ### Human-in-the-loop by default
 Every action with real-world consequences — sending an email, spawning agents — is *proposed*, not executed. You confirm with an inline ✅ / ❌ on Telegram. The agent is autonomous in thought, deliberate in action.
+
+---
+
+## The brain that runs itself
+
+super-agent isn't a chatbot that sits idle until you type. **Six internal agents run on their own cron schedule** — classifying, connecting, profiling, pruning, ingesting and *dreaming* — so the second brain keeps growing and stays healthy even when no one is at the keyboard.
+
+| Agent | Cadence | What it does |
+|-------|---------|--------------|
+| **🏷️ Brain Classifier** | nightly | Tags every note as protected or public (frontmatter + index). Deterministic — zero LLM cost. |
+| **🪢 Link Weaver** | nightly | Finds the 1–6 best related notes per note and writes them into `related:` frontmatter. Deterministic — zero LLM cost. |
+| **🧬 People Analyzer** | daily | Builds a psychological profile — fears, levers, relational style — of each person, from every brain node linked to them. |
+| **🌿 Vault Gardener** | daily | Prunes orphan / stale notes (archived, never deleted), waters thin-but-central notes with fresh content, plants MOC seeds for tag clusters. |
+| **📚 Vault Librarian** | every 3h | Pulls the best writing in your sector — top GitHub repos, live RSS — filters by relevance, dedups by URL, files it into the vault. |
+| **🌙 Vault Dreamer** | nightly | Samples distant notes and surfaces unexpected connections — a serendipity engine that dreams for you while you sleep. |
+
+Each runs on a configurable schedule, reports back into Telegram, and toggles from the `/agents` view. The deterministic agents (classify, link) cost nothing; the creative ones (gardener, librarian, dreamer) call Claude only when they actually act.
 
 ---
 

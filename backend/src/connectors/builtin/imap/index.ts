@@ -1,6 +1,9 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import { realpath, stat } from 'node:fs/promises';
+import { isAbsolute, extname, sep } from 'node:path';
+import os from 'node:os';
 import type { Connector } from '../../types.js';
 import { ingestEmail, emailBodyText } from '../../../brain/email.js';
 import { bus } from '../../../bus.js';
@@ -98,15 +101,59 @@ export async function sendTestEmail(userId: number, accountLabel: string): Promi
   }
 }
 
+// --- Attachment safety (defense-in-depth) -----------------------------------
+// `attachments` are absolute filesystem paths. Without confinement an attacker
+// (or a future client/multi-user/IDOR path) could exfiltrate any server file
+// (/etc/passwd, ~/.ssh/id_rsa, the app .env / JWT secret) by emailing it out.
+// isAbsolute + access() is NOT enough: it allows `..`, symlinks and secrets.
+const ATTACH_MAX_COUNT = 10;
+const ATTACH_MAX_BYTES = 25 * 1024 * 1024; // 25MB/file — typical SMTP ceiling
+const ATTACH_ALLOWED_EXT = new Set([
+  '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.svg',
+  '.txt', '.md', '.csv', '.json', '.ics',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.rtf', '.zip',
+]);
+// Block credential/secret files even when they live inside the allowed roots.
+const ATTACH_SECRET_RE = /(^|\/)\.(ssh|aws|gnupg|kube|docker|netrc)(\/|$)|(^|\/)\.env(\.[\w-]+)?$|\.(pem|key|p12|pfx|asc|keystore|crt)$|id_rsa|id_ed25519|id_ecdsa|credentials(\.json)?$/i;
+
+// Validate one attachment path; returns the resolved real path to attach.
+async function assertSafeAttachment(p: string): Promise<string> {
+  if (typeof p !== 'string' || !p.trim()) throw new Error('attachment path empty');
+  if (!isAbsolute(p)) throw new Error(`attachment path must be absolute: ${p}`);
+  let real: string;
+  try { real = await realpath(p); } catch { throw new Error(`attachment not found: ${p}`); }
+  // Confine to the user's home or the OS temp dir (where generated PDFs land).
+  const home = await realpath(os.homedir()).catch(() => os.homedir());
+  const tmp = await realpath(os.tmpdir()).catch(() => os.tmpdir());
+  const within = (root: string) => real === root || real.startsWith(root + sep);
+  if (!within(home) && !within(tmp)) throw new Error(`attachment must be inside your home or temp directory: ${p}`);
+  if (ATTACH_SECRET_RE.test(real)) throw new Error(`attachment looks like a secret/credential file — blocked: ${p}`);
+  const ext = extname(real).toLowerCase();
+  if (!ATTACH_ALLOWED_EXT.has(ext)) throw new Error(`attachment type not allowed: ${ext || '(none)'}`);
+  const st = await stat(real);
+  if (!st.isFile()) throw new Error(`attachment is not a regular file: ${p}`);
+  if (st.size > ATTACH_MAX_BYTES) throw new Error(`attachment too large (${(st.size / 1048576).toFixed(1)}MB > 25MB): ${p}`);
+  return real;
+}
+
+async function safeAttachmentPaths(paths: string[]): Promise<string[]> {
+  if (paths.length > ATTACH_MAX_COUNT) throw new Error(`too many attachments (max ${ATTACH_MAX_COUNT})`);
+  return Promise.all(paths.map(assertSafeAttachment));
+}
+// ----------------------------------------------------------------------------
+
 export async function createDraft(userId: number, accountLabel: string, draft: {
-  to: string; cc?: string; bcc?: string; subject: string; body: string; inReplyTo?: string; references?: string;
+  to: string; cc?: string; bcc?: string; subject: string; body: string; inReplyTo?: string; references?: string; attachments?: string[];
 }): Promise<EmailDraft> {
   const accs = await getAccountsForUser(userId);
   if (!accs.find((a) => a.label === accountLabel)) throw new Error(`account ${accountLabel} not found`);
+  // Store the resolved real paths so send-time reads exactly what was validated.
+  const safePaths = draft.attachments?.length ? await safeAttachmentPaths(draft.attachments) : [];
+  const meta = safePaths.length ? { attachments: safePaths } : null;
   const rows = await query<EmailDraft>(
-    `INSERT INTO email_drafts(user_id, account_label, to_addr, cc_addr, bcc_addr, subject, body, in_reply_to, references_ids, status)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') RETURNING *`,
-    [userId, accountLabel, draft.to, draft.cc ?? null, draft.bcc ?? null, draft.subject, draft.body, draft.inReplyTo ?? null, draft.references ?? null],
+    `INSERT INTO email_drafts(user_id, account_label, to_addr, cc_addr, bcc_addr, subject, body, in_reply_to, references_ids, status, meta)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10) RETURNING *`,
+    [userId, accountLabel, draft.to, draft.cc ?? null, draft.bcc ?? null, draft.subject, draft.body, draft.inReplyTo ?? null, draft.references ?? null, meta],
   );
   const d = rows[0];
   bus.emit('email_draft:created', { userId, draft: d });
@@ -154,8 +201,11 @@ export async function sendDraft(userId: number, id: number): Promise<EmailDraft>
   const headers: Record<string, string> = {};
   if (d.in_reply_to) headers['In-Reply-To'] = d.in_reply_to;
   if (d.references_ids) headers['References'] = d.references_ids;
+  // Re-validate at send time (meta is DB-stored; never trust it blindly).
+  const attachmentPaths: string[] = await safeAttachmentPaths(d.meta?.attachments ?? []);
+  const attachments = attachmentPaths.map((p) => ({ path: p }));
   try {
-    await t.sendMail({ from, to: d.to_addr, cc: d.cc_addr ?? undefined, bcc: d.bcc_addr ?? undefined, subject: d.subject, text: d.body, headers });
+    await t.sendMail({ from, to: d.to_addr, cc: d.cc_addr ?? undefined, bcc: d.bcc_addr ?? undefined, subject: d.subject, text: d.body, headers, ...(attachments.length ? { attachments } : {}) });
     await query(`UPDATE email_drafts SET status='sent', sent_at=now(), decided_at=COALESCE(decided_at, now()) WHERE id=$1`, [id]);
     bus.emit('email_draft:sent', { userId, id });
     return { ...d, status: 'sent', sent_at: new Date().toISOString() };

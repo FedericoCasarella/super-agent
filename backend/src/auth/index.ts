@@ -60,13 +60,29 @@ export async function claimOrphanData(userId: number): Promise<void> {
   }
 }
 
-export async function requireUser(req: Request, res: Response, next: NextFunction) {
+// Local-dev bypass: resolve the user without a cookie when DEV_AUTOLOGIN is on.
+// Returns null unless config.devAutoLogin (which is force-false in production).
+export async function getDevUser(): Promise<User | null> {
+  if (!config.devAutoLogin) return null;
+  if (config.devUserEmail) {
+    const u = await getUserByEmail(config.devUserEmail);
+    return u ? { id: u.id, email: u.email, name: u.name } : null;
+  }
+  const rows = await query<User>('SELECT id::int, email, name FROM users ORDER BY id LIMIT 1');
+  return rows[0] ?? null;
+}
+
+// Resolve the current user from cookie, falling back to the dev user in local dev.
+export async function resolveUser(req: Request): Promise<User | null> {
   const token = (req as any).cookies?.[config.cookieName];
-  if (!token) return res.status(401).json({ error: 'unauthenticated' });
-  const data = verifyToken(token);
-  if (!data) return res.status(401).json({ error: 'invalid token' });
-  const user = await getUserById(data.uid);
-  if (!user) return res.status(401).json({ error: 'user not found' });
+  const data = token ? verifyToken(token) : null;
+  const user = data ? await getUserById(data.uid) : null;
+  return user ?? (await getDevUser());
+}
+
+export async function requireUser(req: Request, res: Response, next: NextFunction) {
+  const user = await resolveUser(req);
+  if (!user) return res.status(401).json({ error: 'unauthenticated' });
   req.user = user;
   next();
 }
