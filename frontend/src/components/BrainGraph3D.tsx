@@ -120,7 +120,7 @@ export default function BrainGraph3D({
         if (end <= now) { mriRef.current.delete(id); changed = true; }
       }
       setMriTick((t) => t + 1);
-      if (changed && fgRef.current) fgRef.current.refresh?.();
+      if (changed && fgRef.current) (fgRef.current as any).refresh?.();
     }, 80);
     return () => clearInterval(iv);
   }, [mriTick]);
@@ -315,7 +315,7 @@ export default function BrainGraph3D({
       ctx.fillText(trimmed, node.x, boxY + padY);
       ctx.restore();
     }
-  }, [hi, hover, selected]);
+  }, [hi, hover, selected, mriTick]);
 
   const linkColor = useCallback((link: any) => {
     if (!hi) return LINK_COLOR;
