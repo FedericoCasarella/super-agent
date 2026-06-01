@@ -14,8 +14,9 @@ export function startOrchestrator() {
 async function handleIncoming({ userId, text }: { userId: number; chatId: number; text: string }) {
   await logMessage(userId, 'in', 'telegram', text);
   await setSetting(userId, 'agent_next_reflection_at', null);
+  // Pull last 30 so repetition detector can see 4-5 asks across a few turns.
   const history = await query<{ direction: string; content: string }>(
-    `SELECT direction, content FROM messages WHERE user_id=$1 AND channel='telegram' ORDER BY id DESC LIMIT 10`, [userId]
+    `SELECT direction, content FROM messages WHERE user_id=$1 AND channel='telegram' ORDER BY id DESC LIMIT 30`, [userId]
   );
   const prompt = await buildTurnPrompt(userId, text, history.reverse());
   const vault = await getVaultRoot(userId);

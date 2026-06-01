@@ -97,6 +97,21 @@ const connector: Connector = {
       },
     },
     {
+      name: 'set_push_threshold',
+      description: 'Calibrate how often the agent pushes the user with questions/commitments. Threshold 0-10. Lower = more aggressive (default 6). Use when user says "smettila di farmi domande", "sii meno insistente", "puoi spingermi di più", or similar.',
+      inputSchema: {
+        type: 'object',
+        properties: { threshold: { type: 'number', minimum: 0, maximum: 10, description: '0=never push, 10=always push, default=6' } },
+        required: ['threshold'], additionalProperties: false,
+      },
+      handler: async (ctx, { threshold }) => {
+        const v = Math.max(0, Math.min(10, Number(threshold)));
+        const existing = (await getSetting<any>(ctx.userId, 'profile')) ?? {};
+        await setSetting(ctx.userId, 'profile', { ...existing, push_threshold: v });
+        return { ok: true, push_threshold: v };
+      },
+    },
+    {
       name: 'set_quiet',
       description: 'Stop proactive pings until a given timestamp.',
       inputSchema: {

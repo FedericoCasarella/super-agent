@@ -399,6 +399,14 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS wa_contacts_user_lid_idx ON wa_contacts(user_id, lid);
 
+-- Per-chat auto-bonify flag — when true, scheduler will auto-run bonifyWaMessages on this chat
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='auto_bonify') THEN
+    ALTER TABLE wa_contacts ADD COLUMN auto_bonify BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS wa_contacts_user_autobonify_idx ON wa_contacts(user_id) WHERE auto_bonify=true;
+
 CREATE TABLE IF NOT EXISTS tool_events (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

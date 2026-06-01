@@ -9,12 +9,24 @@ export async function runReflectionForUser(userId: number) {
   if (quiet?.until && new Date(quiet.until) > new Date()) return;
   const sleep = await getSetting<any>(userId, 'agent_next_reflection_at');
   if (sleep?.until && new Date(sleep.until) > new Date()) return;
-  await setSetting(userId, 'last_reflection_at', new Date().toISOString());
 
   const history = await query<{ direction: string; content: string; ts: string }>(
     `SELECT direction, content, ts FROM messages WHERE user_id=$1 AND channel='telegram' ORDER BY id DESC LIMIT 30`, [userId]
   );
   if (!history.length) return;
+
+  // Cooldown: never PING within 90s of a chat-turn outbound message — avoids the
+  // "agent sends 2 messages back-to-back" double-reply pattern when reflection cron
+  // fires moments after orchestrator just replied.
+  const lastOutMsg = history.find((m) => m.direction === 'out');
+  if (lastOutMsg) {
+    const ageMs = Date.now() - new Date(lastOutMsg.ts).getTime();
+    if (ageMs < 90_000) {
+      console.log(`[reflection:u${userId}] skip: last out ${Math.round(ageMs/1000)}s ago (<90s cooldown)`);
+      return;
+    }
+  }
+  await setSetting(userId, 'last_reflection_at', new Date().toISOString());
 
   const lastOut = history.find((m) => m.direction === 'out');
   const lastIn = history.find((m) => m.direction === 'in');
