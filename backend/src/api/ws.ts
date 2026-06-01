@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { bus } from '../bus.js';
-import { verifyToken } from '../auth/index.js';
+import { verifyToken, getDevUser } from '../auth/index.js';
 import { config } from '../config.js';
 import { query } from '../db/index.js';
 import cookie from 'cookie';
@@ -29,8 +29,9 @@ export function attachWs(server: Server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
   const clients = new Set<Client>();
 
-  wss.on('connection', (ws, req) => {
-    const userId = parseUserId(req);
+  wss.on('connection', async (ws, req) => {
+    // Cookie auth first; fall back to the dev user in local dev (no cookie).
+    const userId = parseUserId(req) ?? (await getDevUser())?.id ?? null;
     if (!userId) { ws.close(1008, 'unauthenticated'); return; }
     const client: Client = { ws, userId };
     clients.add(client);
