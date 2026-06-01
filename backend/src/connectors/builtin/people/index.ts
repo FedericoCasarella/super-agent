@@ -112,6 +112,122 @@ const connector: Connector = {
       },
       handler: async (ctx, input) => upsertPerson(ctx.userId, input),
     },
+    {
+      name: 'list',
+      description: 'List people with pagination + filtri (uguale al backend della pagina /people).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          q: { type: 'string', description: 'Match su name/slug/aliases/emails/phones' },
+          limit: { type: 'number', default: 50 },
+          offset: { type: 'number', default: 0 },
+          sort: { type: 'string', enum: ['name', 'slug', 'updated'], default: 'updated' },
+          dir: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
+        },
+        additionalProperties: false,
+      },
+      handler: async (ctx, { q, limit = 50, offset = 0, sort = 'updated', dir = 'desc' }) => {
+        const sortMap: Record<string, string> = { name: 'name', slug: 'slug', updated: 'updated_at' };
+        const sortCol = sortMap[sort] ?? 'updated_at';
+        const sortDir = String(dir).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+        const where: string[] = ['user_id=$1'];
+        const params: any[] = [ctx.userId];
+        if (q) {
+          params.push(`%${q}%`);
+          const i = params.length;
+          where.push(`(name ILIKE $${i} OR slug ILIKE $${i}
+            OR EXISTS(SELECT 1 FROM unnest(aliases) a WHERE a ILIKE $${i})
+            OR EXISTS(SELECT 1 FROM unnest(emails) e WHERE e ILIKE $${i})
+            OR EXISTS(SELECT 1 FROM unnest(phones) p WHERE p ILIKE $${i}))`);
+        }
+        const totalRows = await query<{ c: number }>(`SELECT count(*)::int AS c FROM people WHERE ${where.join(' AND ')}`, params);
+        const lim = Math.min(Math.max(Number(limit), 1), 200);
+        const off = Math.max(Number(offset), 0);
+        params.push(lim, off);
+        const rows = await query<any>(
+          `SELECT slug, name, aliases, emails, phones, note_path, updated_at FROM people
+           WHERE ${where.join(' AND ')}
+           ORDER BY ${sortCol} ${sortDir} NULLS LAST, id DESC
+           LIMIT $${params.length - 1} OFFSET $${params.length}`,
+          params,
+        );
+        return { rows, total: totalRows[0]?.c ?? 0, limit: lim, offset: off };
+      },
+    },
+    {
+      name: 'graph',
+      description: 'Grafo cervello centrato su una persona — restituisce sub-tree (nodes + tree links) entro N hops. Stesso endpoint della modale People → Mini mappa 3D.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          slug: { type: 'string' },
+          hops: { type: 'number', default: 2, description: '1-4' },
+        },
+        required: ['slug'], additionalProperties: false,
+      },
+      handler: async (ctx, { slug, hops = 2 }) => {
+        const h = Math.min(Math.max(Number(hops), 1), 4);
+        const { buildGraph } = await import('../../../brain/graph.js');
+        const g = await buildGraph(ctx.userId, {});
+        const center = (g.nodes as any[]).find((n) => n.id?.endsWith(`::people/${slug}.md`) || n.id === `people/${slug}.md`);
+        if (!center) return { nodes: [], links: [], center: null };
+        const adj = new Map<string, Set<string>>();
+        for (const l of g.links as any[]) {
+          const s = typeof l.source === 'object' ? l.source.id : l.source;
+          const t = typeof l.target === 'object' ? l.target.id : l.target;
+          if (!adj.has(s)) adj.set(s, new Set());
+          if (!adj.has(t)) adj.set(t, new Set());
+          adj.get(s)!.add(t); adj.get(t)!.add(s);
+        }
+        const keep = new Set<string>([center.id]);
+        let frontier = new Set<string>([center.id]);
+        for (let i = 0; i < h; i++) {
+          const next = new Set<string>();
+          for (const id of frontier) for (const nb of adj.get(id) ?? []) {
+            if (!keep.has(nb)) { keep.add(nb); next.add(nb); }
+          }
+          frontier = next;
+          if (!frontier.size) break;
+        }
+        const level = new Map<string, number>([[center.id, 0]]);
+        const parent = new Map<string, string>();
+        const q: string[] = [center.id];
+        while (q.length) {
+          const id = q.shift()!; const lvl = level.get(id)!;
+          for (const nb of adj.get(id) ?? []) {
+            if (!keep.has(nb) || level.has(nb)) continue;
+            level.set(nb, lvl + 1); parent.set(nb, id); q.push(nb);
+          }
+        }
+        const nodes = (g.nodes as any[]).filter((n) => keep.has(n.id)).map((n) => ({ id: n.id, title: n.title, kind: n.kind, level: level.get(n.id) ?? 0 }));
+        const links = [...parent].map(([child, par]) => ({ source: par, target: child }));
+        return { nodes, links, center: center.id };
+      },
+    },
+    {
+      name: 'dedupe_run',
+      description: 'Lancia un sub-agent che trova e unifica duplicati People (DB + note brain). Esecuzione tracciata in /agents. NESSUNA conferma utente — è async. Ritorna sub_agent_id.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => {
+        const { spawnSubAgent } = await import('../../../sub_agents/index.js');
+        const prompt = `=== BONIFICA DUPLICATI PEOPLE ===
+
+Compito: trova e unifica i duplicati nella tabella People del DB e nelle note del second brain.
+
+PROCEDURA:
+1. Leggi tutti i record People via tool people_list (paginato).
+2. Identifica gruppi di duplicati: stesso name normalizzato, email comune, phone comune, slug similar.
+3. Per ogni gruppo: scegli canonical (più dati), merge via people_upsert, append note nel canonical e elimina vecchie, aggiorna riferimenti [[old]].
+4. Output: 1 paragrafo riepilogo (gruppi, merge, skip, errori). Niente Telegram.
+VIETATO chiamare people_dedupe_run: TU SEI il dedupe runner.`;
+        const sa = await spawnSubAgent(ctx.userId, {
+          title: 'Bonifica duplicati People',
+          brief: 'Trova duplicati in People (name/email/phone) e unifica record + note brain.',
+          prompt,
+        });
+        return { ok: true, sub_agent_id: sa.id };
+      },
+    },
   ],
 };
 

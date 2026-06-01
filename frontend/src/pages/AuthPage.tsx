@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { Button, Card, Field, Input, Banner, useToast } from '../components/ui';
 import { useAuth } from '../auth';
+import { useBranding } from '../branding';
 
 export default function AuthPage() {
   const { login, register, usersExist } = useAuth();
+  const { branding } = useBranding();
   const [mode, setMode] = useState<'login' | 'register'>(usersExist ? 'login' : 'register');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,11 +35,11 @@ export default function AuthPage() {
         <div className="text-center mb-8 flex flex-col items-center gap-3 animate-slide-up">
           <div className="relative">
             <div className="absolute inset-0 rounded-3xl bg-accent/40 blur-2xl animate-soft-pulse" />
-            <img src="/rounded-image.png" alt="super-agent" className="relative w-20 h-20 rounded-3xl ring-1 ring-white/10 shadow-2xl" />
+            <img src={branding.logoDataUrl || '/rounded-image.png'} alt={branding.title} className="relative w-20 h-20 rounded-3xl ring-1 ring-white/10 shadow-2xl object-cover" />
           </div>
           <div>
-            <div className="text-3xl font-semibold text-gradient">super-agent</div>
-            <div className="text-xs uppercase tracking-[0.22em] text-muted mt-1">personal · telegram · brain</div>
+            <div className="text-3xl font-semibold text-gradient">{branding.title}</div>
+            {branding.subtitle && <div className="text-xs uppercase tracking-[0.22em] text-muted mt-1">{branding.subtitle}</div>}
           </div>
         </div>
         <Card>

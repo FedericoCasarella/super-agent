@@ -49,8 +49,25 @@ export const api = {
   brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
     req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
   brainStats: () => req<any>('/brain/stats'),
+  people: (opts: { q?: string; limit?: number; offset?: number; sort?: string; dir?: 'asc' | 'desc' } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.q) p.set('q', opts.q);
+    if (opts.limit) p.set('limit', String(opts.limit));
+    if (opts.offset) p.set('offset', String(opts.offset));
+    if (opts.sort) p.set('sort', opts.sort);
+    if (opts.dir) p.set('dir', opts.dir);
+    return req<{ rows: any[]; total: number; limit: number; offset: number }>(`/people?${p}`);
+  },
+  peopleDedupeAgent: () => req<{ ok: boolean; subAgentId: number }>('/people/dedupe-agent', { method: 'POST' }),
+  personGraph: (slug: string, hops = 2) => req<{ nodes: any[]; links: any[]; center: string | null }>(`/people/${encodeURIComponent(slug)}/graph?hops=${hops}`),
+  personPsyProfile: (slug: string) => req<any>(`/people/${encodeURIComponent(slug)}/psy-profile`),
+  brainColors: () => req<any>('/brain/colors'),
+  updateBrainColors: (c: any) => req<any>('/brain/colors', { method: 'PUT', body: JSON.stringify(c) }),
+  branding: () => req<{ title: string; subtitle: string | null; logoDataUrl: string | null }>('/branding'),
+  updateBranding: (b: { title: string; subtitle?: string | null; logoDataUrl?: string | null; syncTelegram?: boolean }) =>
+    req<any>('/branding', { method: 'PUT', body: JSON.stringify(b) }),
   usage: () => req<any>('/usage'),
-  updatePlan: (name: string, sessionLimitTokens: number) => req<any>('/usage/plan', { method: 'PUT', body: JSON.stringify({ name, sessionLimitTokens }) }),
+  updatePlan: (data: { name: string; sessionLimitTokens?: number; costBudgetUsd?: number }) => req<any>('/usage/plan', { method: 'PUT', body: JSON.stringify(data) }),
   toolEvents: (opts: { filter?: 'all' | 'mcp' | 'native'; cursor?: number; server?: string; limit?: number } = {}) => {
     const p = new URLSearchParams();
     if (opts.filter && opts.filter !== 'all') p.set('filter', opts.filter);

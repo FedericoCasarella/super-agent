@@ -502,6 +502,138 @@ router.delete('/vaults/:id', async (req, res) => {
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// People — server-side paginated/searchable
+router.get('/people', async (req, res) => {
+  const userId = req.user!.id;
+  const q = String(req.query.q ?? '').trim();
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const sortMap: Record<string, string> = { name: 'name', slug: 'slug', updated: 'updated_at' };
+  const sortCol = sortMap[String(req.query.sort ?? 'updated')] ?? 'updated_at';
+  const dir = String(req.query.dir ?? 'desc').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+  const where: string[] = ['user_id=$1'];
+  const params: any[] = [userId];
+  if (q) {
+    const idx = params.length;
+    params.push(`%${q}%`);
+    where.push(`(name ILIKE $${idx + 1} OR slug ILIKE $${idx + 1}
+      OR EXISTS(SELECT 1 FROM unnest(aliases) a WHERE a ILIKE $${idx + 1})
+      OR EXISTS(SELECT 1 FROM unnest(emails) e WHERE e ILIKE $${idx + 1})
+      OR EXISTS(SELECT 1 FROM unnest(phones) p WHERE p ILIKE $${idx + 1}))`);
+  }
+  const totalRows = await query<{ c: number }>(`SELECT count(*)::int AS c FROM people WHERE ${where.join(' AND ')}`, params);
+  params.push(limit, offset);
+  const rows = await query<any>(
+    `SELECT id::int, slug, name, aliases, emails, phones, note_path, meta, updated_at,
+            EXISTS(SELECT 1 FROM brain_index bi WHERE bi.user_id=people.user_id AND bi.path = 'people/' || people.slug || '.psy-profile.md') AS has_psy
+     FROM people WHERE ${where.join(' AND ')}
+     ORDER BY ${sortCol} ${dir} NULLS LAST, id DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
+  );
+  res.json({ rows, total: totalRows[0]?.c ?? 0, limit, offset });
+});
+
+router.get('/people/:slug/psy-profile', async (req, res) => {
+  const userId = req.user!.id;
+  const slug = String(req.params.slug);
+  const rel = `people/${slug}.psy-profile.md`;
+  const note = await readNote(userId, rel);
+  if (!note) return res.status(404).json({ error: 'profile not generated yet' });
+  res.json(note);
+});
+router.get('/people/:slug/graph', async (req, res) => {
+  const userId = req.user!.id;
+  const slug = String(req.params.slug);
+  const hops = Math.min(Math.max(Number(req.query.hops ?? 2), 1), 4);
+  const { buildGraph } = await import('../brain/graph.js');
+  const g = await buildGraph(userId, {});
+  // Find central node for the person — usually `<vault>::people/<slug>.md`
+  const center = g.nodes.find((n: any) => n.id?.endsWith(`::people/${slug}.md`) || n.id === `people/${slug}.md`);
+  if (!center) return res.json({ nodes: [], links: [], center: null });
+  // BFS up to `hops`
+  const adj = new Map<string, Set<string>>();
+  for (const l of g.links as any[]) {
+    const s = typeof l.source === 'object' ? l.source.id : l.source;
+    const t = typeof l.target === 'object' ? l.target.id : l.target;
+    if (!adj.has(s)) adj.set(s, new Set());
+    if (!adj.has(t)) adj.set(t, new Set());
+    adj.get(s)!.add(t); adj.get(t)!.add(s);
+  }
+  const keep = new Set<string>([center.id]);
+  let frontier = new Set<string>([center.id]);
+  for (let h = 0; h < hops; h++) {
+    const next = new Set<string>();
+    for (const id of frontier) for (const nb of adj.get(id) ?? []) {
+      if (!keep.has(nb)) { keep.add(nb); next.add(nb); }
+    }
+    frontier = next;
+    if (!frontier.size) break;
+  }
+  // Assign BFS level per kept node + emit tree edges (parent→child) only,
+  // so the graph is acyclic and dagMode renders cleanly.
+  const level = new Map<string, number>();
+  level.set(center.id, 0);
+  const parent = new Map<string, string>();
+  const queue: string[] = [center.id];
+  while (queue.length) {
+    const id = queue.shift()!;
+    const lvl = level.get(id)!;
+    for (const nb of adj.get(id) ?? []) {
+      if (!keep.has(nb) || level.has(nb)) continue;
+      level.set(nb, lvl + 1);
+      parent.set(nb, id);
+      queue.push(nb);
+    }
+  }
+  const nodes = (g.nodes as any[])
+    .filter((n) => keep.has(n.id))
+    .map((n) => ({ ...n, level: level.get(n.id) ?? 0 }));
+  const links: any[] = [];
+  for (const [child, par] of parent) links.push({ source: par, target: child });
+  res.json({ nodes, links, center: center.id });
+});
+
+router.post('/people/dedupe-agent', async (req, res) => {
+  const { spawnSubAgent } = await import('../sub_agents/index.js');
+  const userId = req.user!.id;
+  const prompt = `=== BONIFICA DUPLICATI PEOPLE ===
+
+Compito: trova e unifica i duplicati nella tabella People del DB e nelle note del second brain.
+
+PROCEDURA:
+1. Leggi tutti i record People via tool \`mcp__super_agent__people_search\` (o query equivalente). Ottieni name, slug, aliases, emails, phones, note_path.
+2. Identifica gruppi di duplicati usando:
+   - Stesso normalized name (lowercase, trim, no accenti)
+   - Email in comune (case-insensitive)
+   - Telefono in comune (solo digits)
+   - Slug simili (Levenshtein ≤ 2)
+3. Per ogni gruppo di duplicati:
+   a. Scegli canonical = record con più dati popolati (più aliases/emails/phones/note size).
+   b. Merge: unisci aliases/emails/phones distinct nel canonical via \`mcp__super_agent__people_upsert\`.
+   c. Per le note brain dei NON-canonical (\`people/<slug>.md\`):
+      - Leggi contenuto via Read tool
+      - Append nel canonical (\`people/<canonical_slug>.md\`) sotto sezione "## Merged from <old_slug>" + data
+      - Elimina file vecchio
+   d. Update riferimenti in altre note del brain (Grep su [[old_slug]] o "people/old_slug.md" → sostituire con canonical).
+4. Aggiorna brain_index per riallineare i path (se necessario via tool dedicato).
+5. Log finale: quanti gruppi trovati, quanti merge fatti, file rimossi.
+
+REGOLE:
+- NESSUNA conferma utente: agire deterministico.
+- Se gruppo ambiguo (es. 2 omonimi senza email/phone overlap) → NON unire, log come "ambiguous, skipped".
+- Mai inviare msg Telegram.
+- VIETATO chiamare \`mcp__super_agent__people_dedupe_run\`: TU SEI già il dedupe runner. Chiamarlo = ricorsione infinita.
+- Output finale: 1 paragrafo riepilogo (gruppi, merge, skip, errori).`;
+
+  const sa = await spawnSubAgent(userId, {
+    title: 'Bonifica duplicati People',
+    brief: 'Trova duplicati in People (name/email/phone) e unifica record + note brain.',
+    prompt,
+  });
+  res.json({ ok: true, subAgentId: sa.id });
+});
+
 // Sub-agents
 router.get('/sub-agents', async (req, res) => {
   const sa = await import('../sub_agents/index.js');
@@ -684,6 +816,39 @@ router.get('/tool-events', async (req, res) => {
   res.json(rows);
 });
 
+// Plugins (.skill)
+import multer from 'multer';
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+router.get('/plugins', async (_req, res) => {
+  const m = await import('../plugins/index.js');
+  res.json(await m.listPlugins());
+});
+router.post('/plugins/install', upload.single('file'), async (req, res) => {
+  const m = await import('../plugins/index.js');
+  if (!req.file?.buffer) return res.status(400).json({ error: 'file mancante' });
+  try { res.json(await m.installFromZip(req.file.buffer)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/plugins/:slug', async (req, res) => {
+  const m = await import('../plugins/index.js');
+  try { await m.setEnabled(req.params.slug, !!req.body?.enabled); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/plugins/:slug', async (req, res) => {
+  const m = await import('../plugins/index.js');
+  try { await m.uninstall(req.params.slug); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/plugins/:slug/export', async (req, res) => {
+  const m = await import('../plugins/index.js');
+  try {
+    const buf = await m.exportToZip(req.params.slug);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.slug}.skill"`);
+    res.send(buf);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 router.get('/mcp/external', async (req, res) => {
   const { listExternalMcps, refreshExternalMcps } = await import('../claude/external_mcps.js');
   if (req.query.refresh === '1') await refreshExternalMcps();
@@ -696,84 +861,132 @@ router.get('/mcp/external', async (req, res) => {
 let usageCache: { ts: number; data: any } | null = null;
 router.get('/usage', async (req, res) => {
   const userId = req.user!.id;
-  const plan = (await getSetting<any>(userId, 'claude_plan')) ?? { name: 'Max (5x)', sessionLimitTokens: 750_000 };
-  // Cache 25s per evitare scan continui
-  if (usageCache && Date.now() - usageCache.ts < 25_000) {
+  // Default sessionLimitTokens matches ccusage `totalTokens` scale (cache_read dominates,
+  // ~hundreds of millions per 5h block on Max 5x). Empirical median Max 5x ≈ 500M tokens.
+  // Plan budget is COST-based (USD), not token-based. Tokens mix input/output/cache_read with
+  // very different weights — only the cost number matches /cost's % display 1:1.
+  // Default cost budget for Max 5x derived empirically: ccusage costUSD ≈ $87 at 37% → ~$235.
+  // Round to $250 as starting default; user fine-tunes with one calibrate click.
+  const DEFAULT_BUDGET_USD = 250;
+  let plan: any = (await getSetting<any>(userId, 'claude_plan')) ?? { name: 'Max (5x)', costBudgetUsd: DEFAULT_BUDGET_USD, sessionLimitTokens: 500_000_000 };
+  // Auto-migrate: add costBudgetUsd if missing on legacy plans.
+  if (plan.costBudgetUsd == null || Number(plan.costBudgetUsd) <= 0) {
+    plan = { ...plan, costBudgetUsd: DEFAULT_BUDGET_USD };
+    await setSetting(userId, 'claude_plan', plan);
+  }
+  // Auto-migrate old token-scale plans.
+  if (Number(plan.sessionLimitTokens ?? 0) < 10_000_000) {
+    plan = { ...plan, sessionLimitTokens: 500_000_000 };
+    await setSetting(userId, 'claude_plan', plan);
+  }
+  // Cache 60s (frontend polls every minute, see UsageGauge)
+  if (usageCache && Date.now() - usageCache.ts < 60_000) {
     return res.json({ plan, ...usageCache.data });
   }
-  const fs = await import('node:fs/promises');
-  const path = await import('node:path');
-  const os = await import('node:os');
-  const root = path.join(os.homedir(), '.claude', 'projects');
-  const windowMs = 5 * 3600_000;
-  // Scan messages from last 10h (cover both current + previous Anthropic window)
-  const scanCutoff = Date.now() - 2 * windowMs;
-  type Msg = { ts: number; in: number; out: number; cacheR: number; cacheC: number };
-  const msgs: Msg[] = [];
+  // Use ccusage CLI (https://github.com/ryoppippi/ccusage) as canonical data source.
+  // Matches Claude Code's /cost / /usage output 1:1 (parses same ~/.claude/projects/**/*.jsonl
+  // with proper dedup, billing-block windows, cache token weighting).
+  const { spawn } = await import('node:child_process');
+  function runCcusage(): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const p = spawn('npx', ['-y', 'ccusage@latest', 'blocks', '--active', '--json'], {
+        env: { ...process.env, NO_COLOR: '1' },
+      });
+      let out = '', err = '';
+      p.stdout.on('data', (b) => { out += b.toString(); });
+      p.stderr.on('data', (b) => { err += b.toString(); });
+      p.on('close', (code) => {
+        if (code !== 0) return reject(new Error(`ccusage exit ${code}: ${err.slice(0, 200)}`));
+        try { resolve(JSON.parse(out)); }
+        catch (e: any) { reject(new Error(`ccusage parse: ${e.message}`)); }
+      });
+      p.on('error', reject);
+      setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('ccusage timeout')); }, 20_000);
+    });
+  }
+  let usedTokens = 0;
+  let resetAt: string | null = null;
+  let costUsd = 0;
+  let breakdown: any = { in: 0, out: 0, cache_read: 0, cache_create: 0 };
+  let burnRate: any = null;
   try {
-    const projects = await fs.readdir(root).catch(() => [] as string[]);
-    for (const proj of projects) {
-      const dir = path.join(root, proj);
-      let files: string[] = [];
-      try { files = await fs.readdir(dir); } catch { continue; }
-      for (const f of files) {
-        if (!f.endsWith('.jsonl')) continue;
-        const fp = path.join(dir, f);
-        let stat: any;
-        try { stat = await fs.stat(fp); } catch { continue; }
-        if (stat.mtimeMs < scanCutoff) continue;
-        let raw: string;
-        try { raw = await fs.readFile(fp, 'utf8'); } catch { continue; }
-        for (const line of raw.split('\n')) {
-          if (!line) continue;
-          let j: any;
-          try { j = JSON.parse(line); } catch { continue; }
-          const ts = j.timestamp ? new Date(j.timestamp).getTime() : null;
-          if (ts == null || ts < scanCutoff) continue;
-          const u = j?.message?.usage ?? j?.usage;
-          if (!u) continue;
-          msgs.push({
-            ts,
-            in: Number(u.input_tokens ?? 0),
-            out: Number(u.output_tokens ?? 0),
-            cacheR: Number(u.cache_read_input_tokens ?? 0),
-            cacheC: Number(u.cache_creation_input_tokens ?? 0),
-          });
+    const j = await runCcusage();
+    const active = (j.blocks ?? []).find((b: any) => b.isActive) ?? null;
+    if (active) {
+      const tc = active.tokenCounts ?? {};
+      breakdown = {
+        in: Number(tc.inputTokens ?? 0),
+        out: Number(tc.outputTokens ?? 0),
+        cache_read: Number(tc.cacheReadInputTokens ?? 0),
+        cache_create: Number(tc.cacheCreationInputTokens ?? 0),
+      };
+      usedTokens = Number(active.totalTokens ?? 0);
+      // ccusage `endTime` is hour-rounded (block boundary). Real Anthropic 5h window =
+      // first-message-of-block + 5h. Scan jsonl for earliest msg with usage inside
+      // this block window to align reset clock with /cost output.
+      const blockStartMs = active.startTime ? new Date(active.startTime).getTime() : (Date.now() - 5 * 3600_000);
+      try {
+        const fs = await import('node:fs/promises');
+        const pathMod = await import('node:path');
+        const os = await import('node:os');
+        const root = pathMod.join(os.homedir(), '.claude', 'projects');
+        let earliest: number | null = null;
+        const projects = await fs.readdir(root).catch(() => [] as string[]);
+        for (const proj of projects) {
+          const dir = pathMod.join(root, proj);
+          let files: string[] = [];
+          try { files = await fs.readdir(dir); } catch { continue; }
+          for (const f of files) {
+            if (!f.endsWith('.jsonl')) continue;
+            const fp = pathMod.join(dir, f);
+            let stat: any;
+            try { stat = await fs.stat(fp); } catch { continue; }
+            if (stat.mtimeMs < blockStartMs) continue;
+            let raw: string;
+            try { raw = await fs.readFile(fp, 'utf8'); } catch { continue; }
+            for (const line of raw.split('\n')) {
+              if (!line) continue;
+              let j: any;
+              try { j = JSON.parse(line); } catch { continue; }
+              const ts = j.timestamp ? new Date(j.timestamp).getTime() : null;
+              if (ts == null || ts < blockStartMs) continue;
+              const u = j?.message?.usage ?? j?.usage;
+              if (!u) continue;
+              if (earliest == null || ts < earliest) earliest = ts;
+            }
+          }
         }
+        if (earliest != null) {
+          resetAt = new Date(earliest + 5 * 3600_000).toISOString();
+        } else {
+          resetAt = active.endTime ?? null;
+        }
+      } catch (e: any) {
+        console.error('[usage] reset scan failed', e?.message ?? e);
+        resetAt = active.endTime ?? null;
       }
+      costUsd = Number(active.costUSD ?? 0);
+      burnRate = active.burnRate ?? null;
     }
-  } catch (e) { console.error('[usage] scan failed', e); }
-  msgs.sort((a, b) => a.ts - b.ts);
-  // Anthropic window logic: find the earliest msg M such that M + 5h > now → window starts at M.
-  // Any msg older than that is from previous (expired) window.
-  const now = Date.now();
-  let windowStart: number | null = null;
-  for (const m of msgs) {
-    if (m.ts + windowMs > now) { windowStart = m.ts; break; }
+  } catch (e: any) {
+    console.error('[usage] ccusage failed', e?.message ?? e);
   }
-  let inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
-  if (windowStart != null) {
-    for (const m of msgs) {
-      if (m.ts < windowStart) continue;
-      inTok += m.in; outTok += m.out; cacheRead += m.cacheR; cacheCreate += m.cacheC;
-    }
-  }
-  const usedTokens = inTok + outTok;
-  const resetAt = windowStart != null ? new Date(windowStart + windowMs).toISOString() : null;
-  const data = { usedTokens, resetAt, breakdown: { in: inTok, out: outTok, cache_read: cacheRead, cache_create: cacheCreate } };
+  const data = { usedTokens, resetAt, costUsd, burnRate, breakdown };
   usageCache = { ts: Date.now(), data };
   res.json({ plan, ...data });
   void userId;
 });
 router.put('/usage/plan', async (req, res) => {
   const userId = req.user!.id;
-  const { name, sessionLimitTokens } = req.body ?? {};
-  if (!name || typeof sessionLimitTokens !== 'number' || sessionLimitTokens <= 0) {
-    return res.status(400).json({ error: 'name + sessionLimitTokens (>0) required' });
-  }
-  await setSetting(userId, 'claude_plan', { name, sessionLimitTokens });
+  const { name, sessionLimitTokens, costBudgetUsd } = req.body ?? {};
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const existing = (await getSetting<any>(userId, 'claude_plan')) ?? {};
+  const next: any = { ...existing, name };
+  if (typeof sessionLimitTokens === 'number' && sessionLimitTokens > 0) next.sessionLimitTokens = sessionLimitTokens;
+  if (typeof costBudgetUsd === 'number' && costBudgetUsd > 0) next.costBudgetUsd = costBudgetUsd;
+  await setSetting(userId, 'claude_plan', next);
   usageCache = null; // bust cache
-  res.json({ ok: true });
+  res.json({ ok: true, plan: next });
 });
 
 router.get('/settings', async (req, res) => {
@@ -786,6 +999,52 @@ router.get('/settings', async (req, res) => {
   const sound_on_message = (await getSetting<boolean>(userId, 'sound_on_message')) ?? true;
   res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message });
 });
+// Branding (per-user customizable title + logo)
+router.get('/branding', async (req, res) => {
+  const b = (await getSetting<any>(req.user!.id, 'branding')) ?? null;
+  res.json(b ?? { title: 'super-agent', subtitle: 'personal · brain', logoDataUrl: null });
+});
+// Brain colors per category
+const DEFAULT_BRAIN_COLORS = {
+  visibility: { protected: '#d946ef', public: '#67e8f9' },
+  kind: { person: '#22d3ee', email: '#c084fc', project: '#34d399', note: '#fbbf24', daily: '#f0abfc', roadmap: '#f97316', task: '#a78bfa', attachment: '#94a3b8', whatsapp: '#25d366' },
+  default: '#c084fc',
+};
+router.get('/brain/colors', async (req, res) => {
+  const c = (await getSetting<any>(req.user!.id, 'brain_colors')) ?? null;
+  res.json(c ?? DEFAULT_BRAIN_COLORS);
+});
+router.put('/brain/colors', async (req, res) => {
+  const body = req.body ?? {};
+  const isHex = (v: any) => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
+  const safe: any = { visibility: {}, kind: {}, default: DEFAULT_BRAIN_COLORS.default };
+  for (const k of Object.keys(DEFAULT_BRAIN_COLORS.visibility)) {
+    safe.visibility[k] = isHex(body.visibility?.[k]) ? body.visibility[k] : (DEFAULT_BRAIN_COLORS.visibility as any)[k];
+  }
+  for (const k of Object.keys(DEFAULT_BRAIN_COLORS.kind)) {
+    safe.kind[k] = isHex(body.kind?.[k]) ? body.kind[k] : (DEFAULT_BRAIN_COLORS.kind as any)[k];
+  }
+  if (isHex(body.default)) safe.default = body.default;
+  await setSetting(req.user!.id, 'brain_colors', safe);
+  res.json({ ok: true, colors: safe });
+});
+router.put('/branding', async (req, res) => {
+  const { title, subtitle, logoDataUrl, syncTelegram } = req.body ?? {};
+  if (typeof title !== 'string' || !title.trim()) return res.status(400).json({ error: 'title required' });
+  if (logoDataUrl && typeof logoDataUrl === 'string' && logoDataUrl.length > 600_000) {
+    return res.status(400).json({ error: 'logo troppo grande (max ~400KB base64)' });
+  }
+  await setSetting(req.user!.id, 'branding', { title: title.trim(), subtitle: (subtitle ?? '').trim() || null, logoDataUrl: logoDataUrl || null });
+  let telegram: any = null;
+  if (syncTelegram) {
+    try {
+      const { updateBotProfile } = await import('../telegram/bot.js');
+      telegram = await updateBotProfile(req.user!.id, { name: title.trim(), shortDescription: (subtitle ?? '').trim() });
+    } catch (e: any) { telegram = { ok: false, error: String(e?.message ?? e) }; }
+  }
+  res.json({ ok: true, telegram });
+});
+
 router.put('/settings/language', async (req, res) => {
   const { language } = req.body ?? {};
   if (!['it', 'en'].includes(language)) return res.status(400).json({ error: 'language must be it|en' });

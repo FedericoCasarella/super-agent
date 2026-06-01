@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { CheckCircle2, XCircle, AlertCircle, Ban, Bot, Clock as ClockIcon } from 'lucide-react';
 import { api } from '../api';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -27,6 +28,17 @@ const STATUS_TONE: Record<string, 'on' | 'warn' | 'err' | 'default' | 'accent'> 
   approved: 'on',
   denied: 'err',
 };
+
+function StatusIcon({ status, size = 14 }: { status: string; size?: number }) {
+  const common = { size } as any;
+  if (status === 'done' || status === 'approved') return <CheckCircle2 {...common} className="text-ok" />;
+  if (status === 'error') return <AlertCircle {...common} className="text-err" />;
+  if (status === 'cancelled') return <Ban {...common} className="text-warn" />;
+  if (status === 'denied') return <XCircle {...common} className="text-err" />;
+  if (status === 'running') return <Bot {...common} className="text-ok animate-pulse" />;
+  if (status === 'pending') return <ClockIcon {...common} className="text-muted" />;
+  return <ClockIcon {...common} className="text-muted" />;
+}
 
 function fmtAgo(ts: string | null): string {
   if (!ts) return '—';
@@ -195,15 +207,20 @@ export default function LiveAgents() {
           <ul className="space-y-2">
             {recent.map((a) => (
               <li key={a.id}>
-                <button onClick={() => setOpen(a)} className="w-full text-left border border-border rounded-2xl p-3 hover:border-accent/40 bg-surface2/30 transition">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-medium truncate">{a.title}</div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Chip tone={STATUS_TONE[a.status] ?? 'default'}>{a.status}</Chip>
-                      <span className="text-xs text-muted">{fmtAgo(a.ended_at ?? a.created_at)}</span>
-                    </div>
+                <button onClick={() => setOpen(a)} className="w-full text-left border border-border rounded-2xl p-3 hover:border-accent/40 bg-surface2/30 transition flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-surface2 border border-border flex items-center justify-center shrink-0">
+                    <StatusIcon status={a.status} size={16} />
                   </div>
-                  {a.brief && <div className="text-xs text-muted mt-1 truncate">{a.brief}</div>}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-medium truncate">{a.title}</div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Chip tone={STATUS_TONE[a.status] ?? 'default'}>{a.status}</Chip>
+                        <span className="text-xs text-muted">{fmtAgo(a.ended_at ?? a.created_at)}</span>
+                      </div>
+                    </div>
+                    {a.brief && <div className="text-xs text-muted mt-1 truncate">{a.brief}</div>}
+                  </div>
                 </button>
               </li>
             ))}

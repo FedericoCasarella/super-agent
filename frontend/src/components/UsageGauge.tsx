@@ -4,8 +4,9 @@ import { api } from '../api';
 import { useToast } from './ui';
 
 type Usage = {
-  plan: { name: string; sessionLimitTokens: number };
+  plan: { name: string; sessionLimitTokens: number; costBudgetUsd: number };
   usedTokens: number;
+  costUsd: number;
   resetAt: string | null;
 };
 
@@ -61,23 +62,25 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
     try {
       const next = await api.usage();
       const prev = prevTokensRef.current;
-      // Reset detection: previously had usage, now near zero (window expired)
-      if (prev != null && prev >= 1000 && (next.usedTokens ?? 0) < 500) {
+      // Reset detection: previously had cost burn, now ~0 (window expired)
+      if (prev != null && prev >= 1 && (next.costUsd ?? 0) < 0.1) {
         toast.push('🎉 Piano resettato! Nuova sessione disponibile', 'on');
         setPartyOn(true);
         setTimeout(() => setPartyOn(false), 3500);
       }
-      prevTokensRef.current = next.usedTokens ?? 0;
+      prevTokensRef.current = next.costUsd ?? 0;
       setU(next);
     } catch {}
   }
-  useEffect(() => { load(); const id = setInterval(load, 30_000); return () => clearInterval(id); }, []);
+  useEffect(() => { load(); const id = setInterval(load, 60_000); return () => clearInterval(id); }, []);
   // Re-render every minute to keep reset timer fresh
   const [, setTick] = useState(0);
   useEffect(() => { const id = setInterval(() => setTick((n) => n + 1), 60_000); return () => clearInterval(id); }, []);
   if (!u) return null;
-  const limit = u.plan.sessionLimitTokens || 1;
-  const pct = Math.min(1, u.usedTokens / limit);
+  // Cost-based gauge: matches Claude Code /cost % output (token mix has too many weighted
+  // components — input/output/cache_read/cache_create — to track with a single token limit).
+  const budget = u.plan.costBudgetUsd || 1;
+  const pct = Math.min(1, (u.costUsd ?? 0) / budget);
 
   if (collapsed) {
     return (
@@ -93,13 +96,14 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
   }
 
   async function calibrate() {
-    const realPctStr = prompt(`Calibra limite. Guarda nel TUI Claude (/cost) il % attuale e inseriscilo qui.\n\nTokens letti: ${u!.usedTokens.toLocaleString()}\nLimite attuale stimato: ${u!.plan.sessionLimitTokens.toLocaleString()}\n\nInserisci % reale (es. 28):`);
+    const realPctStr = prompt(`Calibra budget. Apri il TUI Claude → /cost → leggi il % attuale.\n\nCost speso (ccusage): $${(u!.costUsd ?? 0).toFixed(2)}\nBudget attuale stimato: $${(u!.plan.costBudgetUsd ?? 0).toFixed(2)}\n\nInserisci % reale mostrato in /cost (es. 37):`);
     if (!realPctStr) return;
     const realPct = parseFloat(realPctStr) / 100;
     if (!realPct || realPct <= 0 || realPct > 1) return;
-    const newLimit = Math.round(u!.usedTokens / realPct);
+    const newBudget = (u!.costUsd ?? 0) / realPct;
+    if (!isFinite(newBudget) || newBudget <= 0) return alert('Cost attuale è 0 — impossibile calibrare.');
     try {
-      await api.updatePlan(u!.plan.name, newLimit);
+      await api.updatePlan({ name: u!.plan.name, costBudgetUsd: Math.round(newBudget * 100) / 100 });
       load();
     } catch (e: any) { alert(`Errore: ${e.message}`); }
   }

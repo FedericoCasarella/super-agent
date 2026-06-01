@@ -395,3 +395,17 @@ CREATE TABLE IF NOT EXISTS tool_events (
 );
 CREATE INDEX IF NOT EXISTS tool_events_user_ts_idx ON tool_events(user_id, ts DESC);
 CREATE INDEX IF NOT EXISTS tool_events_user_mcp_idx ON tool_events(user_id, is_mcp, ts DESC);
+
+CREATE TABLE IF NOT EXISTS plugins (
+  id BIGSERIAL PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  version TEXT,
+  name TEXT NOT NULL,
+  description TEXT,
+  author TEXT,
+  install_path TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

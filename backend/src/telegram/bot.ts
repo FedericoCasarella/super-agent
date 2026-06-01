@@ -277,6 +277,26 @@ export async function sendTelegram(userId: number, text: string) {
 // Allowed Telegram reaction emojis (free for bots, no premium)
 const TG_REACTIONS = new Set(['👍','👎','❤','🔥','🥰','👏','😁','🤔','🤯','😱','🤬','😢','🎉','🤩','🤮','💩','🙏','👌','🕊','🤡','🥱','🥴','😍','🐳','❤‍🔥','🌚','🌭','💯','🤣','⚡','🍌','🏆','💔','🤨','😐','🍓','🍾','💋','🖕','😈','😴','😭','🤓','👻','👨‍💻','👀','🎃','🙈','😇','😨','🤝','✍','🤗','🫡','🎅','🎄','☃','💅','🤪','🗿','🆒','💘','🙉','🦄','😘','💊','🙊','😎','👾','🤷‍♂','🤷','🤷‍♀','😡']);
 
+export async function updateBotProfile(userId: number, opts: { name?: string; shortDescription?: string }): Promise<{ ok: boolean; updated: string[]; error?: string }> {
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, updated: [], error: 'telegram bot not initialized' };
+  const updated: string[] = [];
+  try {
+    if (opts.name && opts.name.trim()) {
+      await entry.bot.telegram.callApi('setMyName' as any, { name: opts.name.slice(0, 64) });
+      updated.push('name');
+    }
+    if (opts.shortDescription !== undefined) {
+      await entry.bot.telegram.callApi('setMyShortDescription' as any, { short_description: (opts.shortDescription ?? '').slice(0, 120) });
+      updated.push('short_description');
+    }
+    return { ok: true, updated };
+  } catch (e: any) {
+    return { ok: false, updated, error: String(e?.message ?? e).slice(0, 300) };
+  }
+}
+
 export async function sendReaction(userId: number, chatId: number, messageId: number, emoji: string): Promise<boolean> {
   if (!TG_REACTIONS.has(emoji)) throw new Error(`emoji not allowed: ${emoji}`);
   if (!bots.get(userId)) await startBotForUser(userId);

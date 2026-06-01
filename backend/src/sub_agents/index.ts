@@ -120,6 +120,27 @@ export async function denyProposal(userId: number, id: number): Promise<void> {
   emit(userId, 'proposal:denied', { id });
 }
 
+export async function spawnSubAgent(userId: number, opts: { title: string; brief?: string; prompt: string; dedupe?: boolean }): Promise<SubAgent> {
+  // Idempotency: if a sub-agent with same title is already pending/running for this user, return it.
+  // Prevents recursive self-spawning when sub-agent calls an MCP tool that itself spawns a sub-agent.
+  if (opts.dedupe !== false) {
+    const existing = await query<SubAgent>(
+      `SELECT * FROM sub_agents WHERE user_id=$1 AND title=$2 AND status IN ('pending','running') ORDER BY id DESC LIMIT 1`,
+      [userId, opts.title],
+    );
+    if (existing[0]) return existing[0];
+  }
+  const rows = await query<SubAgent>(
+    `INSERT INTO sub_agents(user_id, proposal_id, title, brief, prompt, status)
+     VALUES($1, NULL, $2, $3, $4, 'pending') RETURNING *`,
+    [userId, opts.title, opts.brief ?? null, opts.prompt],
+  );
+  const sa = rows[0];
+  emit(userId, 'subagent:created', sa);
+  void runSubAgent(sa.id).catch((e) => console.error('[sub_agents] run error', e));
+  return sa;
+}
+
 async function runSubAgent(id: number): Promise<void> {
   const rows = await query<SubAgent>(`SELECT * FROM sub_agents WHERE id=$1`, [id]);
   const sa = rows[0];

@@ -3,7 +3,9 @@ import { api } from '../api';
 import { useWS } from '../ws';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
-import { AlarmClock, Moon, BellOff, Clock, MessageSquare, Hash, Zap, Activity, Coffee } from 'lucide-react';
+import { AlarmClock, Moon, BellOff, Clock, MessageSquare, Hash, Zap, Activity, Coffee, Bot, Wrench, Plug } from 'lucide-react';
+import Tooltip from '../components/Tooltip';
+import { describeTool } from '../toolLabels';
 
 function fmtRelative(date: Date): string {
   const diffMs = date.getTime() - Date.now();
@@ -56,7 +58,7 @@ export default function Dashboard() {
   const [activeAgents, setActiveAgents] = useState<any[]>([]);
   const sessionStartRef = useRef<number>(Date.now());
   const [nowTick, setNowTick] = useState(0);
-  useEffect(() => { const id = setInterval(() => setNowTick((t) => t + 1), 30_000); return () => clearInterval(id); }, []);
+  useEffect(() => { const id = setInterval(() => setNowTick((t) => t + 1), 5_000); return () => clearInterval(id); }, []);
   const toast = useToast();
   const { t } = useI18n();
 
@@ -66,11 +68,13 @@ export default function Dashboard() {
     try { setActiveAgents(await api.subAgentsActive()); } catch {}
   }
 
+  async function loadMsgs() { try { setMsgs(await api.messages(100)); } catch {} }
   useEffect(() => {
-    api.messages(100).then(setMsgs).catch(() => {});
+    loadMsgs();
     loadState();
-    const id = setInterval(loadState, 15000);
-    return () => clearInterval(id);
+    const idState = setInterval(loadState, 10_000);
+    const idMsgs = setInterval(loadMsgs, 30_000); // refresh from server too
+    return () => { clearInterval(idState); clearInterval(idMsgs); };
   }, []);
 
   async function wake() { await api.agentWake(); toast.push(t('dash.woken'), 'on'); loadState(); }
@@ -125,18 +129,17 @@ export default function Dashboard() {
   return (
     <div className="space-y-4">
       {(() => {
-        // Compute always-visible agent status
         const isSleeping = !!sleepUntil;
         const isQuiet = !isSleeping && !!quietUntil;
         const isWorking = !isSleeping && !isQuiet && running > 0;
         const isIdle = !isSleeping && !isQuiet && !isWorking;
         const cfg = isSleeping
-          ? { Icon: Moon, label: 'In pausa', tone: 'accent', desc: <>Si risveglierà <span className="text-accent">{fmtRelative(sleepUntil!)}</span></>, sub: `Prossimo wake: ${sleepUntil!.toLocaleString()}` }
+          ? { Icon: Moon, label: 'Agente in pausa', desc: <>Si risveglierà <span className="text-accent">{fmtRelative(sleepUntil!)}</span></>, sub: `Prossimo wake: ${sleepUntil!.toLocaleString()}` }
           : isQuiet
-          ? { Icon: BellOff, label: 'Modalità silenziosa', tone: 'warn', desc: <>Silenzio fino a <span className="text-accent">{fmtRelative(quietUntil!)}</span></>, sub: `Fine: ${quietUntil!.toLocaleString()}` }
+          ? { Icon: BellOff, label: 'Modalità silenziosa', desc: <>Silenzio fino a <span className="text-accent">{fmtRelative(quietUntil!)}</span></>, sub: `Fine: ${quietUntil!.toLocaleString()}` }
           : isWorking
-          ? { Icon: Activity, label: 'In lavoro', tone: 'ok', desc: <>{running} agent{running > 1 ? 'i' : 'e'} in esecuzione</>, sub: pending ? `${pending} in coda` : 'Conductor attivo · MCP in volo' }
-          : { Icon: Coffee, label: 'Idle · pronto', tone: 'default', desc: <>Tutto tranquillo. Aspetto messaggi.</>, sub: 'Scrivimi su Telegram o lancia un task' };
+          ? { Icon: Activity, label: `${running} agent${running > 1 ? 'i' : 'e'} in esecuzione`, desc: <>L'agente sta lavorando su {running} attività in parallelo</>, sub: pending ? `+ ${pending} in coda di partenza` : 'Conductor attivo · puoi vedere i dettagli sotto' }
+          : { Icon: Coffee, label: 'Pronto', desc: <>Nessuna attività in corso</>, sub: 'Scrivimi su Telegram o lancia un task' };
         return (
           <Card className="relative overflow-hidden border-accent/30 bg-gradient-to-br from-accent/10 via-surface to-surface">
             <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-accent/20 blur-3xl pointer-events-none" />
@@ -150,7 +153,7 @@ export default function Dashboard() {
                   {isWorking && <span className="inline-block w-1.5 h-1.5 rounded-full bg-ok animate-pulse" />}
                 </div>
                 <div className="text-lg font-semibold text-text">{cfg.desc}</div>
-                <div className="text-sm text-muted mt-1 font-mono truncate">{cfg.sub}</div>
+                <div className="text-sm text-muted mt-1">{cfg.sub}</div>
                 {agentState?.sleep?.reason && isSleeping && (
                   <div className="text-xs text-muted mt-2 italic">Motivo: {agentState.sleep.reason}</div>
                 )}
@@ -161,6 +164,42 @@ export default function Dashboard() {
                 </Button>
               )}
             </div>
+
+            {isWorking && activeAgents.length > 0 && (
+              <div className="relative mt-4 pt-4 border-t border-accent/20 space-y-2">
+                <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1">Cosa sta facendo ora</div>
+                {activeAgents.map((a: any) => {
+                  const isRunning = a.status === 'running';
+                  const startTs = a.started_at ?? a.created_at;
+                  const elapsedSec = startTs ? Math.floor((Date.now() - new Date(startTs).getTime()) / 1000) : 0;
+                  const elapsed = elapsedSec < 60 ? `${elapsedSec}s` : `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`;
+                  return (
+                    <div key={a.id} className={`flex items-start gap-3 p-3 rounded-2xl border ${isRunning ? 'border-accent/40 bg-accent/5' : 'border-border bg-surface2/30'}`}>
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${isRunning ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'}`}>
+                        <Bot size={18} className={isRunning ? 'animate-pulse' : ''} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="font-semibold text-sm">{a.title || 'Sub-agent'}</span>
+                          <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: isRunning ? 'var(--ok,#34d399)' : 'var(--warn,#fbbf24)' }}>
+                            {isRunning ? `⚡ in corso · ${elapsed}` : '⏳ in coda'}
+                          </span>
+                        </div>
+                        {a.brief && <div className="text-xs text-muted mt-0.5 line-clamp-2">{a.brief}</div>}
+                        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted font-mono">
+                          {a.input_tokens != null && <span>↓ {a.input_tokens.toLocaleString()} tok</span>}
+                          {a.output_tokens != null && <span>↑ {a.output_tokens.toLocaleString()} tok</span>}
+                          {a.cost_usd != null && <span>${Number(a.cost_usd).toFixed(4)}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="text-[10px] text-muted text-center pt-1">
+                  Dettagli completi nella pagina <a href="/agents" className="text-accent hover:underline">Agents</a>
+                </div>
+              </div>
+            )}
           </Card>
         );
       })()}
@@ -237,18 +276,33 @@ export default function Dashboard() {
                 {toolUses.map((u, i) => {
                   const isMcp = u.isMcp ?? u.is_mcp ?? false;
                   const tsMs = typeof u.ts === 'string' ? new Date(u.ts).getTime() : u.ts;
+                  const meta = describeTool(u.name, u.server ?? null, isMcp);
                   return (
                     <li key={u.id ?? i} className={`border rounded-xl p-2.5 text-xs ${isMcp ? 'border-accent2/30 bg-accent2/5' : 'border-border bg-surface2/40'}`}>
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className={isMcp ? 'text-accent2' : 'text-accent'}>{isMcp ? '⌬' : '▸'}</span>
-                          <span className="font-mono font-semibold truncate">{isMcp && u.server ? `${u.server}` : u.name.replace(/^mcp__/, '')}</span>
-                          {isMcp && <span className="font-mono text-muted truncate">{u.name.split('__').slice(2).join('_') || ''}</span>}
-                          {!isMcp && u.name && <span className="font-mono text-muted">{u.name}</span>}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Tooltip content={
+                            <div>
+                              <div className="font-semibold mb-1">{meta.label}</div>
+                              <div className="text-muted text-[11px]">{meta.desc}</div>
+                              <div className="text-[10px] text-muted/70 mt-1 font-mono">{u.name}</div>
+                            </div>
+                          }>
+                            <span className={`shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-md ${isMcp ? 'bg-accent2/15 text-accent2' : 'bg-accent/15 text-accent'}`}>
+                              {isMcp ? <Plug size={11} /> : <Wrench size={11} />}
+                            </span>
+                          </Tooltip>
+                          <Tooltip content={meta.desc}>
+                            <span className="font-semibold truncate">{meta.label}</span>
+                          </Tooltip>
                         </div>
                         <span className="text-[9px] text-muted font-mono shrink-0">{new Date(tsMs).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
-                      {u.brief && <div className="text-muted mt-1 truncate font-mono text-[10px]">{u.brief}</div>}
+                      {u.brief && (
+                        <Tooltip content={u.brief}>
+                          <span className="block text-muted mt-1 truncate font-mono text-[10px]">{u.brief}</span>
+                        </Tooltip>
+                      )}
                     </li>
                   );
                 })}
