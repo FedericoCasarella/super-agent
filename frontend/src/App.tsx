@@ -16,6 +16,8 @@ import AgentDetail from './pages/AgentDetail';
 import PeoplePage from './pages/People';
 import WhatsApp from './pages/WhatsApp';
 import Outbound from './pages/Outbound';
+import FlowsPage from './pages/Flows';
+import FlowDetail from './pages/FlowDetail';
 import AgentsHub from './pages/AgentsHub';
 import Teams from './pages/Teams';
 import TeamTasks from './pages/TeamTasks';
@@ -96,6 +98,8 @@ export default function App() {
             <Route path="/network" element={<Network />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/outbound" element={<Outbound />} />
+            <Route path="/flows" element={<FlowsPage />} />
+            <Route path="/flows/:id" element={<FlowDetail />} />
             <Route path="/custom-agents" element={<Navigate to="/agents?tab=custom" replace />} />
             <Route path="/teams" element={<Teams />} />
             <Route path="/team-tasks" element={<Navigate to="/tasks?tab=team" replace />} />

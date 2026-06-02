@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 import { useWS } from '../ws';
 import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X } from 'lucide-react';
 import BrainLoading from '../components/BrainLoading';
@@ -24,6 +25,7 @@ type Msg = {
   sender_phone: string | null; sender_name: string | null; person_slug: string | null;
   is_group: boolean; group_jid: string | null;
   from_me: boolean; text: string; ts: string;
+  source?: 'user' | 'ai' | null;
 };
 
 function fmtTime(ts: string): string {
@@ -106,6 +108,8 @@ export default function WhatsApp() {
   const [elapsed, setElapsed] = useState(0);
   const [suggesting, setSuggesting] = useState(false);
   const [draftReply, setDraftReply] = useState<string>('');
+  const [composeText, setComposeText] = useState<string>('');
+  const [composeFromAi, setComposeFromAi] = useState(false);
   const [sending, setSending] = useState(false);
   const [syncingChat, setSyncingChat] = useState(false);
   async function syncChat() {
@@ -135,22 +139,42 @@ export default function WhatsApp() {
     if (!selected || !draftReply.trim()) return;
     setSending(true);
     try {
-      const r = await api.waSendMessage(selected, draftReply.trim());
-      if (r.ok) { toast.push('Inviato', 'on'); setDraftReply(''); }
+      const r = await api.waSendMessage(selected, draftReply.trim(), 'ai');
+      if (r.ok) { toast.push('Inviato (AI)', 'on'); setDraftReply(''); }
       else toast.push(`Errore: ${String(r.error ?? '').slice(0, 200)}`, 'err');
     } catch (e: any) { toast.push(e.message, 'err'); }
     finally { setSending(false); }
   }
+  // Send from the always-visible compose box. Tracks whether the text was originally
+  // populated by the AI suggestion so we can mark `source='ai'` even if user edited it.
+  async function sendCompose() {
+    if (!selected || !composeText.trim()) return;
+    setSending(true);
+    const source: 'user' | 'ai' = composeFromAi ? 'ai' : 'user';
+    try {
+      const r = await api.waSendMessage(selected, composeText.trim(), source);
+      if (r.ok) { setComposeText(''); setComposeFromAi(false); }
+      else toast.push(`Errore: ${String(r.error ?? '').slice(0, 200)}`, 'err');
+    } catch (e: any) { toast.push(e.message, 'err'); }
+    finally { setSending(false); }
+  }
+  function acceptSuggestion() {
+    if (!draftReply) return;
+    setComposeText(draftReply);
+    setComposeFromAi(true);
+    setDraftReply('');
+  }
 
-  // Reset draft when chat changes
-  useEffect(() => { setDraftReply(''); setSuggesting(false); setSending(false); }, [selected]);
+  // Reset state when chat changes
+  useEffect(() => { setDraftReply(''); setSuggesting(false); setSending(false); setComposeText(''); setComposeFromAi(false); }, [selected]);
   const streamRef = useRef<HTMLDivElement>(null);
   const toast = useToast();
+  const dlg = useDialog();
 
   async function loadPending() { try { const r = await api.waPending(); setPending(r.count ?? 0); } catch {} }
   async function bonify(onlyChat?: string) {
     const label = onlyChat ? `questa chat` : `${Math.min(pending, 100)} messaggi`;
-    if (!confirm(`Lanciare bonifica su ${label}? L'agente classificherà + aggiornerà People + Brain.`)) return;
+    if (!await dlg.confirm(`Lanciare bonifica su ${label}? L'agente classificherà + aggiornerà People + Brain.`, { title: 'Bonifica', tone: 'danger', confirmLabel: 'Lancia' })) return;
     setBonifying(true);
     try {
       await api.waBonify(onlyChat ? 5000 : 100, onlyChat);
@@ -443,11 +467,24 @@ export default function WhatsApp() {
               })()}
               <div ref={streamRef} className="flex-1 overflow-y-auto p-4 space-y-2">
                 {loading && <BrainLoading size={80} label="Caricamento messaggi…" className="my-4" />}
-                {messages.map((m) => (
+                {messages.map((m) => {
+                  const isAi = m.from_me && m.source === 'ai';
+                  return (
                   <div key={m.id} className={`flex ${m.from_me ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm ${m.from_me ? 'bg-accent/20 border border-accent/30 rounded-br-md' : 'bg-surface2 border border-border rounded-bl-md'}`}>
+                    <div className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm ${
+                      isAi
+                        ? 'bg-gradient-to-br from-accent2/35 to-accent/25 border border-accent2/50 rounded-br-md'
+                        : m.from_me
+                        ? 'bg-accent/45 border border-accent/55 rounded-br-md text-white'
+                        : 'bg-surface2 border border-border rounded-bl-md'
+                    }`}>
                       {m.is_group && !m.from_me && m.sender_name && (
                         <div className="text-[10px] font-semibold text-accent2 mb-0.5">{m.sender_name}</div>
+                      )}
+                      {isAi && (
+                        <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-accent2 font-semibold mb-1">
+                          <Wand2 size={9} /> AI suggested
+                        </div>
                       )}
                       {isAudio(m.text) ? (
                         <div>
@@ -460,7 +497,40 @@ export default function WhatsApp() {
                       <div className="text-[9px] text-muted mt-1 text-right">{fmtAgo(m.ts)} fa</div>
                     </div>
                   </div>
-                ))}
+                );})}
+              </div>
+
+              {/* Always-visible compose bar */}
+              <div className="border-t border-border bg-surface2/40 p-3 flex items-stretch gap-2">
+                <div className={`flex-1 flex items-stretch rounded-2xl bg-surface border ${composeFromAi ? 'border-accent2/50' : 'border-border'} focus-within:border-accent transition overflow-hidden relative`}>
+                  {composeFromAi && (
+                    <div className="absolute -top-5 left-1 inline-flex items-center gap-1 text-[9px] uppercase tracking-wider text-accent2 font-semibold">
+                      <Wand2 size={9} /> bozza AI
+                      <button onClick={() => setComposeFromAi(false)} className="text-muted hover:text-text ml-1" title="Marca come user">×</button>
+                    </div>
+                  )}
+                  {/* AI button prepended inside the input */}
+                  <button
+                    onClick={suggest}
+                    disabled={suggesting}
+                    title="Suggerisci risposta AI"
+                    className="shrink-0 flex items-center justify-center w-10 self-stretch bg-gradient-to-br from-accent2 to-accent text-white hover:opacity-90 disabled:opacity-60 transition"
+                  >
+                    <Sparkles size={16} className={suggesting ? 'animate-pulse' : ''} />
+                  </button>
+                  <textarea
+                    value={composeText}
+                    onChange={(e) => { setComposeText(e.target.value); if (composeFromAi && e.target.value === '') setComposeFromAi(false); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCompose(); } }}
+                    placeholder="Scrivi un messaggio… (Enter per inviare, Shift+Enter nuova riga)"
+                    rows={1}
+                    className="flex-1 bg-transparent px-3 py-2 text-sm resize-none outline-none min-h-[40px] max-h-32"
+                  />
+                </div>
+                <Button onClick={sendCompose} disabled={sending || !composeText.trim()} className="self-stretch px-4 flex items-center">
+                  <Send size={14} className="inline mr-1.5 -mt-0.5" />
+                  {sending ? '…' : 'Invia'}
+                </Button>
               </div>
             </>
           )}
@@ -511,9 +581,9 @@ export default function WhatsApp() {
                         <Wand2 size={12} className={`inline mr-1 -mt-0.5 ${suggesting ? 'animate-pulse' : ''}`} />
                         Rigenera
                       </Button>
-                      <Button size="sm" onClick={sendReply} disabled={sending || !draftReply.trim()}>
+                      <Button size="sm" onClick={acceptSuggestion} disabled={!draftReply.trim()}>
                         <Send size={12} className="inline mr-1 -mt-0.5" />
-                        {sending ? 'Invio…' : 'Invia'}
+                        Usa bozza
                       </Button>
                     </div>
                   </>

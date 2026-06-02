@@ -890,6 +890,69 @@ router.post('/team-tasks/:id/cancel', async (req, res) => {
   } catch (e: any) { console.error('[POST /team-tasks/:id/cancel]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
 });
 
+// Flows
+router.get('/flows', async (req, res) => {
+  try { const m = await import('../flows/index.js'); res.json(await m.listFlows(req.user!.id)); }
+  catch (e: any) { console.error('[GET /flows]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/flows', async (req, res) => {
+  try { const m = await import('../flows/index.js'); res.json(await m.createFlow(req.user!.id, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/flows/:id', async (req, res) => {
+  try {
+    const m = await import('../flows/index.js');
+    const r = await m.getFlow(req.user!.id, Number(req.params.id));
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { console.error('[GET /flows/:id]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/flows/:id', async (req, res) => {
+  try {
+    const m = await import('../flows/index.js');
+    const r = await m.updateFlow(req.user!.id, Number(req.params.id), req.body ?? {});
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/flows/:id', async (req, res) => {
+  try { const m = await import('../flows/index.js'); await m.deleteFlow(req.user!.id, Number(req.params.id)); res.json({ ok: true }); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/flows/:id/triggers', async (req, res) => {
+  try {
+    const m = await import('../flows/index.js');
+    await m.setTriggers(req.user!.id, Number(req.params.id), req.body?.triggers ?? []);
+    res.json(await m.getFlow(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/flows/:id/steps', async (req, res) => {
+  try {
+    const m = await import('../flows/index.js');
+    await m.setSteps(req.user!.id, Number(req.params.id), req.body?.steps ?? []);
+    res.json(await m.getFlow(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/flows/:id/runs', async (req, res) => {
+  try { const m = await import('../flows/index.js'); res.json(await m.listRuns(req.user!.id, Number(req.params.id))); }
+  catch (e: any) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/flow-runs/:runId', async (req, res) => {
+  try {
+    const m = await import('../flows/index.js');
+    const r = await m.getRun(req.user!.id, Number(req.params.runId));
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/flows/:id/run', async (req, res) => {
+  try {
+    const m = await import('../flows/index.js');
+    const runId = await m.runFlow(req.user!.id, Number(req.params.id), 'manual', req.body ?? {});
+    res.json({ ok: true, run_id: runId });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 // WhatsApp
 router.get('/whatsapp/status', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
@@ -925,7 +988,8 @@ router.post('/whatsapp/chats/:jid/suggest', async (req, res) => {
 router.post('/whatsapp/chats/:jid/send', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const text = String(req.body?.text ?? '');
-  try { res.json(await m.sendWaMessage(req.user!.id, req.params.jid, text)); }
+  const source: 'user' | 'ai' = req.body?.source === 'ai' ? 'ai' : 'user';
+  try { res.json(await m.sendWaMessage(req.user!.id, req.params.jid, text, 'user', source)); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
 router.post('/whatsapp/chats/merge', async (req, res) => {

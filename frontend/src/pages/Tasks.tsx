@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, Textarea, Toggle, Modal, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 import { useI18n } from '../i18n';
 import { Calendar, Users as UsersIcon } from 'lucide-react';
 import { TeamTasksPanel } from './TeamTasks';
@@ -24,6 +25,7 @@ export default function Tasks() {
   const [editing, setEditing] = useState<Task | null>(null);
   const [running, setRunning] = useState<Set<number>>(new Set());
   const toast = useToast();
+  const dlg = useDialog();
   const { t } = useI18n();
 
   const PRESETS: { label: string; cron: string }[] = [
@@ -89,7 +91,7 @@ export default function Tasks() {
     load();
   }
   async function remove(task: Task) {
-    if (!confirm(t('tasks.confirmDelete').replace('{name}', task.name))) return;
+    if (!await dlg.confirm(t('tasks.confirmDelete').replace('{name}', task.name), { tone: 'danger', confirmLabel: 'Elimina' })) return;
     await api.taskDelete(task.id);
     toast.push(t('tasks.deleted'), 'warn');
     load();

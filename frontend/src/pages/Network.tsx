@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Chip, Input, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 
 type Person = {
   id: number;
@@ -36,6 +37,7 @@ export default function Network() {
   const [picks, setPicks] = useState<Record<number, Set<string>>>({});
   const [reviewing, setReviewing] = useState<Set<number>>(new Set());
   const toast = useToast();
+  const dlg = useDialog();
 
   async function load() {
     const [d, p, inc, out] = await Promise.all([
@@ -95,7 +97,7 @@ export default function Network() {
     }
   }
   async function denyShare(reqId: number) {
-    const reason = prompt('Motivo (opzionale)') ?? undefined;
+    const reason = (await dlg.prompt('Motivo (opzionale)', { title: 'Rifiuta condivisione', placeholder: 'es. dati sensibili' })) ?? undefined;
     try { await api.netDenyShare(reqId, reason); toast.push('Rifiutata', 'warn'); load(); }
     catch (e: any) { toast.push(e.message, 'err'); }
   }

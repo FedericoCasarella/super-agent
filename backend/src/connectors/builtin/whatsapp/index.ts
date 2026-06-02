@@ -423,7 +423,7 @@ export async function suggestReply(userId: number, chatJid: string, opts: { hint
   return { ok: true, draft };
 }
 
-export async function sendWaMessage(userId: number, chatJid: string, text: string, origin: string = 'user'): Promise<{ ok: boolean; error?: string }> {
+export async function sendWaMessage(userId: number, chatJid: string, text: string, origin: string = 'user', source: 'user' | 'ai' = 'user'): Promise<{ ok: boolean; error?: string }> {
   const { logOutbound } = await import('../../../comm/outbound_log.js');
   const s = sessions.get(userId);
   if (!s || s.status !== 'connected') {
@@ -448,15 +448,15 @@ export async function sendWaMessage(userId: number, chatJid: string, text: strin
     const id = sent?.key?.id ?? `${Date.now()}`;
     try {
       await query(
-        `INSERT INTO wa_messages(user_id, msg_id, chat_jid, sender_jid, sender_phone, sender_name, person_slug, is_group, group_jid, from_me, text, ts, processed_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+        `INSERT INTO wa_messages(user_id, msg_id, chat_jid, sender_jid, sender_phone, sender_name, person_slug, is_group, group_jid, from_me, text, ts, processed_at, source)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), $13)
          ON CONFLICT(user_id, msg_id) DO NOTHING`,
-        [userId, id, chatJid, s.me?.jid ?? '', null, 'TU', null, chatJid.endsWith('@g.us'), chatJid.endsWith('@g.us') ? chatJid : null, true, text, new Date().toISOString()],
+        [userId, id, chatJid, s.me?.jid ?? '', null, 'TU', null, chatJid.endsWith('@g.us'), chatJid.endsWith('@g.us') ? chatJid : null, true, text, new Date().toISOString(), source],
       );
     } catch {}
     bus.emit('wa:message', {
       userId,
-      msg: { id, chat_jid: chatJid, sender_jid: s.me?.jid ?? '', sender_phone: null, sender_name: 'TU', person_slug: null, is_group: chatJid.endsWith('@g.us'), group_jid: chatJid.endsWith('@g.us') ? chatJid : null, from_me: true, text, ts: new Date().toISOString() },
+      msg: { id, chat_jid: chatJid, sender_jid: s.me?.jid ?? '', sender_phone: null, sender_name: 'TU', person_slug: null, is_group: chatJid.endsWith('@g.us'), group_jid: chatJid.endsWith('@g.us') ? chatJid : null, from_me: true, text, ts: new Date().toISOString(), source },
     });
     await logOutbound({
       userId, channel: 'whatsapp', status: 'sent',
@@ -570,7 +570,7 @@ export async function chatMessages(userId: number, chatJid: string, limit = 200)
               NULLIF(m.sender_name, ''),
               CASE WHEN m.sender_phone IS NOT NULL AND m.sender_phone <> '' THEN '+' || m.sender_phone END
             ) AS sender_name,
-            m.person_slug, m.is_group, m.group_jid, m.from_me, m.text, m.ts
+            m.person_slug, m.is_group, m.group_jid, m.from_me, m.text, m.ts, m.source
      FROM wa_messages m
      LEFT JOIN wa_contacts c ON c.user_id=$1 AND c.jid = m.sender_jid
      WHERE m.user_id=$1 AND m.chat_jid=$2 AND m.msg_id NOT LIKE 'chat:%'

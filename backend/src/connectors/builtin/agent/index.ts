@@ -43,6 +43,121 @@ const connector: Connector = {
   },
   tools: [
     {
+      name: 'flows_list',
+      description: 'List automation flows: name, enabled state, trigger count, step count. Use when user asks "che flow ho", "lista flow", "i miei flussi", "what automations are active".',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => {
+        const m = await import('../../../flows/index.js');
+        const flows = await m.listFlows(ctx.userId);
+        const out = [];
+        for (const f of flows) {
+          const full = await m.getFlow(ctx.userId, f.id);
+          out.push({ id: f.id, name: f.name, enabled: f.enabled, description: f.description, triggers: full?.triggers.length ?? 0, steps: full?.steps.length ?? 0 });
+        }
+        return { flows: out };
+      },
+    },
+    {
+      name: 'flows_get',
+      description: 'Get full flow detail (triggers + steps with configs) by id. Use before flows_update to know current state.',
+      inputSchema: { type: 'object', properties: { id: { type: 'number' } }, required: ['id'], additionalProperties: false },
+      handler: async (ctx, { id }) => {
+        const m = await import('../../../flows/index.js');
+        const f = await m.getFlow(ctx.userId, id);
+        if (!f) throw new Error('flow not found');
+        return f;
+      },
+    },
+    {
+      name: 'flows_create',
+      description: 'Create a new flow. Optionally seed triggers + steps in one call. Supported trigger types: whatsapp.received, email.received, voice.received, telegram.received, schedule.datetime, schedule.cron, agent.finished, brain.node_added, task.triggered, perk.fired, team.fired. Supported step types: agent.run, telegram.notify, team.run, email.send, whatsapp.send, brain.write_note, delay, webhook, condition.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          description: { type: 'string' },
+          enabled: { type: 'boolean' },
+          triggers: { type: 'array', items: { type: 'object' } },
+          steps: { type: 'array', items: { type: 'object' } },
+        },
+        required: ['name'], additionalProperties: false,
+      },
+      handler: async (ctx, { name, description, enabled, triggers, steps }) => {
+        const m = await import('../../../flows/index.js');
+        const f = await m.createFlow(ctx.userId, { name, description, enabled });
+        if (Array.isArray(triggers) && triggers.length) await m.setTriggers(ctx.userId, f.id, triggers);
+        if (Array.isArray(steps) && steps.length) await m.setSteps(ctx.userId, f.id, steps);
+        return await m.getFlow(ctx.userId, f.id);
+      },
+    },
+    {
+      name: 'flows_update',
+      description: 'Update flow metadata (name, description, enabled). For triggers/steps use flows_set_triggers / flows_set_steps.',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'number' }, name: { type: 'string' }, description: { type: 'string' }, enabled: { type: 'boolean' } },
+        required: ['id'], additionalProperties: false,
+      },
+      handler: async (ctx, { id, ...patch }) => {
+        const m = await import('../../../flows/index.js');
+        const r = await m.updateFlow(ctx.userId, id, patch);
+        if (!r) throw new Error('flow not found');
+        return r;
+      },
+    },
+    {
+      name: 'flows_set_triggers',
+      description: 'Replace full trigger list of a flow. Each trigger: {type, config}.',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'number' }, triggers: { type: 'array', items: { type: 'object' } } },
+        required: ['id', 'triggers'], additionalProperties: false,
+      },
+      handler: async (ctx, { id, triggers }) => {
+        const m = await import('../../../flows/index.js');
+        await m.setTriggers(ctx.userId, id, triggers);
+        return await m.getFlow(ctx.userId, id);
+      },
+    },
+    {
+      name: 'flows_set_steps',
+      description: 'Replace full step list of a flow. Each step: {type, name?, config}. Step order = array order.',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'number' }, steps: { type: 'array', items: { type: 'object' } } },
+        required: ['id', 'steps'], additionalProperties: false,
+      },
+      handler: async (ctx, { id, steps }) => {
+        const m = await import('../../../flows/index.js');
+        await m.setSteps(ctx.userId, id, steps);
+        return await m.getFlow(ctx.userId, id);
+      },
+    },
+    {
+      name: 'flows_delete',
+      description: 'Archive (soft-delete) a flow by id. Run history preserved.',
+      inputSchema: { type: 'object', properties: { id: { type: 'number' } }, required: ['id'], additionalProperties: false },
+      handler: async (ctx, { id }) => {
+        const m = await import('../../../flows/index.js');
+        await m.deleteFlow(ctx.userId, id);
+        return { ok: true };
+      },
+    },
+    {
+      name: 'flows_run_now',
+      description: 'Manually trigger a flow run, optionally with custom payload (available as {{trigger.*}} in step configs).',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'number' }, payload: { type: 'object' } },
+        required: ['id'], additionalProperties: false,
+      },
+      handler: async (ctx, { id, payload }) => {
+        const m = await import('../../../flows/index.js');
+        const runId = await m.runFlow(ctx.userId, id, 'manual', payload ?? {});
+        return { ok: true, run_id: runId };
+      },
+    },
+    {
       name: 'teams_list',
       description: 'List user-defined custom agents and teams. Use when planning a task to decide if an existing agent/team fits or a new one is needed.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },

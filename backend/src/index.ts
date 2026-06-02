@@ -34,6 +34,9 @@ async function main() {
 
   startOrchestrator();
   await startScheduler();
+  const flows = await import('./flows/index.js');
+  flows.attachFlowDispatchers();
+  flows.startFlowScheduler();
   await startAllTelegramBots();
   // Auto-restart WhatsApp sessions for users with existing creds on disk
   try {

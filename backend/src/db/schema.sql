@@ -407,6 +407,13 @@ DO $$ BEGIN
     ALTER TABLE wa_contacts ADD COLUMN auto_bonify BOOLEAN NOT NULL DEFAULT false;
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
+
+-- Outgoing WA message source: 'user' (typed manually) or 'ai' (drafted by suggestion).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_messages' AND column_name='source') THEN
+    ALTER TABLE wa_messages ADD COLUMN source TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS wa_contacts_user_autobonify_idx ON wa_contacts(user_id) WHERE auto_bonify=true;
 
 CREATE TABLE IF NOT EXISTS tool_events (
@@ -528,6 +535,75 @@ CREATE TABLE IF NOT EXISTS team_task_events (
   meta JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 CREATE INDEX IF NOT EXISTS team_task_events_task_idx ON team_task_events(task_id, id);
+
+-- =====================================================================
+-- FLOWS — user-defined automation: triggers → sequence of action steps
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS flows (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  archived BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS flows_user_idx ON flows(user_id) WHERE archived=false;
+
+-- A flow can have multiple triggers (OR-semantics: any one fires the run)
+CREATE TABLE IF NOT EXISTS flow_triggers (
+  id BIGSERIAL PRIMARY KEY,
+  flow_id BIGINT NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,             -- 'whatsapp.received' | 'email.received' | 'voice.received' | 'telegram.received'
+                                  -- | 'schedule.datetime' | 'schedule.cron'
+                                  -- | 'agent.finished' | 'brain.node_added' | 'task.triggered' | 'perk.fired' | 'team.fired'
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,  -- type-specific (chat filter, cron expr, agent name, etc.)
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS flow_triggers_flow_idx ON flow_triggers(flow_id);
+CREATE INDEX IF NOT EXISTS flow_triggers_type_idx ON flow_triggers(type);
+
+-- Ordered list of action steps
+CREATE TABLE IF NOT EXISTS flow_steps (
+  id BIGSERIAL PRIMARY KEY,
+  flow_id BIGINT NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  type TEXT NOT NULL,             -- 'agent.run' | 'telegram.notify' | 'team.run' | 'email.send'
+                                  -- | 'whatsapp.send' | 'brain.write_note' | 'delay' | 'webhook' | 'condition'
+  name TEXT,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS flow_steps_flow_idx ON flow_steps(flow_id, position);
+
+CREATE TABLE IF NOT EXISTS flow_runs (
+  id BIGSERIAL PRIMARY KEY,
+  flow_id BIGINT NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | running | done | error | cancelled
+  trigger_type TEXT,
+  trigger_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result TEXT,
+  error TEXT,
+  duration_ms INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS flow_runs_flow_idx ON flow_runs(flow_id, id DESC);
+CREATE INDEX IF NOT EXISTS flow_runs_user_idx ON flow_runs(user_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS flow_run_events (
+  id BIGSERIAL PRIMARY KEY,
+  run_id BIGINT NOT NULL REFERENCES flow_runs(id) ON DELETE CASCADE,
+  step_id BIGINT REFERENCES flow_steps(id) ON DELETE SET NULL,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  kind TEXT NOT NULL,             -- 'start' | 'step.start' | 'step.done' | 'step.error' | 'finish' | 'error'
+  content TEXT,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS flow_run_events_run_idx ON flow_run_events(run_id, id);
 
 CREATE TABLE IF NOT EXISTS plugins (
   id BIGSERIAL PRIMARY KEY,
