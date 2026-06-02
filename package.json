@@ -8,7 +8,10 @@
     "dev:backend": "npm run dev -w backend",
     "dev:frontend": "npm run dev -w frontend",
     "build": "npm run build -w backend && npm run build -w frontend",
-    "db:migrate": "npm run db:migrate -w backend"
+    "db:migrate": "npm run db:migrate -w backend",
+    "electron:install": "cd electron && npm install",
+    "electron:dev": "cd electron && npm start",
+    "electron:build": "npm run build && cd electron && npm run build:mac-dmg"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

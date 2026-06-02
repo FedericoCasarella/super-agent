@@ -13,7 +13,11 @@ export async function loadConnectors() {
   const entries = await fs.readdir(BUILTIN_DIR, { withFileTypes: true });
   for (const e of entries) {
     if (!e.isDirectory()) continue;
-    const modPath = path.join(BUILTIN_DIR, e.name, 'index.ts');
+    // In dev (tsx) we load .ts directly; in built/electron we load compiled .js.
+    const tsPath = path.join(BUILTIN_DIR, e.name, 'index.ts');
+    const jsPath = path.join(BUILTIN_DIR, e.name, 'index.js');
+    const fsSync = await import('node:fs');
+    const modPath = fsSync.existsSync(jsPath) ? jsPath : tsPath;
     try {
       const mod = await import(url.pathToFileURL(modPath).href);
       const conn: Connector = mod.default ?? mod.connector;

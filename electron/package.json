@@ -1,0 +1,92 @@
+{
+  "name": "super-agent-desktop",
+  "version": "0.1.0",
+  "description": "Super Agent desktop app (Electron shell + embedded Postgres + bundled backend).",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac --x64 --arm64",
+    "build:mac-dmg": "electron-builder --mac dmg --x64 --arm64",
+    "rebuild-deps": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "embedded-postgres": "17.9.0-beta.17",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.superagent.desktop",
+    "productName": "Super Agent",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/embedded-postgres/**",
+      "node_modules/@embedded-postgres/**",
+      "node_modules/node-pty/**"
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "!**/.DS_Store"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/dist",
+        "to": "backend/dist"
+      },
+      {
+        "from": "../backend/package.json",
+        "to": "backend/package.json"
+      },
+      {
+        "from": "../backend/src/db/schema.sql",
+        "to": "backend/schema.sql"
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "frontend"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "title": "Super Agent ${version}",
+      "background": null,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  }
+}
