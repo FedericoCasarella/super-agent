@@ -765,6 +765,131 @@ router.post('/email/test', async (req, res) => {
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
 
+// Custom agents + teams + team tasks
+router.get('/custom-agents', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    res.json(await t.listAgents(req.user!.id));
+  } catch (e: any) { console.error('[GET /custom-agents]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/custom-agents', async (req, res) => {
+  const t = await import('../teams/index.js');
+  try { res.json(await t.createAgent(req.user!.id, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/custom-agents/:id', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    const r = await t.getAgent(req.user!.id, Number(req.params.id));
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { console.error('[GET /custom-agents/:id]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/custom-agents/:id', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    const r = await t.updateAgent(req.user!.id, Number(req.params.id), req.body ?? {});
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { console.error('[PUT /custom-agents/:id]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/custom-agents/:id', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    await t.deleteAgent(req.user!.id, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e: any) { console.error('[DELETE /custom-agents/:id]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/teams', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    res.json(await t.listTeams(req.user!.id));
+  } catch (e: any) { console.error('[GET /teams]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/teams', async (req, res) => {
+  const t = await import('../teams/index.js');
+  try { res.json(await t.createTeam(req.user!.id, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/teams/:id', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    const r = await t.getTeam(req.user!.id, Number(req.params.id));
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { console.error('[GET /teams/:id]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/teams/:id', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    const r = await t.updateTeam(req.user!.id, Number(req.params.id), req.body ?? {});
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { console.error('[PUT /teams/:id]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/teams/:id', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    await t.deleteTeam(req.user!.id, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e: any) { console.error('[DELETE /teams/:id]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/teams/:id/members', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    const r = await t.setTeamMembers(req.user!.id, Number(req.params.id), req.body?.members ?? []);
+    if (!r) return res.status(404).json({ error: 'team not found' });
+    res.json(r);
+  } catch (e: any) { console.error('[PUT /teams/:id/members]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/team-tasks', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    res.json(await t.listTasks(req.user!.id, { status: req.query.status ? String(req.query.status) : undefined }));
+  } catch (e: any) { console.error('[GET /team-tasks]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/team-tasks/stats/running', async (req, res) => {
+  try {
+    const rows = await query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM team_tasks WHERE user_id=$1 AND status IN ('pending','running')`,
+      [req.user!.id],
+    );
+    res.json({ running: rows[0]?.n ?? 0 });
+  } catch (e: any) { console.error('[GET /team-tasks/stats/running]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/team-tasks', async (req, res) => {
+  const t = await import('../teams/index.js');
+  const b = req.body ?? {};
+  try {
+    res.json(await t.createTask(req.user!.id, {
+      title: b.title,
+      prompt: b.prompt,
+      // Accept both snake_case (FE convention) and camelCase
+      teamId: b.team_id ?? b.teamId ?? null,
+      agentId: b.agent_id ?? b.agentId ?? null,
+      createdBy: 'user',
+    }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/team-tasks/:id', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    const task = await t.getTask(req.user!.id, Number(req.params.id));
+    if (!task) return res.status(404).json({ error: 'not found' });
+    const events = await t.getTaskEvents(task.id);
+    res.json({ task, events });
+  } catch (e: any) { console.error('[GET /team-tasks/:id]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/team-tasks/:id/cancel', async (req, res) => {
+  try {
+    const t = await import('../teams/index.js');
+    await t.cancelTask(req.user!.id, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e: any) { console.error('[POST /team-tasks/:id/cancel]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+
 // WhatsApp
 router.get('/whatsapp/status', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
@@ -927,17 +1052,17 @@ router.get('/usage', async (req, res) => {
     plan = { ...plan, sessionLimitTokens: 500_000_000 };
     await setSetting(userId, 'claude_plan', plan);
   }
-  // Cache 60s (frontend polls every minute, see UsageGauge)
-  if (usageCache && Date.now() - usageCache.ts < 60_000) {
+  // Cache 5min — `/cost` PTY scrape is ~12s so we don't run it on every poll.
+  if (usageCache && Date.now() - usageCache.ts < 300_000) {
     return res.json({ plan, ...usageCache.data });
   }
   // Use ccusage CLI (https://github.com/ryoppippi/ccusage) as canonical data source.
   // Matches Claude Code's /cost / /usage output 1:1 (parses same ~/.claude/projects/**/*.jsonl
   // with proper dedup, billing-block windows, cache token weighting).
   const { spawn } = await import('node:child_process');
-  function runCcusage(): Promise<any> {
+  function runCcusage(args: string[]): Promise<any> {
     return new Promise((resolve, reject) => {
-      const p = spawn('npx', ['-y', 'ccusage@latest', 'blocks', '--active', '--json'], {
+      const p = spawn('npx', ['-y', 'ccusage@latest', ...args, '--json'], {
         env: { ...process.env, NO_COLOR: '1' },
       });
       let out = '', err = '';
@@ -949,7 +1074,7 @@ router.get('/usage', async (req, res) => {
         catch (e: any) { reject(new Error(`ccusage parse: ${e.message}`)); }
       });
       p.on('error', reject);
-      setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('ccusage timeout')); }, 20_000);
+      setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('ccusage timeout')); }, 25_000);
     });
   }
   let usedTokens = 0;
@@ -957,8 +1082,65 @@ router.get('/usage', async (req, res) => {
   let costUsd = 0;
   let breakdown: any = { in: 0, out: 0, cache_read: 0, cache_create: 0 };
   let burnRate: any = null;
+  let autoBudget: number | null = null;
+  // === claude TUI /cost scrape via PTY ===
+  // Spawn `claude` in interactive mode through a pseudo-terminal, answer the trust prompt,
+  // type `/cost`, capture rendered output, then exit. Parse the "Current session NN% used"
+  // and "Current week NN% used" sections — these mirror Anthropic's gating numbers exactly.
+  type CostParsed = { sessionPct: number; weekPct: number; resetAt?: string };
+  async function scrapeClaudeCost(): Promise<CostParsed | null> {
+    let pty: any;
+    try { pty = await import('node-pty'); } catch (e) { console.error('[usage] node-pty not loaded', e); return null; }
+    const home = process.env.HOME ?? '';
+    const childProcess = await import('node:child_process');
+    const claudeBin = childProcess.spawnSync('which', ['claude'], { env: { ...process.env, PATH: `${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ''}` } }).stdout.toString().trim() || 'claude';
+    return new Promise((resolve) => {
+      try {
+        const p: any = pty.default ? pty.default.spawn(claudeBin, [], {
+          name: 'xterm-256color', cols: 140, rows: 50, cwd: home,
+          env: { ...process.env, PATH: `${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ''}` },
+        }) : pty.spawn(claudeBin, [], { name: 'xterm-256color', cols: 140, rows: 50, cwd: home, env: process.env });
+        let buf = '';
+        p.onData((d: string) => { buf += d; });
+        // Answer trust prompt
+        setTimeout(() => { try { p.write('\r'); } catch {} }, 2500);
+        // Send /cost
+        setTimeout(() => { try { p.write('/cost\r'); } catch {} }, 6000);
+        // Kill + parse
+        const finish = () => {
+          try { p.write('\x03\x03'); p.kill('SIGTERM'); } catch {}
+          const clean = buf
+            .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+            .replace(/\x1b\][^\x07]*\x07/g, '')
+            .replace(/\r/g, '');
+          const session = clean.match(/Currentsession\s*[█▉▊▋▌▍▎▏▐\s_-]*?(\d{1,3})%used/i);
+          const week = clean.match(/Currentweek[^%]*?(\d{1,3})%used/i);
+          const resetM = clean.match(/Currentsession[\s\S]{0,300}?Resets([0-9: ]+[ap]m)/i);
+          const sessionPct = session ? Number(session[1]) : 0;
+          const weekPct = week ? Number(week[1]) : 0;
+          if (sessionPct === 0 && weekPct === 0) return resolve(null);
+          resolve({ sessionPct, weekPct, resetAt: resetM?.[1] });
+        };
+        setTimeout(finish, 12000);
+        p.onExit(() => finish());
+      } catch (e: any) { console.error('[usage] /cost pty spawn failed', e?.message ?? e); resolve(null); }
+    });
+  }
+  let claudeCost: CostParsed | null = null;
+  try { claudeCost = await scrapeClaudeCost(); }
+  catch (e: any) { console.error('[usage] /cost scrape failed', e?.message ?? e); }
+  // Historical max cost across past 5h blocks — fallback when claude-monitor unavailable.
   try {
-    const j = await runCcusage();
+    const histArgs = ['blocks'];
+    const hist = await runCcusage(histArgs).catch(() => null);
+    if (hist?.blocks?.length) {
+      const completed = (hist.blocks as any[]).filter((b) => !b.isActive && !b.isGap && Number(b.costUSD) > 0);
+      const maxCost = completed.reduce((m, b) => Math.max(m, Number(b.costUSD)), 0);
+      if (maxCost > 5) autoBudget = maxCost;
+    }
+  } catch (e: any) { console.error('[usage] history scan failed', e?.message ?? e); }
+  try {
+    const j = await runCcusage(['blocks', '--active']);
     const active = (j.blocks ?? []).find((b: any) => b.isActive) ?? null;
     if (active) {
       const tc = active.tokenCounts ?? {};
@@ -1019,7 +1201,26 @@ router.get('/usage', async (req, res) => {
   } catch (e: any) {
     console.error('[usage] ccusage failed', e?.message ?? e);
   }
-  const data = { usedTokens, resetAt, costUsd, burnRate, breakdown };
+  // Fallback when /cost scrape failed AND no manual override.
+  if (!claudeCost && !plan.manuallyCalibrated) {
+    if (autoBudget && Number(plan.costBudgetUsd) === DEFAULT_BUDGET_USD && Math.abs(autoBudget - DEFAULT_BUDGET_USD) > 5) {
+      plan = { ...plan, costBudgetUsd: Math.round(autoBudget * 100) / 100, autoCalibrated: true };
+      await setSetting(userId, 'claude_plan', plan);
+    }
+    if (costUsd > Number(plan.costBudgetUsd)) {
+      plan = { ...plan, costBudgetUsd: Math.round(costUsd * 1.1 * 100) / 100, autoCalibrated: true };
+      await setSetting(userId, 'claude_plan', plan);
+    }
+  }
+  // If claude /cost gave us the real session %, synthesize a budget so the frontend
+  // gauge (costUsd / budget) renders the exact same number Anthropic shows.
+  if (claudeCost && claudeCost.sessionPct > 0) {
+    const pctFrac = Math.min(0.999, claudeCost.sessionPct / 100);
+    const syntheticBudget = costUsd > 0 ? costUsd / pctFrac : 100;
+    plan = { ...plan, costBudgetUsd: Math.round(syntheticBudget * 100) / 100, autoCalibrated: true, source: 'claude /cost' };
+    await setSetting(userId, 'claude_plan', plan);
+  }
+  const data = { usedTokens, resetAt, costUsd, burnRate, breakdown, autoBudget, claudeCost };
   usageCache = { ts: Date.now(), data };
   res.json({ plan, ...data });
   void userId;
@@ -1031,7 +1232,11 @@ router.put('/usage/plan', async (req, res) => {
   const existing = (await getSetting<any>(userId, 'claude_plan')) ?? {};
   const next: any = { ...existing, name };
   if (typeof sessionLimitTokens === 'number' && sessionLimitTokens > 0) next.sessionLimitTokens = sessionLimitTokens;
-  if (typeof costBudgetUsd === 'number' && costBudgetUsd > 0) next.costBudgetUsd = costBudgetUsd;
+  if (typeof costBudgetUsd === 'number' && costBudgetUsd > 0) {
+    next.costBudgetUsd = costBudgetUsd;
+    next.manuallyCalibrated = true; // freeze further auto-adjustments
+    next.autoCalibrated = false;
+  }
   await setSetting(userId, 'claude_plan', next);
   usageCache = null; // bust cache
   res.json({ ok: true, plan: next });

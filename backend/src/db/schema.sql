@@ -448,6 +448,87 @@ CREATE TABLE IF NOT EXISTS outbound_log (
 CREATE INDEX IF NOT EXISTS outbound_log_user_ts_idx ON outbound_log(user_id, ts DESC);
 CREATE INDEX IF NOT EXISTS outbound_log_user_channel_idx ON outbound_log(user_id, channel, ts DESC);
 
+-- =====================================================================
+-- Custom Agents + Teams + Team Tasks
+-- =====================================================================
+-- Custom agent = user-defined persona with system prompt, skill (tool/connector) allowlist,
+-- model preference. Skills are a JSONB array of tool names (e.g. ["mcp__super_agent__people_search","Read","Grep"]).
+CREATE TABLE IF NOT EXISTS custom_agents (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  role TEXT,                       -- short label like "Lead Researcher"
+  description TEXT,
+  system_prompt TEXT NOT NULL,
+  skills JSONB NOT NULL DEFAULT '[]'::jsonb,   -- ["Read","Grep","mcp__super_agent__people_search", ...]
+  model TEXT,                      -- e.g. claude-sonnet-4-6 / claude-opus-4-7 / null = default
+  icon TEXT,                       -- emoji or URL
+  color TEXT,                      -- hex
+  archived BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS custom_agents_user_idx ON custom_agents(user_id) WHERE archived=false;
+CREATE UNIQUE INDEX IF NOT EXISTS custom_agents_user_name_uniq ON custom_agents(user_id, lower(name));
+
+-- Team = ordered group of agents with hierarchy (reports_to within team).
+CREATE TABLE IF NOT EXISTS agent_teams (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  archived BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_teams_user_idx ON agent_teams(user_id) WHERE archived=false;
+CREATE UNIQUE INDEX IF NOT EXISTS agent_teams_user_name_uniq ON agent_teams(user_id, lower(name));
+
+CREATE TABLE IF NOT EXISTS agent_team_members (
+  id BIGSERIAL PRIMARY KEY,
+  team_id BIGINT NOT NULL REFERENCES agent_teams(id) ON DELETE CASCADE,
+  agent_id BIGINT NOT NULL REFERENCES custom_agents(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',  -- 'lead' | 'member'
+  reports_to BIGINT REFERENCES custom_agents(id) ON DELETE SET NULL,  -- supervisor within team
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS agent_team_members_team_idx ON agent_team_members(team_id);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_team_members_uniq ON agent_team_members(team_id, agent_id);
+
+-- Task assigned to a team OR a single agent.
+CREATE TABLE IF NOT EXISTS team_tasks (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  team_id BIGINT REFERENCES agent_teams(id) ON DELETE SET NULL,
+  agent_id BIGINT REFERENCES custom_agents(id) ON DELETE SET NULL,  -- single-agent execution
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | running | done | error | cancelled
+  result TEXT,
+  error TEXT,
+  cost_usd NUMERIC(10,6),
+  duration_ms INTEGER,
+  created_by TEXT,           -- 'user' | 'telegram' | 'agent'
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS team_tasks_user_idx ON team_tasks(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS team_tasks_status_idx ON team_tasks(user_id, status);
+
+-- Every interaction inside a task execution: delegations, reports, messages between agents.
+CREATE TABLE IF NOT EXISTS team_task_events (
+  id BIGSERIAL PRIMARY KEY,
+  task_id BIGINT NOT NULL REFERENCES team_tasks(id) ON DELETE CASCADE,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  from_agent_id BIGINT REFERENCES custom_agents(id) ON DELETE SET NULL,
+  to_agent_id BIGINT REFERENCES custom_agents(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL,        -- 'delegate' | 'report' | 'message' | 'tool' | 'start' | 'finish' | 'error'
+  content TEXT,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS team_task_events_task_idx ON team_task_events(task_id, id);
+
 CREATE TABLE IF NOT EXISTS plugins (
   id BIGSERIAL PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,

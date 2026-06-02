@@ -14,6 +14,9 @@ export type ClaudeRunOptions = {
   useMcp?: boolean;
   kind?: string;
   meta?: Record<string, any>;
+  model?: string;             // override CLI model (e.g. claude-opus-4-7)
+  systemPrompt?: string;      // appended via --append-system-prompt
+  signal?: AbortSignal;       // when aborted, child process killed (SIGTERM)
 };
 
 export type ClaudeResult = {
@@ -124,7 +127,11 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   // Inject current datetime (Claude CLI has no clock).
   const finalPrompt = `now=${new Date().toISOString()}\n\n${prompt}`;
 
-  const args = ['-p', finalPrompt, '--output-format', 'stream-json', '--verbose', '--model', config.claudeModel];
+  const model = opts.model ?? config.claudeModel;
+  const args = ['-p', finalPrompt, '--output-format', 'stream-json', '--verbose', '--model', model];
+  if (opts.systemPrompt) {
+    args.push('--append-system-prompt', opts.systemPrompt);
+  }
   if (opts.useMcp !== false) {
     args.push('--mcp-config', MCP_CONFIG_PATH);
   }
@@ -181,6 +188,16 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
       console.error(`[runner:u${userId}:${kind}] TIMEOUT after ${timeoutMs}ms — sending SIGTERM`);
       child.kill('SIGTERM');
     }, timeoutMs);
+    // External abort signal — caller can pre-empt the run
+    if (opts.signal) {
+      const onAbort = () => {
+        console.warn(`[runner:u${userId}:${kind}] ABORTED via signal — SIGTERM`);
+        try { child.kill('SIGTERM'); } catch {}
+        setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2000);
+      };
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
     child.stdout.on('data', (d) => {
       const s = d.toString();
       stdout += s;
@@ -192,6 +209,19 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
         if (!line) continue;
         try {
           const ev = JSON.parse(line);
+          // Stream incremental token usage per assistant message (team task live counters)
+          if (ev?.type === 'assistant' && ev.message?.usage && opts.meta?.task_id) {
+            const u = ev.message.usage;
+            bus.emit('team_task:tokens', {
+              taskId: opts.meta.task_id,
+              agentId: opts.meta.agent_id ?? null,
+              in: Number(u.input_tokens ?? 0),
+              out: Number(u.output_tokens ?? 0),
+              cacheRead: Number(u.cache_read_input_tokens ?? 0),
+              cacheCreate: Number(u.cache_creation_input_tokens ?? 0),
+              ts: Date.now(),
+            });
+          }
           // Detect tool_use blocks → emit brain:access
           if (ev?.type === 'assistant' && ev.message?.content) {
             for (const block of ev.message.content) {
@@ -211,6 +241,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
                 server: isMcp ? (name.split('__')[1] ?? null) : null,
                 // Origin tag — perk name, sub-agent title prefix, or generic "agent"
                 kind: opts.kind ?? null,
+                meta: opts.meta ?? null,
                 ts: Date.now(),
               });
               const candidatePaths: string[] = [];

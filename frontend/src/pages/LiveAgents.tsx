@@ -61,7 +61,9 @@ function fmtDur(start: string | null, end: string | null): string {
   return `${Math.floor(sec / 60)}m ${sec % 60}s`;
 }
 
-export default function LiveAgents() {
+export default function LiveAgentsPage() { return <LiveAgentsPanel />; }
+
+export function LiveAgentsPanel() {
   const { t: _t } = useI18n();
   const toast = useToast();
   const [agents, setAgents] = useState<SubAgent[]>([]);
@@ -103,8 +105,7 @@ export default function LiveAgents() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gradient">Agenti Live</h1>
+      <div className="flex items-center justify-end">
         <Button size="sm" variant="ghost" onClick={refresh}>↻</Button>
       </div>
 
@@ -229,7 +230,7 @@ export default function LiveAgents() {
       </Card>
 
       {open && createPortal(
-        <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setOpen(null)} role="dialog" aria-modal="true">
+        <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setOpen(null)} role="dialog" aria-modal="true">
           <div className="max-w-3xl w-full max-h-[85vh] overflow-y-auto" onClick={(e: any) => e.stopPropagation()}><Card>
             <div className="flex items-start justify-between mb-3 gap-3 sticky top-0 bg-surface/95 backdrop-blur pb-2 -mx-4 px-4 z-10">
               <div className="min-w-0">

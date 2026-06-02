@@ -65,7 +65,7 @@ export default function PersonGraphModal({ slug, name, onClose }: Props) {
   const centerNode = data?.nodes.find((n) => n.id === data.center);
 
   return createPortal(
-    <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+    <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
       <div
         className={`relative w-full ${note || noteLoading ? 'max-w-6xl' : 'max-w-4xl'} h-[85vh] rounded-3xl border border-border bg-bg overflow-hidden gradient-border flex flex-col transition-all duration-300`}
         onClick={(e) => e.stopPropagation()}

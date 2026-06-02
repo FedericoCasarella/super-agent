@@ -124,6 +124,25 @@ export const api = {
     return req<{ rows: any[]; totals: any }>(`/outbound?${p}`);
   },
   outboundGet: (id: number) => req<any>(`/outbound/${id}`),
+  // Custom agents
+  customAgentsList: () => req<any[]>('/custom-agents'),
+  customAgentGet: (id: number) => req<any>(`/custom-agents/${id}`),
+  customAgentCreate: (data: any) => req<any>('/custom-agents', { method: 'POST', body: JSON.stringify(data) }),
+  customAgentUpdate: (id: number, data: any) => req<any>(`/custom-agents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  customAgentDelete: (id: number) => req<any>(`/custom-agents/${id}`, { method: 'DELETE' }),
+  // Teams
+  teamsList: () => req<any[]>('/teams'),
+  teamGet: (id: number) => req<any>(`/teams/${id}`),
+  teamCreate: (data: any) => req<any>('/teams', { method: 'POST', body: JSON.stringify(data) }),
+  teamUpdate: (id: number, data: any) => req<any>(`/teams/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  teamDelete: (id: number) => req<any>(`/teams/${id}`, { method: 'DELETE' }),
+  teamSetMembers: (id: number, members: any[]) => req<any>(`/teams/${id}/members`, { method: 'PUT', body: JSON.stringify({ members }) }),
+  // Team tasks
+  teamTasksList: (status?: string) => req<any[]>(`/team-tasks${status ? `?status=${status}` : ''}`),
+  teamTaskGet: (id: number) => req<any>(`/team-tasks/${id}`),
+  teamTaskCreate: (data: { title: string; prompt: string; team_id?: number; agent_id?: number }) => req<any>('/team-tasks', { method: 'POST', body: JSON.stringify(data) }),
+  teamTaskCancel: (id: number) => req<any>(`/team-tasks/${id}/cancel`, { method: 'POST' }),
+  teamTasksRunningCount: () => req<{ running: number }>('/team-tasks/stats/running'),
   waSendMessage: (jid: string, text: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/send`, { method: 'POST', body: JSON.stringify({ text }) }),
   waChats: () => req<any[]>('/whatsapp/chats'),
   waChatMessages: (jid: string) => req<any[]>(`/whatsapp/chats/${encodeURIComponent(jid)}/messages`),

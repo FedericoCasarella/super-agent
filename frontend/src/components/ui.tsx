@@ -49,7 +49,7 @@ export function Chip({ tone = 'default', children }: { tone?: 'default' | 'on' |
     accent: 'bg-gradient-to-r from-accent/15 to-fuchsia-400/10 border-accent/40 text-accent shadow-[0_0_18px_-4px_rgba(192,132,252,0.5)]',
     accent2: 'bg-gradient-to-r from-accent2/15 to-sky-300/10 border-accent2/40 text-accent2 shadow-[0_0_18px_-4px_rgba(34,211,238,0.5)]',
   };
-  return <span className={`inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border backdrop-blur-sm ${tones[tone]}`}>{children}</span>;
+  return <span className={`inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border backdrop-blur-md ${tones[tone]}`}>{children}</span>;
 }
 
 export function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -70,7 +70,7 @@ export function Modal({
 }) {
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md animate-fade-in" onClick={onClose} role="dialog" aria-modal="true">
       <div className="glass border border-border rounded-xl3 p-6 w-full max-w-lg mx-4 ring-soft gradient-border animate-slide-up max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="text-lg font-semibold mb-3 text-gradient">{title}</div>
         <div className="text-sm text-text/90">{children}</div>

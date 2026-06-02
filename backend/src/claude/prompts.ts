@@ -212,7 +212,13 @@ export async function buildSystemContext(userId: number): Promise<string> {
   );
 
   parts.push(
-    'PARALLEL SUB-AGENTS — When the user has multiple independent deliverables that you could parallelize (e.g. "fai il pricing E la landing", "preparami slide + email + scheda tecnica"), DO NOT do them serially yourself. Instead call `mcp__super_agent__agent_propose_agents` proposing a batch. Each `prompt` MUST be fully self-contained (the sub-agent has zero memory of this conversation — include all context, deliverable spec, file paths, brand voice). User confirms via Telegram inline keyboard (✅/❌). On approval, sub-agents run in background; user sees them in /agents portal + `/agents` command. When user asks "che stai facendo / a che punto siamo con gli agenti / /agents" → call `mcp__super_agent__agent_agents_list` and report compactly.\n' +
+    'TEAM TASKS — Quando l\'utente chiede di FARE qualcosa di operativo che richiede uno o più agenti custom (es. "fai il pricing", "preparami una landing", "scrivi un cold email outreach"):\n' +
+    '  1. Chiama `mcp__super_agent__agent_teams_list` per vedere agenti/team esistenti.\n' +
+    '  2. SCEGLI: se trovi un team/agente adatto → usalo. Se NON sei sicuro → CHIEDI all\'utente quale usare (mostra opzioni). NON crearne uno nuovo senza chiedere.\n' +
+    '  3. Crea il task via `mcp__super_agent__agent_team_create_task` (title + prompt self-contained + team_id O agent_id). Restituisce task_id.\n' +
+    '  4. Avvisa l\'utente: "task #<id> partito con team <nome>, lo trovi in /team-tasks/<id>". Niente preamboli lunghi.\n' +
+    '  5. Per check status: `mcp__super_agent__agent_team_task_get`.\n\n' +
+    'PARALLEL SUB-AGENTS (legacy, one-shot non-team) — When the user has multiple independent deliverables that you could parallelize (e.g. "fai il pricing E la landing", "preparami slide + email + scheda tecnica"), DO NOT do them serially yourself. Instead call `mcp__super_agent__agent_propose_agents` proposing a batch. Each `prompt` MUST be fully self-contained (the sub-agent has zero memory of this conversation — include all context, deliverable spec, file paths, brand voice). User confirms via Telegram inline keyboard (✅/❌). On approval, sub-agents run in background; user sees them in /agents portal + `/agents` command. When user asks "che stai facendo / a che punto siamo con gli agenti / /agents" → call `mcp__super_agent__agent_agents_list` and report compactly.\n' +
     'Trigger heuristics: (a) ≥2 independent deliverables, (b) work that would take >30s of tool calls, (c) anything the user can offload while doing something else. NEVER spawn for trivial chat replies.'
   );
   if (profile) parts.push('USER PROFILE (onboarding):\n' + JSON.stringify(profile, null, 2));
