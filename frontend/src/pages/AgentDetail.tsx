@@ -23,6 +23,8 @@ export default function AgentDetail() {
   const [agent, setAgent] = useState<any>(null);
   const [hour, setHour] = useState(0);
   const [minute, setMinute] = useState(0);
+  const [intervalHours, setIntervalHours] = useState<number | null>(null);
+  const [cadence, setCadence] = useState<'daily' | 'interval'>('daily');
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   const { t } = useI18n();
@@ -34,6 +36,8 @@ export default function AgentDetail() {
     const a = all.find((x: any) => x.name === name);
     if (!a) { nav('/perks'); return; }
     setAgent(a); setHour(a.hour); setMinute(a.minute);
+    setIntervalHours(a.interval_hours ?? null);
+    setCadence(a.interval_hours && a.interval_hours > 0 ? 'interval' : 'daily');
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [name]);
   // Poll while running so UI flips back to "runNow" when execution completes
@@ -45,8 +49,9 @@ export default function AgentDetail() {
   }, [agent?.running]);
 
   async function saveSchedule() {
-    await api.updateInternalAgent(name, { hour, minute });
-    toast.push(`Scheduled at ${pad(hour)}:${pad(minute)}`, 'on');
+    const ih = cadence === 'interval' ? Math.max(1, Math.min(168, Number(intervalHours ?? 3))) : null;
+    await api.updateInternalAgent(name, { hour, minute, interval_hours: ih });
+    toast.push(ih ? `Eseguito ogni ${ih}h` : `Scheduled at ${pad(hour)}:${pad(minute)}`, 'on');
     load();
   }
   async function toggle() {
@@ -160,15 +165,32 @@ export default function AgentDetail() {
       <Card>
         <h2 className="text-lg font-semibold mb-1">{t('agents.schedule')}</h2>
         <p className="text-sm text-muted mb-5">{t('agents.scheduleHint')}</p>
-        <div className="flex items-center gap-4 flex-wrap">
-          <Field label={t('agents.hour')}><Input type="number" min={0} max={23} value={hour} onChange={(e) => setHour(Math.max(0, Math.min(23, Number(e.target.value))))} className="font-mono text-center text-2xl w-24" /></Field>
-          <span className="text-3xl text-muted mt-6">:</span>
-          <Field label={t('agents.minute')}><Input type="number" min={0} max={59} value={minute} onChange={(e) => setMinute(Math.max(0, Math.min(59, Number(e.target.value))))} className="font-mono text-center text-2xl w-24" /></Field>
-          <div className="ml-auto self-end">
-            <Button onClick={saveSchedule} disabled={hour === agent.hour && minute === agent.minute}>{t('agents.saveSchedule')}</Button>
-          </div>
+        <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1 mb-4 w-fit">
+          <Button size="sm" variant={cadence === 'daily' ? 'primary' : 'ghost'} onClick={() => setCadence('daily')}>Giornaliero (hh:mm)</Button>
+          <Button size="sm" variant={cadence === 'interval' ? 'primary' : 'ghost'} onClick={() => setCadence('interval')}>Ogni N ore</Button>
         </div>
-        <div className="text-xs text-muted mt-4">{t('agents.nextFire')}: <span className="font-mono text-text">{pad(agent.hour)}:{pad(agent.minute)}</span> · {t('agents.daily')}</div>
+        {cadence === 'daily' ? (
+          <div className="flex items-center gap-4 flex-wrap">
+            <Field label={t('agents.hour')}><Input type="number" min={0} max={23} value={hour} onChange={(e) => setHour(Math.max(0, Math.min(23, Number(e.target.value))))} className="font-mono text-center text-2xl w-24" /></Field>
+            <span className="text-3xl text-muted mt-6">:</span>
+            <Field label={t('agents.minute')}><Input type="number" min={0} max={59} value={minute} onChange={(e) => setMinute(Math.max(0, Math.min(59, Number(e.target.value))))} className="font-mono text-center text-2xl w-24" /></Field>
+            <div className="ml-auto self-end">
+              <Button onClick={saveSchedule}>{t('agents.saveSchedule')}</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-4 flex-wrap">
+            <Field label="Intervallo (ore)"><Input type="number" min={1} max={168} value={intervalHours ?? 3} onChange={(e) => setIntervalHours(Math.max(1, Math.min(168, Number(e.target.value))))} className="font-mono text-center text-2xl w-24" /></Field>
+            <div className="ml-auto self-end">
+              <Button onClick={saveSchedule}>{t('agents.saveSchedule')}</Button>
+            </div>
+          </div>
+        )}
+        <div className="text-xs text-muted mt-4">
+          {agent.interval_hours && agent.interval_hours > 0
+            ? <>Eseguito ogni <span className="font-mono text-text">{agent.interval_hours}h</span></>
+            : <>{t('agents.nextFire')}: <span className="font-mono text-text">{pad(agent.hour)}:{pad(agent.minute)}</span> · {t('agents.daily')}</>}
+        </div>
       </Card>
 
       <Card>

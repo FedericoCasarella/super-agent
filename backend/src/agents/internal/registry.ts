@@ -135,7 +135,7 @@ export async function runInternalAgent(userId: number, name: string) {
   return { status, report };
 }
 
-export async function updateAgentSchedule(userId: number, name: string, p: { hour?: number; minute?: number; enabled?: boolean; notify_on_run?: boolean }) {
+export async function updateAgentSchedule(userId: number, name: string, p: { hour?: number; minute?: number; enabled?: boolean; notify_on_run?: boolean; interval_hours?: number | null }) {
   const fields: string[] = [];
   const vals: any[] = [];
   let i = 2;
@@ -143,6 +143,10 @@ export async function updateAgentSchedule(userId: number, name: string, p: { hou
   if (p.minute !== undefined)        { fields.push(`minute=$${++i}`); vals.push(Math.max(0, Math.min(59, p.minute))); }
   if (p.enabled !== undefined)       { fields.push(`enabled=$${++i}`); vals.push(!!p.enabled); }
   if (p.notify_on_run !== undefined) { fields.push(`notify_on_run=$${++i}`); vals.push(!!p.notify_on_run); }
+  if (p.interval_hours !== undefined) {
+    const v = p.interval_hours == null ? null : Math.max(1, Math.min(168, Number(p.interval_hours)));
+    fields.push(`interval_hours=$${++i}`); vals.push(v);
+  }
   if (!fields.length) return;
   await query(
     `UPDATE internal_agents SET ${fields.join(', ')}, updated_at=now() WHERE user_id=$1 AND name=$2`,

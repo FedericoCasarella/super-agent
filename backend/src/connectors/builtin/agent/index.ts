@@ -5,6 +5,7 @@ import { bus } from '../../../bus.js';
 import { getPrimaryVault } from '../../../brain/vaults.js';
 import * as net from '../../../network/index.js';
 import * as subAgents from '../../../sub_agents/index.js';
+import * as roadmapV2 from '../../../roadmap/index.js';
 
 const ROADMAP_PATH = 'meta/business-roadmap.md';
 
@@ -602,6 +603,133 @@ const connector: Connector = {
         await writeNote(ctx.userId, ROADMAP_PATH, { kind: 'roadmap', title: 'Business Roadmap', tags: ['roadmap', 'meta'], updated: new Date().toISOString() }, updated);
         return { ok: true, touched };
       },
+    },
+    // =====================================================================
+    // Roadmap v2 — JSON-backed structured roadmap powering the UI.
+    // Mirror of the legacy MD roadmap above; the UI reads/writes via these.
+    // Agent should keep both in sync (or migrate fully to v2 over time).
+    // =====================================================================
+    {
+      name: 'roadmap_v2_get',
+      description: 'Read full structured Roadmap (v2): shortTerm/midTerm/longTerm todos + strategy + KPIs + log. JSON powering the Roadmap UI.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => roadmapV2.getRoadmap(ctx.userId),
+    },
+    {
+      name: 'roadmap_v2_stats',
+      description: 'Get per-horizon counts (total/done/wip/pending/blocked/parked), 30-day burn-down, and KPI snapshots.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => roadmapV2.stats(ctx.userId),
+    },
+    {
+      name: 'roadmap_v2_add_todo',
+      description: 'Add a todo to a horizon. horizon ∈ {shortTerm (~4 wk), midTerm (~3 mo), longTerm (~12 mo)}. status defaults to pending.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          horizon: { type: 'string', enum: ['shortTerm', 'midTerm', 'longTerm'] },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked', 'parked'] },
+          priority: { type: 'string', enum: ['low', 'med', 'high'] },
+          due: { type: ['string', 'null'], description: 'ISO date (YYYY-MM-DD) or null' },
+        },
+        required: ['horizon', 'title'], additionalProperties: false,
+      },
+      handler: async (ctx, { horizon, ...input }) => roadmapV2.addTodo(ctx.userId, horizon, input),
+    },
+    {
+      name: 'roadmap_v2_update_todo',
+      description: 'Update a v2 todo by id. Pass only fields to change. Setting status=done auto-stamps completed_at.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          horizon: { type: 'string', enum: ['shortTerm', 'midTerm', 'longTerm'] },
+          id: { type: 'string' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked', 'parked'] },
+          priority: { type: 'string', enum: ['low', 'med', 'high'] },
+          due: { type: ['string', 'null'] },
+        },
+        required: ['horizon', 'id'], additionalProperties: false,
+      },
+      handler: async (ctx, { horizon, id, ...patch }) => roadmapV2.updateTodo(ctx.userId, horizon, id, patch),
+    },
+    {
+      name: 'roadmap_v2_delete_todo',
+      description: 'Delete a v2 todo by id from a horizon.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          horizon: { type: 'string', enum: ['shortTerm', 'midTerm', 'longTerm'] },
+          id: { type: 'string' },
+        },
+        required: ['horizon', 'id'], additionalProperties: false,
+      },
+      handler: async (ctx, { horizon, id }) => roadmapV2.deleteTodo(ctx.userId, horizon, id),
+    },
+    {
+      name: 'roadmap_v2_move_todo',
+      description: 'Move a v2 todo from one horizon to another (e.g. shortTerm → midTerm when scope grows).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          from: { type: 'string', enum: ['shortTerm', 'midTerm', 'longTerm'] },
+          to: { type: 'string', enum: ['shortTerm', 'midTerm', 'longTerm'] },
+        },
+        required: ['id', 'from', 'to'], additionalProperties: false,
+      },
+      handler: async (ctx, { id, from, to }) => roadmapV2.moveTodo(ctx.userId, from, id, to),
+    },
+    {
+      name: 'roadmap_v2_set_strategy',
+      description: 'Set strategic vision/mission/pillars/bets. Partial update — pass only fields to change.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          vision: { type: 'string' },
+          mission: { type: 'string' },
+          pillars: { type: 'array', items: { type: 'string' } },
+          bets: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { title: { type: 'string' }, rationale: { type: 'string' } },
+              required: ['title'], additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      handler: async (ctx, input) => roadmapV2.setStrategy(ctx.userId, input),
+    },
+    {
+      name: 'roadmap_v2_upsert_kpi',
+      description: 'Create or update a KPI. Omit id for new; pass id to update. current updates push to history (last 50 points kept).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          current: { type: 'number' },
+          target: { type: 'number' },
+          unit: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+      handler: async (ctx, input) => roadmapV2.upsertKpi(ctx.userId, input),
+    },
+    {
+      name: 'roadmap_v2_delete_kpi',
+      description: 'Delete a KPI by id.',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'], additionalProperties: false,
+      },
+      handler: async (ctx, { id }) => roadmapV2.deleteKpi(ctx.userId, id),
     },
   ],
 };

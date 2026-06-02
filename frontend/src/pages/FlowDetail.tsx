@@ -280,7 +280,7 @@ function FlowDiagram({
 
       {/* SVG curved connectors trigger row → merge point */}
       {triggers.length > 0 && (
-        <svg width={svgBox.w} height={svgBox.h} className="pointer-events-none" style={{ display: 'block' }}>
+        <svg width={svgBox.w} height={svgBox.h} className="pointer-events-none -mb-px" style={{ display: 'block' }}>
           {paths.map((d, i) => (
             <path key={i} d={d} fill="none" stroke="rgba(192,132,252,0.65)" strokeWidth={2} strokeLinecap="round" />
           ))}
@@ -309,6 +309,9 @@ function FlowDiagram({
                     <button onClick={() => onMoveStep(i, 1)} className="text-muted hover:text-text p-0.5 text-xs">↓</button>
                     <button onClick={() => onDelStep(i)} className="text-muted hover:text-red-300 p-1"><Trash2 size={12} /></button>
                   </div>
+                  {(() => { const p = stepConfigPreview(s); return p ? (
+                    <div className="px-3 py-2 text-xs text-muted whitespace-pre-wrap break-words">{p}</div>
+                  ) : null; })()}
                   <button onClick={() => onEditStep(i)} className="w-full text-[10px] text-accent2 border-t border-border/60 py-1.5 hover:bg-surface2 transition uppercase tracking-wider font-semibold">configura</button>
                 </div>
                 {/* Insert handle AFTER this step */}

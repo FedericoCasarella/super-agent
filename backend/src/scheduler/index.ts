@@ -105,9 +105,17 @@ export async function startScheduler() {
       );
       for (const r of rows) {
         if (!r.pending || r.pending <= 0) continue;
-        console.log(`[wa-auto-bonify:u${r.user_id}] ${r.jid} pending=${r.pending} → running`);
-        try { await wa.bonifyWaMessages(r.user_id, { onlyChat: r.jid, limit: 50 }); }
-        catch (e) { console.error('[wa-auto-bonify]', e); }
+        // Drain pending in batches (up to 5 cycles per tick) to clear large backlogs fast.
+        // bonifyWaMessages cap per call = 500; 5 cycles → max 2500 messages per tick per chat.
+        let remaining = r.pending;
+        let cycles = 0;
+        while (remaining > 0 && cycles < 5) {
+          const limit = Math.min(remaining, 500);
+          console.log(`[wa-auto-bonify:u${r.user_id}] ${r.jid} cycle ${cycles+1}/5 pending=${remaining} → running ${limit}`);
+          try { const res = await wa.bonifyWaMessages(r.user_id, { onlyChat: r.jid, limit }); remaining -= res.processed ?? limit; }
+          catch (e) { console.error('[wa-auto-bonify]', e); break; }
+          cycles++;
+        }
       }
     } catch (e) { console.error('[wa-auto-bonify] loop error', e); }
     finally { bonifyRunning = false; }
