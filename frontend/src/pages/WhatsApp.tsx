@@ -105,6 +105,8 @@ export default function WhatsApp() {
   const [pending, setPending] = useState<number>(0);
   const [bonifying, setBonifying] = useState(false);
   const [bonifyProgress, setBonifyProgress] = useState<{ total: number; toolCalls: number; onlyChat: string | null; startedAt: number } | null>(null);
+  // Per-chat busy set — chat-jid currently being bonified (auto-sync or manual). Drives spinner on sidebar row.
+  const [busyChats, setBusyChats] = useState<Set<string>>(new Set());
   const [elapsed, setElapsed] = useState(0);
   const [suggesting, setSuggesting] = useState(false);
   const [draftReply, setDraftReply] = useState<string>('');
@@ -273,12 +275,15 @@ export default function WhatsApp() {
       const p = msg.payload;
       if (p.kind === 'start') {
         setBonifyProgress({ total: p.total, toolCalls: 0, onlyChat: p.onlyChat, startedAt: Date.now() });
+        if (p.onlyChat) setBusyChats((prev) => { const n = new Set(prev); n.add(p.onlyChat); return n; });
       } else if (p.kind === 'done') {
         setBonifyProgress(null);
+        if (p.onlyChat) setBusyChats((prev) => { const n = new Set(prev); n.delete(p.onlyChat); return n; });
         toast.push(`Bonifica completata: ${p.processed} msg · $${Number(p.cost ?? 0).toFixed(4)} · ${Math.round((p.durationMs ?? 0) / 1000)}s`, 'on');
         loadPending(); loadChats();
       } else if (p.kind === 'error') {
         setBonifyProgress(null);
+        if (p.onlyChat) setBusyChats((prev) => { const n = new Set(prev); n.delete(p.onlyChat); return n; });
         toast.push(`Bonifica fallita: ${String(p.error ?? '').slice(0, 200)}`, 'err');
       }
       return;
@@ -387,10 +392,16 @@ export default function WhatsApp() {
                       {c.pending_count > 0 && c.bonified_count > 0 && (
                         <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-400/30">{c.bonified_count}/{c.total_count}</span>
                       )}
-                      {c.auto_bonify && (
+                      {c.auto_bonify && !busyChats.has(c.chat_jid) && (
                         <span className="shrink-0 inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-400/40 font-semibold uppercase tracking-wider" title="Auto-sync attivo">
                           <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />
                           auto-sync
+                        </span>
+                      )}
+                      {busyChats.has(c.chat_jid) && (
+                        <span className="shrink-0 inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-full bg-accent2/15 text-accent2 border border-accent2/40 font-semibold uppercase tracking-wider" title="Bonifica in corso">
+                          <RefreshCw size={9} className="animate-spin" />
+                          sync…
                         </span>
                       )}
                     </div>

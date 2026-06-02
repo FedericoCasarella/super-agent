@@ -890,6 +890,51 @@ router.post('/team-tasks/:id/cancel', async (req, res) => {
   } catch (e: any) { console.error('[POST /team-tasks/:id/cancel]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
 });
 
+// Roadmap v2 — structured JSON model
+router.get('/roadmap-v2', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.getRoadmap(req.user!.id)); }
+  catch (e: any) { console.error('[GET /roadmap-v2]', e); res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/roadmap-v2', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.saveRoadmap(req.user!.id, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/roadmap-v2/stats', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.stats(req.user!.id)); }
+  catch (e: any) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/roadmap-v2/:horizon/todos', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.addTodo(req.user!.id, req.params.horizon as any, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/roadmap-v2/:horizon/todos/:id', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.updateTodo(req.user!.id, req.params.horizon as any, req.params.id, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/roadmap-v2/:horizon/todos/:id', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.deleteTodo(req.user!.id, req.params.horizon as any, req.params.id)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/roadmap-v2/todos/:id/move', async (req, res) => {
+  try {
+    const m = await import('../roadmap/index.js');
+    const { from, to } = req.body ?? {};
+    res.json(await m.moveTodo(req.user!.id, from, req.params.id, to));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/roadmap-v2/strategy', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.setStrategy(req.user!.id, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/roadmap-v2/kpis', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.upsertKpi(req.user!.id, req.body ?? {})); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/roadmap-v2/kpis/:id', async (req, res) => {
+  try { const m = await import('../roadmap/index.js'); res.json(await m.deleteKpi(req.user!.id, req.params.id)); }
+  catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 // Flows
 router.get('/flows', async (req, res) => {
   try { const m = await import('../flows/index.js'); res.json(await m.listFlows(req.user!.id)); }
