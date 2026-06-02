@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 import { Plus, Bot, Trash2 } from 'lucide-react';
 
 type Agent = {
@@ -26,6 +27,7 @@ export function CustomAgentsPanel() {
   const [open, setOpen] = useState<Agent | null>(null);
   const [creating, setCreating] = useState(false);
   const toast = useToast();
+  const dlg = useDialog();
   const nav = useNavigate();
 
   async function load() {
@@ -42,7 +44,7 @@ export function CustomAgentsPanel() {
     } catch (e: any) { toast.push(e.message, 'err'); }
   }
   async function del(a: Agent) {
-    if (!confirm(`Archiviare "${a.name}"?`)) return;
+    if (!await dlg.confirm(`Archiviare "${a.name}"?`, { tone: 'danger', confirmLabel: 'Archivia' })) return;
     try { await api.customAgentDelete(a.id); load(); }
     catch (e: any) { toast.push(e.message, 'err'); }
   }

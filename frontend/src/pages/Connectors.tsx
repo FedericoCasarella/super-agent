@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import AccountsEditor from '../components/AccountsEditor';
 import { Button, Card, Chip, Field, Input, Modal, Toggle, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 import { useI18n } from '../i18n';
 import { useWS } from '../ws';
 import ConnectorIcon from '../components/ConnectorIcon';
@@ -15,6 +16,7 @@ export default function Connectors() {
   const [waState, setWaState] = useState<any>({ status: 'idle' });
 
   const toast = useToast();
+  const dlg = useDialog();
   useWS((msg) => {
     if (msg.type === 'wa:qr') setWaState((s: any) => ({ ...s, status: 'qr', qr: msg.payload.qr }));
     if (msg.type === 'wa:connected') setWaState((s: any) => ({ ...s, status: 'connected', me: { jid: msg.payload.jid } }));
@@ -26,7 +28,7 @@ export default function Connectors() {
     catch (e: any) { toast.push(e.message, 'err'); }
   }
   async function logoutWa() {
-    if (!confirm('Disconnettere WhatsApp? Sessione cancellata, dovrai riscansionare il QR.')) return;
+    if (!await dlg.confirm('Disconnettere WhatsApp? Sessione cancellata, dovrai riscansionare il QR.', { tone: 'danger', confirmLabel: 'Disconnetti' })) return;
     try { await api.waLogout(); toast.push('Disconnesso', 'warn'); loadWa(); }
     catch (e: any) { toast.push(e.message, 'err'); }
   }

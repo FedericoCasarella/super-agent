@@ -55,6 +55,7 @@ export function attachWs(server: Server) {
   bus.on('outbound:logged', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'outbound', payload: m }); });
   bus.on('team_task:event', (m: any) => { for (const c of clients) if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify({ type: 'team_task', payload: m })); });
   bus.on('team_task:tokens', (m: any) => { for (const c of clients) if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify({ type: 'team_task_tokens', payload: m })); });
+  bus.on('flow:event', (m: any) => { for (const c of clients) if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify({ type: 'flow', payload: m })); });
   bus.on('wa:qr', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:qr', payload: m }); });
   bus.on('wa:connected', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:connected', payload: m }); });
   bus.on('wa:closed', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:closed', payload: m }); });

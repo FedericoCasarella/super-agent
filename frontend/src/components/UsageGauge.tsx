@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { useToast } from './ui';
+import { useDialog } from './dialog';
 
 type Usage = {
   plan: { name: string; sessionLimitTokens: number; costBudgetUsd: number };
@@ -58,6 +59,7 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
   const [partyOn, setPartyOn] = useState(false);
   const prevTokensRef = useRef<number | null>(null);
   const toast = useToast();
+  const dlg = useDialog();
   async function load() {
     try {
       const next = await api.usage();
@@ -96,28 +98,29 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
   }
 
   async function calibrate() {
-    const realPctStr = prompt(`Calibra budget. Apri il TUI Claude → /cost → leggi il % attuale.\n\nCost speso (ccusage): $${(u!.costUsd ?? 0).toFixed(2)}\nBudget attuale stimato: $${(u!.plan.costBudgetUsd ?? 0).toFixed(2)}\n\nInserisci % reale mostrato in /cost (es. 37):`);
+    const realPctStr = await dlg.prompt(
+      `Calibra budget. Apri il TUI Claude → /cost → leggi il % attuale.\n\nCost speso (ccusage): $${(u!.costUsd ?? 0).toFixed(2)}\nBudget attuale stimato: $${(u!.plan.costBudgetUsd ?? 0).toFixed(2)}\n\nInserisci % reale mostrato in /cost (es. 37):`,
+      { title: 'Sync con /cost', placeholder: 'es. 37', confirmLabel: 'Salva' },
+    );
     if (!realPctStr) return;
     const realPct = parseFloat(realPctStr) / 100;
     if (!realPct || realPct <= 0 || realPct > 1) return;
     const newBudget = (u!.costUsd ?? 0) / realPct;
-    if (!isFinite(newBudget) || newBudget <= 0) return alert('Cost attuale è 0 — impossibile calibrare.');
+    if (!isFinite(newBudget) || newBudget <= 0) {
+      await dlg.alert('Cost attuale è 0 — impossibile calibrare.', { tone: 'danger' });
+      return;
+    }
     try {
       await api.updatePlan({ name: u!.plan.name, costBudgetUsd: Math.round(newBudget * 100) / 100 });
       load();
-    } catch (e: any) { alert(`Errore: ${e.message}`); }
+    } catch (e: any) { await dlg.alert(`Errore: ${e.message}`, { tone: 'danger' }); }
   }
 
   return (
     <>
       <div className="px-1 py-2">
-        <div className="flex items-center justify-between mb-1">
-          <div className="text-[11px] font-semibold">
-            Limiti piano <span className="text-muted font-normal">· {u.plan.name}</span>
-          </div>
-          <button onClick={calibrate} title="Sincronizza con /cost di Claude" className="text-[9px] px-1.5 py-0.5 rounded-md border border-accent/40 text-accent hover:bg-accent/10 transition uppercase tracking-wider font-semibold">
-            sync /cost
-          </button>
+        <div className="text-[11px] font-semibold mb-1">
+          Limiti piano <span className="text-muted font-normal">· {u.plan.name}</span>
         </div>
         <div className="text-[10px] text-muted mb-1.5">Sessione corrente</div>
         <div className="flex items-center gap-2">

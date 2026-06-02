@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import ForceGraph2D from 'react-force-graph-2d';
 import { api } from '../api';
 import { Button, Card, Chip, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 import { useWS } from '../ws';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 import MarkdownView from '../components/MarkdownView';
@@ -45,6 +46,7 @@ export default function TeamTaskDetail() {
   const [events, setEvents] = useState<Event[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
   const toast = useToast();
+  const dlg = useDialog();
   const fgRef = useRef<any>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const zoomedRef = useRef(false);
@@ -225,7 +227,7 @@ export default function TeamTaskDetail() {
           <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={13} /></Button>
           {task?.status === 'running' && (
             <Button variant="danger" size="sm" onClick={async () => {
-              if (!confirm('Interrompere il task? Tutti gli agenti in esecuzione verranno killati.')) return;
+              if (!await dlg.confirm('Interrompere il task? Tutti gli agenti in esecuzione verranno killati.', { title: 'Interrompi task', tone: 'danger', confirmLabel: 'Interrompi' })) return;
               try { await api.teamTaskCancel(taskId); toast.push('Task interrotto', 'warn'); load(); }
               catch (e: any) { toast.push(e.message, 'err'); }
             }}>⏹ Interrompi</Button>

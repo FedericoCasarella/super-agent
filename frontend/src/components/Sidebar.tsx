@@ -10,7 +10,7 @@ import { api } from '../api';
 import { useWS } from '../ws';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
-  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send, Bot, Network as NetworkIcon,
+  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -48,6 +48,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/people', label: 'People', icon: UsersIcon },
     // { to: '/network', label: 'Network', icon: Share2 }, // hidden: needs server infra
     { to: '/teams', label: 'Teams', icon: NetworkIcon },
+    { to: '/flows', label: 'Flows', icon: Workflow },
     { to: '/outbound', label: 'Inviati', icon: Send },
     { to: '/logs', label: 'Logs', icon: ScrollText },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },

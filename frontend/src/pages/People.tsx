@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Input, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 import { Search, ChevronLeft, ChevronRight, Sparkles, Users as UsersIcon, ArrowUpDown, BrainCircuit, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import BrainLoading from '../components/BrainLoading';
@@ -41,6 +42,7 @@ export default function PeoplePage() {
     finally { setPsyLoading(false); }
   }
   const toast = useToast();
+  const dlg = useDialog();
   const nav = useNavigate();
 
   const offset = page * limit;
@@ -64,7 +66,7 @@ export default function PeoplePage() {
   }, [qInput]);
 
   async function dedupe() {
-    if (!confirm('Lancia un sub-agent che troverà e unirà duplicati in People + brain.\n\nL\'esecuzione sarà tracciata nella pagina Agents. Procedo?')) return;
+    if (!await dlg.confirm('Lancia un sub-agent che troverà e unirà duplicati in People + brain.\n\nL\'esecuzione sarà tracciata nella pagina Agents. Procedo?', { title: 'Bonifica duplicati', tone: 'danger', confirmLabel: 'Lancia' })) return;
     setDedupBusy(true);
     try {
       const r = await api.peopleDedupeAgent();

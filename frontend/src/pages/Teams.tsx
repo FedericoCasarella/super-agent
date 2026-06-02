@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 import { Plus, Users, Trash2, Edit3 } from 'lucide-react';
 
 type Team = { id: number; name: string; description: string | null };
@@ -14,6 +15,7 @@ export default function Teams() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [editing, setEditing] = useState<TeamFull | null>(null);
   const toast = useToast();
+  const dlg = useDialog();
   const nav = useNavigate();
 
   async function load() {
@@ -29,7 +31,7 @@ export default function Teams() {
     catch (e: any) { toast.push(e.message, 'err'); }
   }
   async function createTeam() {
-    const name = prompt('Nome del team?');
+    const name = await dlg.prompt('Nome del team?', { title: 'Nuovo team', placeholder: 'es. Marketing crew' });
     if (!name) return;
     try {
       const t = await api.teamCreate({ name, description: '' });
@@ -49,7 +51,7 @@ export default function Teams() {
     } catch (e: any) { toast.push(e.message, 'err'); }
   }
   async function deleteTeam(t: Team) {
-    if (!confirm(`Archiviare team "${t.name}"?`)) return;
+    if (!await dlg.confirm(`Archiviare team "${t.name}"?`, { title: 'Conferma', tone: 'danger', confirmLabel: 'Archivia' })) return;
     try { await api.teamDelete(t.id); load(); }
     catch (e: any) { toast.push(e.message, 'err'); }
   }

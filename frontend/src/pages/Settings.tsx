@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Field, Input, Textarea, Modal, Banner, Chip, Toggle, useToast } from '../components/ui';
+import { useDialog } from '../components/dialog';
 import { useI18n, Lang } from '../i18n';
 import { useAuth } from '../auth';
 import BrainLoading from '../components/BrainLoading';
@@ -26,6 +27,7 @@ export default function Settings() {
   useEffect(() => { load(); }, []);
 
   const toast = useToast();
+  const dlg = useDialog();
   const { t, lang, setLang } = useI18n();
   const { deleteAccount } = useAuth();
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -53,7 +55,7 @@ export default function Settings() {
     catch (e: any) { toast.push(e.message, 'err'); }
   }
   async function removeVault(v: any) {
-    if (!confirm(t('settings.confirmRemoveVault').replace('{name}', v.name))) return;
+    if (!await dlg.confirm(t('settings.confirmRemoveVault').replace('{name}', v.name), { tone: 'danger', confirmLabel: 'Rimuovi' })) return;
     try { await api.vaultsDelete(v.id); toast.push(t('settings.vaultRemoved'), 'warn'); await loadVaults(); await load(); }
     catch (e: any) { toast.push(e.message, 'err'); }
   }
