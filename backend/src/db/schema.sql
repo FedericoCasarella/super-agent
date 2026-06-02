@@ -428,6 +428,26 @@ DO $$ BEGIN
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
 
+-- Outbound communications log — every WhatsApp / email / Telegram message the agent
+-- sends on behalf of the user. Append-only audit trail. Origin = perk name, agent,
+-- sub-agent title prefix, or 'user' (manual UI action).
+CREATE TABLE IF NOT EXISTS outbound_log (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  channel TEXT NOT NULL,           -- 'whatsapp' | 'email' | 'telegram'
+  status TEXT NOT NULL,            -- 'sent' | 'error'
+  recipient TEXT,                  -- jid / email / chatId
+  recipient_name TEXT,             -- resolved display name
+  subject TEXT,                    -- email subject (null for chat channels)
+  body TEXT,                       -- full text (truncated to 16k by sender)
+  origin TEXT,                     -- perk name, 'agent', 'subagent:<title>', 'user'
+  error TEXT,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS outbound_log_user_ts_idx ON outbound_log(user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS outbound_log_user_channel_idx ON outbound_log(user_id, channel, ts DESC);
+
 CREATE TABLE IF NOT EXISTS plugins (
   id BIGSERIAL PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,

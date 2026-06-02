@@ -114,6 +114,16 @@ export const api = {
   waSuggestReply: (jid: string, hint?: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
   waSyncChat: (jid: string, batches = 3) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/sync`, { method: 'POST', body: JSON.stringify({ batches }) }),
   waSetChatAutoBonify: (jid: string, enabled: boolean) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/auto-bonify`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  outboundList: (opts: { channel?: 'whatsapp' | 'email' | 'telegram'; status?: 'sent' | 'error'; q?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.channel) p.set('channel', opts.channel);
+    if (opts.status) p.set('status', opts.status);
+    if (opts.q) p.set('q', opts.q);
+    if (opts.limit) p.set('limit', String(opts.limit));
+    if (opts.offset) p.set('offset', String(opts.offset));
+    return req<{ rows: any[]; totals: any }>(`/outbound?${p}`);
+  },
+  outboundGet: (id: number) => req<any>(`/outbound/${id}`),
   waSendMessage: (jid: string, text: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/send`, { method: 'POST', body: JSON.stringify({ text }) }),
   waChats: () => req<any[]>('/whatsapp/chats'),
   waChatMessages: (jid: string) => req<any[]>(`/whatsapp/chats/${encodeURIComponent(jid)}/messages`),

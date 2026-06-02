@@ -16,6 +16,7 @@ import AgentDetail from './pages/AgentDetail';
 import LiveAgents from './pages/LiveAgents';
 import PeoplePage from './pages/People';
 import WhatsApp from './pages/WhatsApp';
+import Outbound from './pages/Outbound';
 import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
 import MessageSound from './components/MessageSound';
@@ -91,6 +92,7 @@ export default function App() {
             <Route path="/live-agents" element={<Navigate to="/agents" replace />} />
             <Route path="/network" element={<Network />} />
             <Route path="/logs" element={<Logs />} />
+            <Route path="/outbound" element={<Outbound />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

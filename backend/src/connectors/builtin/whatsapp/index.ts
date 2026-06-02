@@ -423,13 +423,28 @@ export async function suggestReply(userId: number, chatJid: string, opts: { hint
   return { ok: true, draft };
 }
 
-export async function sendWaMessage(userId: number, chatJid: string, text: string): Promise<{ ok: boolean; error?: string }> {
+export async function sendWaMessage(userId: number, chatJid: string, text: string, origin: string = 'user'): Promise<{ ok: boolean; error?: string }> {
+  const { logOutbound } = await import('../../../comm/outbound_log.js');
   const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') return { ok: false, error: 'WhatsApp non connesso' };
-  if (!text || !text.trim()) return { ok: false, error: 'empty text' };
+  if (!s || s.status !== 'connected') {
+    await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, body: text, origin, error: 'WhatsApp non connesso' });
+    return { ok: false, error: 'WhatsApp non connesso' };
+  }
+  if (!text || !text.trim()) {
+    await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, body: text, origin, error: 'empty text' });
+    return { ok: false, error: 'empty text' };
+  }
+  // Resolve recipient display name for log
+  let recipientName: string | null = null;
+  try {
+    const r = await query<{ name: string | null }>(
+      `SELECT COALESCE(name, verified_name, notify) AS name FROM wa_contacts WHERE user_id=$1 AND jid=$2 LIMIT 1`,
+      [userId, chatJid],
+    );
+    recipientName = r[0]?.name ?? null;
+  } catch {}
   try {
     const sent: any = await (s.sock as any).sendMessage(chatJid, { text });
-    // Persist as outgoing
     const id = sent?.key?.id ?? `${Date.now()}`;
     try {
       await query(
@@ -443,9 +458,17 @@ export async function sendWaMessage(userId: number, chatJid: string, text: strin
       userId,
       msg: { id, chat_jid: chatJid, sender_jid: s.me?.jid ?? '', sender_phone: null, sender_name: 'TU', person_slug: null, is_group: chatJid.endsWith('@g.us'), group_jid: chatJid.endsWith('@g.us') ? chatJid : null, from_me: true, text, ts: new Date().toISOString() },
     });
+    await logOutbound({
+      userId, channel: 'whatsapp', status: 'sent',
+      recipient: chatJid, recipient_name: recipientName,
+      body: text, origin,
+      meta: { msg_id: id, is_group: chatJid.endsWith('@g.us') },
+    });
     return { ok: true };
   } catch (e: any) {
-    return { ok: false, error: String(e?.message ?? e).slice(0, 500) };
+    const err = String(e?.message ?? e).slice(0, 500);
+    await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, recipient_name: recipientName, body: text, origin, error: err });
+    return { ok: false, error: err };
   }
 }
 

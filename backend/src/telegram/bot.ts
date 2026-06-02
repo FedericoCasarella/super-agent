@@ -253,23 +253,43 @@ export async function restartTelegramForUser(userId: number) {
   await startBotForUser(userId);
 }
 
-export async function sendTelegram(userId: number, text: string) {
+export async function sendTelegram(userId: number, text: string, origin: string = 'agent') {
+  const { logOutbound } = await import('../comm/outbound_log.js');
   const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
-  if (!cfg?.token || !cfg?.chatId) throw new Error(`telegram not configured for user ${userId}`);
+  if (!cfg?.token || !cfg?.chatId) {
+    await logOutbound({ userId, channel: 'telegram', status: 'error', body: text, origin, error: 'telegram not configured' });
+    throw new Error(`telegram not configured for user ${userId}`);
+  }
   // Lazy-start if bots map is empty (tsx-watch reload can wipe singleton)
   if (!bots.get(userId)) {
     console.log(`[telegram:${userId}] lazy-start before send`);
     await startBotForUser(userId);
   }
   const entry = bots.get(userId);
-  if (!entry) throw new Error(`telegram bot init failed for user ${userId}`);
+  if (!entry) {
+    await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: text, origin, error: 'telegram bot init failed' });
+    throw new Error(`telegram bot init failed for user ${userId}`);
+  }
   const parts = text.split('<<MSG>>').map((p) => p.trim()).filter(Boolean);
   for (const p of parts) {
+    let sentOk = true;
+    let err: string | null = null;
     try {
       await entry.bot.telegram.sendMessage(cfg.chatId, toTelegramHtml(p), { parse_mode: 'HTML' });
-    } catch {
-      await entry.bot.telegram.sendMessage(cfg.chatId, p.replace(/\*\*|__|`/g, ''));
+    } catch (e: any) {
+      try {
+        await entry.bot.telegram.sendMessage(cfg.chatId, p.replace(/\*\*|__|`/g, ''));
+      } catch (e2: any) {
+        sentOk = false;
+        err = String(e2?.message ?? e2 ?? e?.message ?? e).slice(0, 500);
+      }
     }
+    await logOutbound({
+      userId, channel: 'telegram',
+      status: sentOk ? 'sent' : 'error',
+      recipient: String(cfg.chatId), body: p, origin,
+      error: err, meta: { parts: parts.length },
+    });
     await new Promise((r) => setTimeout(r, 250));
   }
 }

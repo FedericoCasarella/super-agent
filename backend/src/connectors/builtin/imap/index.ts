@@ -204,15 +204,28 @@ export async function sendDraft(userId: number, id: number): Promise<EmailDraft>
   // Re-validate at send time (meta is DB-stored; never trust it blindly).
   const attachmentPaths: string[] = await safeAttachmentPaths(d.meta?.attachments ?? []);
   const attachments = attachmentPaths.map((p) => ({ path: p }));
+  const { logOutbound } = await import('../../../comm/outbound_log.js');
   try {
     await t.sendMail({ from, to: d.to_addr, cc: d.cc_addr ?? undefined, bcc: d.bcc_addr ?? undefined, subject: d.subject, text: d.body, headers, ...(attachments.length ? { attachments } : {}) });
     await query(`UPDATE email_drafts SET status='sent', sent_at=now(), decided_at=COALESCE(decided_at, now()) WHERE id=$1`, [id]);
     bus.emit('email_draft:sent', { userId, id });
+    await logOutbound({
+      userId, channel: 'email', status: 'sent',
+      recipient: d.to_addr, subject: d.subject, body: d.body,
+      origin: 'user',
+      meta: { draft_id: id, account: d.account_label, cc: d.cc_addr ?? null, bcc: d.bcc_addr ?? null, in_reply_to: d.in_reply_to ?? null, attachments: attachmentPaths.length },
+    });
     return { ...d, status: 'sent', sent_at: new Date().toISOString() };
   } catch (e: any) {
     const msg = String(e?.message ?? e).slice(0, 800);
     await query(`UPDATE email_drafts SET status='error', error=$2, decided_at=COALESCE(decided_at, now()) WHERE id=$1`, [id, msg]);
     bus.emit('email_draft:error', { userId, id, error: msg });
+    await logOutbound({
+      userId, channel: 'email', status: 'error',
+      recipient: d.to_addr, subject: d.subject, body: d.body,
+      origin: 'user', error: msg,
+      meta: { draft_id: id, account: d.account_label },
+    });
     throw e;
   }
 }

@@ -319,6 +319,48 @@ router.get('/logs/:id', async (req, res) => {
   res.json(rows[0]);
 });
 
+// Outbound communications audit log
+router.get('/outbound', async (req, res) => {
+  const userId = req.user!.id;
+  const limit = Math.min(Number(req.query.limit ?? 100), 500);
+  const offset = Math.max(0, Number(req.query.offset ?? 0));
+  const channel = req.query.channel ? String(req.query.channel) : null;
+  const status = req.query.status ? String(req.query.status) : null;
+  const q = req.query.q ? String(req.query.q).trim() : null;
+  const where: string[] = ['user_id=$1'];
+  const params: any[] = [userId];
+  if (channel && ['whatsapp','email','telegram'].includes(channel)) { where.push(`channel=$${params.length + 1}`); params.push(channel); }
+  if (status && ['sent','error'].includes(status)) { where.push(`status=$${params.length + 1}`); params.push(status); }
+  if (q) { where.push(`(lower(coalesce(recipient,'')) LIKE $${params.length + 1} OR lower(coalesce(recipient_name,'')) LIKE $${params.length + 1} OR lower(coalesce(subject,'')) LIKE $${params.length + 1} OR lower(coalesce(body,'')) LIKE $${params.length + 1})`); params.push(`%${q.toLowerCase()}%`); }
+  params.push(limit); params.push(offset);
+  const rows = await query<any>(
+    `SELECT id::int, ts, channel, status, recipient, recipient_name, subject,
+            LEFT(coalesce(body,''), 320) AS body_preview, origin, error, meta
+     FROM outbound_log WHERE ${where.join(' AND ')}
+     ORDER BY id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
+  );
+  const totals = await query<any>(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE status='error')::int AS errors,
+            count(*) FILTER (WHERE channel='whatsapp')::int AS whatsapp,
+            count(*) FILTER (WHERE channel='email')::int AS email,
+            count(*) FILTER (WHERE channel='telegram')::int AS telegram
+     FROM outbound_log WHERE user_id=$1`,
+    [userId],
+  );
+  res.json({ rows, totals: totals[0] ?? { total: 0 } });
+});
+router.get('/outbound/:id', async (req, res) => {
+  const rows = await query(
+    `SELECT id::int, ts, channel, status, recipient, recipient_name, subject, body, origin, error, meta
+     FROM outbound_log WHERE id=$1 AND user_id=$2`,
+    [req.params.id, req.user!.id],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  res.json(rows[0]);
+});
+
 router.get('/logs/stats/summary', async (req, res) => {
   const userId = req.user!.id;
   const rows = await query<any>(
