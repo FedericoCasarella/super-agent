@@ -52,6 +52,7 @@ export function attachWs(server: Server) {
   bus.on('brain:access', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'brain:access', payload: m }); });
   bus.on('subagent:event', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'subagent', payload: m }); });
   bus.on('tool:use', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'tool:use', payload: m }); });
+  bus.on('outbound:logged', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'outbound', payload: m }); });
   bus.on('wa:qr', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:qr', payload: m }); });
   bus.on('wa:connected', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:connected', payload: m }); });
   bus.on('wa:closed', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:closed', payload: m }); });

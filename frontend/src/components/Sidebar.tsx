@@ -7,7 +7,7 @@ import ActiveAgentsBadge from './ActiveAgentsBadge';
 import { useBranding } from '../branding';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
-  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon,
+  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -33,6 +33,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
     { to: '/people', label: 'People', icon: UsersIcon },
     // { to: '/network', label: 'Network', icon: Share2 }, // hidden: needs server infra
+    { to: '/outbound', label: 'Inviati', icon: Send },
     { to: '/logs', label: 'Logs', icon: ScrollText },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
   ];

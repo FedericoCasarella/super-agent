@@ -128,7 +128,7 @@ export async function runInternalAgent(userId: number, name: string) {
         msg = appendFileLinks(msg, paths, lang);
       }
       console.log(`[internal-agents:u${userId}:${name}] sending telegram (${lang})`);
-      await sendTelegram(userId, msg);
+      await sendTelegram(userId, msg, `perk:${name}`);
       console.log(`[internal-agents:u${userId}:${name}] telegram sent`);
     }
   } catch (e) { console.error(`[internal-agents:u${userId}:${name}] notify failed`, e); }
