@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, Textarea, Toggle, Modal, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
+import { Calendar, Users as UsersIcon } from 'lucide-react';
+import { TeamTasksPanel } from './TeamTasks';
 
 type Task = {
   id: number;
@@ -104,13 +107,30 @@ export default function Tasks() {
     }
   }
 
+  const [sp, setSp] = useSearchParams();
+  const tab = (sp.get('tab') === 'team' ? 'team' : 'scheduled') as 'scheduled' | 'team';
+  const setTab = (v: 'scheduled' | 'team') => { const n = new URLSearchParams(sp); n.set('tab', v); setSp(n, { replace: true }); };
+
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gradient">{t('tasks.title')}</h1>
-        <Button onClick={openCreate}>{t('tasks.new')}</Button>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-semibold text-gradient">Tasks</h1>
+          <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
+            <Button size="sm" variant={tab === 'scheduled' ? 'primary' : 'ghost'} onClick={() => setTab('scheduled')}>
+              <Calendar size={13} className="inline mr-1 -mt-0.5" />Scheduled
+            </Button>
+            <Button size="sm" variant={tab === 'team' ? 'primary' : 'ghost'} onClick={() => setTab('team')}>
+              <UsersIcon size={13} className="inline mr-1 -mt-0.5" />Team
+            </Button>
+          </div>
+        </div>
+        {tab === 'scheduled' && <Button onClick={openCreate}>{t('tasks.new')}</Button>}
       </div>
 
+      {tab === 'team' && <TeamTasksPanel />}
+
+      {tab === 'scheduled' && <>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {items.length === 0 && <Card><div className="text-muted text-sm">{t('tasks.none')}</div></Card>}
         {items.map((task) => (
@@ -147,6 +167,7 @@ export default function Tasks() {
           </Card>
         ))}
       </div>
+      </>}
 
       <Modal
         open={modalOpen}

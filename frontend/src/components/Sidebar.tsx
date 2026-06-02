@@ -1,13 +1,16 @@
 import { NavLink } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n';
 import { useAuth } from '../auth';
 import { Button } from './ui';
 import UsageGauge from './UsageGauge';
 import ActiveAgentsBadge from './ActiveAgentsBadge';
 import { useBranding } from '../branding';
+import { api } from '../api';
+import { useWS } from '../ws';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
-  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send,
+  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send, Bot, Network as NetworkIcon,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -22,17 +25,29 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
   const { t } = useI18n();
   const { user, logout } = useAuth();
   const { branding } = useBranding();
-  const items: { to: string; label: string; icon: LucideIcon }[] = [
+  // Tasks running counter — refreshed via WS team_task events + 30s fallback poll
+  const [tasksRunning, setTasksRunning] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.teamTasksRunningCount().then((r) => { if (alive) setTasksRunning(r.running); }).catch(() => {});
+    load();
+    const iv = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+  useWS((msg) => { if (msg?.type === 'team_task') { api.teamTasksRunningCount().then((r) => setTasksRunning(r.running)).catch(() => {}); } });
+
+  const items: { to: string; label: string; icon: LucideIcon; badge?: number }[] = [
     { to: '/', label: t('nav.live'), icon: Activity },
     { to: '/connectors', label: t('nav.connectors'), icon: Plug },
     { to: '/brain', label: t('nav.brain'), icon: Brain },
     { to: '/roadmap', label: t('nav.roadmap'), icon: MapIcon },
-    { to: '/tasks', label: 'Tasks', icon: ListChecks },
+    { to: '/tasks', label: 'Tasks', icon: ListChecks, badge: tasksRunning > 0 ? tasksRunning : undefined },
     { to: '/agents', label: 'Agents', icon: Zap },
     { to: '/perks', label: 'Perks', icon: Sparkles },
     { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
     { to: '/people', label: 'People', icon: UsersIcon },
     // { to: '/network', label: 'Network', icon: Share2 }, // hidden: needs server infra
+    { to: '/teams', label: 'Teams', icon: NetworkIcon },
     { to: '/outbound', label: 'Inviati', icon: Send },
     { to: '/logs', label: 'Logs', icon: ScrollText },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
@@ -91,7 +106,10 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
                   <>
                     {isActive && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-gradient-to-b from-accent to-accent2" />}
                     <Icon size={18} className={isActive ? 'text-accent2' : 'text-accent/70 group-hover:text-accent2'} />
-                    <span className={collapsed ? 'md:hidden' : ''}>{it.label}</span>
+                    <span className={`flex-1 ${collapsed ? 'md:hidden' : ''}`}>{it.label}</span>
+                    {it.badge != null && (
+                      <span className={`text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 animate-pulse ${collapsed ? 'md:hidden' : ''}`}>{it.badge}</span>
+                    )}
                   </>
                 )}
               </NavLink>

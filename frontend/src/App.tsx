@@ -13,10 +13,13 @@ import Logs from './pages/Logs';
 import Tasks from './pages/Tasks';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
-import LiveAgents from './pages/LiveAgents';
 import PeoplePage from './pages/People';
 import WhatsApp from './pages/WhatsApp';
 import Outbound from './pages/Outbound';
+import AgentsHub from './pages/AgentsHub';
+import Teams from './pages/Teams';
+import TeamTasks from './pages/TeamTasks';
+import TeamTaskDetail from './pages/TeamTaskDetail';
 import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
 import MessageSound from './components/MessageSound';
@@ -86,13 +89,17 @@ export default function App() {
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/perks" element={<Agents />} />
             <Route path="/perks/:name" element={<AgentDetail />} />
-            <Route path="/agents" element={<LiveAgents />} />
+            <Route path="/agents" element={<AgentsHub />} />
             <Route path="/whatsapp" element={<WhatsApp />} />
             <Route path="/people" element={<PeoplePage />} />
             <Route path="/live-agents" element={<Navigate to="/agents" replace />} />
             <Route path="/network" element={<Network />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/outbound" element={<Outbound />} />
+            <Route path="/custom-agents" element={<Navigate to="/agents?tab=custom" replace />} />
+            <Route path="/teams" element={<Teams />} />
+            <Route path="/team-tasks" element={<Navigate to="/tasks?tab=team" replace />} />
+            <Route path="/team-tasks/:id" element={<TeamTaskDetail />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

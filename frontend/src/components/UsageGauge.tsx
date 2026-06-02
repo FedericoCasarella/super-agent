@@ -110,9 +110,14 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
 
   return (
     <>
-      <div className="px-1 py-2 cursor-pointer" onClick={calibrate} title="Click per calibrare il limite">
-        <div className="text-[11px] font-semibold mb-1">
-          Limiti piano <span className="text-muted font-normal">· {u.plan.name}</span>
+      <div className="px-1 py-2">
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-[11px] font-semibold">
+            Limiti piano <span className="text-muted font-normal">· {u.plan.name}</span>
+          </div>
+          <button onClick={calibrate} title="Sincronizza con /cost di Claude" className="text-[9px] px-1.5 py-0.5 rounded-md border border-accent/40 text-accent hover:bg-accent/10 transition uppercase tracking-wider font-semibold">
+            sync /cost
+          </button>
         </div>
         <div className="text-[10px] text-muted mb-1.5">Sessione corrente</div>
         <div className="flex items-center gap-2">
@@ -121,7 +126,10 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
           </div>
           <span className="text-[10px] text-muted font-mono shrink-0">{Math.round(pct * 100)}%</span>
         </div>
-        <div className="text-[9px] text-muted mt-1">Reset tra {fmtReset(u.resetAt)}</div>
+        <div className="text-[9px] text-muted mt-1 flex items-center justify-between">
+          <span>Reset tra {fmtReset(u.resetAt)}</span>
+          {(u.plan as any).manuallyCalibrated && <span className="text-emerald-300/70" title="Calibrato manualmente">✓ cal</span>}
+        </div>
       </div>
       {partyOn && <Confetti />}
     </>

@@ -43,6 +43,69 @@ const connector: Connector = {
   },
   tools: [
     {
+      name: 'teams_list',
+      description: 'List user-defined custom agents and teams. Use when planning a task to decide if an existing agent/team fits or a new one is needed.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => {
+        const t = await import('../../../teams/index.js');
+        const [agents, teams] = await Promise.all([t.listAgents(ctx.userId), t.listTeams(ctx.userId)]);
+        return {
+          agents: agents.map((a) => ({ id: a.id, name: a.name, role: a.role, description: a.description, skills: a.skills })),
+          teams: teams.map((tm) => ({ id: tm.id, name: tm.name, description: tm.description })),
+        };
+      },
+    },
+    {
+      name: 'team_create_task',
+      description: 'Create and START a task for a team or a single custom agent. Prefer existing teams/agents over creating new ones. If indecisive on which agent/team to pick, ASK the user first (do NOT call this tool blindly). Returns task_id. The task runs async; monitor via team_task_get.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          prompt: { type: 'string', description: 'Self-contained brief: goal, context, deliverable spec, constraints. Lead agent receives this.' },
+          team_id: { type: 'number', description: 'Either team_id OR agent_id (not both).' },
+          agent_id: { type: 'number' },
+        },
+        required: ['title', 'prompt'], additionalProperties: false,
+      },
+      handler: async (ctx, { title, prompt, team_id, agent_id }) => {
+        if (!team_id && !agent_id) throw new Error('team_id or agent_id required');
+        const t = await import('../../../teams/index.js');
+        const task = await t.createTask(ctx.userId, { title, prompt, teamId: team_id ?? null, agentId: agent_id ?? null, createdBy: 'agent' });
+        return { task_id: task.id, status: task.status };
+      },
+    },
+    {
+      name: 'team_task_get',
+      description: 'Read status + result + recent events for a team task.',
+      inputSchema: { type: 'object', properties: { task_id: { type: 'number' } }, required: ['task_id'], additionalProperties: false },
+      handler: async (ctx, { task_id }) => {
+        const t = await import('../../../teams/index.js');
+        const task = await t.getTask(ctx.userId, task_id);
+        if (!task) throw new Error('task not found');
+        const events = await t.getTaskEvents(task_id);
+        return { task, events: events.slice(-30) };
+      },
+    },
+    {
+      name: 'team_delegate',
+      description: 'INTERNAL — called by agents running INSIDE a team task to delegate a sub-task to another team member. Requires active task context (auto-resolved from the calling agent run). Returns the delegated agent\'s response synchronously.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task_id: { type: 'number' },
+          from_agent_id: { type: 'number' },
+          to_agent_id: { type: 'number' },
+          prompt: { type: 'string' },
+        },
+        required: ['task_id', 'from_agent_id', 'to_agent_id', 'prompt'], additionalProperties: false,
+      },
+      handler: async (_ctx, { task_id, from_agent_id, to_agent_id, prompt }) => {
+        const t = await import('../../../teams/index.js');
+        return await t.delegateToAgent(task_id, from_agent_id, to_agent_id, prompt);
+      },
+    },
+    {
       name: 'brain_search',
       description: 'MANDATORY first step on EVERY user turn. Fast full-text + tag search over the second-brain index. Returns top-N matching notes with path, title, tags, summary. Emits brain:access events for the MRI animation. Call this BEFORE composing your reply, for ANY topic (person, project, fact, decision, history). If user mentions a name → also call people_search. NEVER answer from memory if the brain might know.',
       inputSchema: {
