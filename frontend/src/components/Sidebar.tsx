@@ -8,6 +8,7 @@ import ActiveAgentsBadge from './ActiveAgentsBadge';
 import { useBranding } from '../branding';
 import { api } from '../api';
 import { useLiveData } from '../ws';
+import { usePageVisibility, type PageKey } from '../pageVisibility';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
   Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow, Camera as IgIcon,
@@ -32,7 +33,10 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
   }, []);
   useLiveData(loadTasksRunning, { refreshOn: ['team_task'], fallbackMs: 120_000 });
 
-  const items: { to: string; label: string; icon: LucideIcon; badge?: number }[] = [
+  const { isVisible } = usePageVisibility();
+  // Each item can carry an optional `gate` PageKey — if set, the entry is
+  // hidden when that page has been toggled off in Settings.
+  const allItems: { to: string; label: string; icon: LucideIcon; badge?: number; gate?: PageKey }[] = [
     { to: '/', label: t('nav.live'), icon: Activity },
     { to: '/connectors', label: t('nav.connectors'), icon: Plug },
     { to: '/brain', label: t('nav.brain'), icon: Brain },
@@ -40,16 +44,16 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/tasks', label: 'Tasks', icon: ListChecks, badge: tasksRunning > 0 ? tasksRunning : undefined },
     { to: '/agents', label: 'Agents', icon: Zap },
     { to: '/perks', label: 'Perks', icon: Sparkles },
-    { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
-    { to: '/instagram', label: 'Instagram', icon: IgIcon },
-    { to: '/people', label: 'People', icon: UsersIcon },
-    // { to: '/network', label: 'Network', icon: Share2 }, // hidden: needs server infra
-    { to: '/teams', label: 'Teams', icon: NetworkIcon },
-    { to: '/flows', label: 'Flows', icon: Workflow },
-    { to: '/outbound', label: 'Inviati', icon: Send },
-    { to: '/logs', label: 'Logs', icon: ScrollText },
+    { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, gate: 'whatsapp' },
+    { to: '/instagram', label: 'Instagram', icon: IgIcon, gate: 'instagram' },
+    { to: '/people', label: 'People', icon: UsersIcon, gate: 'people' },
+    { to: '/teams', label: 'Teams', icon: NetworkIcon, gate: 'teams' },
+    { to: '/flows', label: 'Flows', icon: Workflow, gate: 'flows' },
+    { to: '/outbound', label: 'Inviati', icon: Send, gate: 'outbound' },
+    { to: '/logs', label: 'Logs', icon: ScrollText, gate: 'logs' },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
   ];
+  const items = allItems.filter((it) => !it.gate || isVisible(it.gate));
   const widthClass = collapsed ? 'md:w-[72px]' : 'md:w-64';
 
   return (

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { useWS, useLiveData } from '../ws';
+import { useQuotaLock } from '../quota';
 import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { Camera as IgIcon, MessageCircle, RefreshCw, Sparkles, Send, LogOut, Lock, ShieldAlert, X, Image as ImageIcon, Film, Headphones, Link as LinkIcon, AlertCircle, Music, Sticker, Wand2 } from 'lucide-react';
@@ -316,6 +317,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
   const [filter, setFilter] = useState('');
   const dlg = useDialog();
   const toast = useToast();
+  const { locked: quotaLocked, lockProps } = useQuotaLock();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const loadThreads = useCallback(async () => {
@@ -606,7 +608,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                   <Button size="sm" variant="ghost" onClick={syncThread} disabled={syncingThread} title="Scarica messaggi storici">
                     <RefreshCw size={12} className={`inline mr-1 -mt-0.5 ${syncingThread ? 'animate-spin' : ''}`} />Sync
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={bonifyThread} disabled={bonifying || selectedThread.pending_count === 0} title="Classifica + salva nel brain">
+                  <Button size="sm" variant="ghost" onClick={bonifyThread} {...lockProps} disabled={bonifying || selectedThread.pending_count === 0 || quotaLocked} title={lockProps.title ?? 'Classifica + salva nel brain'}>
                     <Sparkles size={12} className={`inline mr-1 -mt-0.5 ${bonifying ? 'animate-pulse' : ''}`} />Bonifica
                   </Button>
                 </div>
@@ -668,8 +670,8 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                   )}
                   <button
                     onClick={suggestAi}
-                    disabled={suggesting}
-                    title="Suggerisci risposta AI"
+                    disabled={suggesting || quotaLocked}
+                    title={lockProps.title ?? 'Suggerisci risposta AI'}
                     className="shrink-0 flex items-center justify-center w-10 self-stretch bg-gradient-to-br from-purple-500 to-pink-500 text-white hover:opacity-90 disabled:opacity-60 transition"
                   >
                     <Sparkles size={16} className={suggesting ? 'animate-pulse' : ''} />
@@ -683,7 +685,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                     className="flex-1 bg-transparent px-3 py-2 text-sm resize-none outline-none min-h-[40px] max-h-32"
                   />
                 </div>
-                <Button onClick={() => send(aiDraft ? 'ai' : 'user')} disabled={!text.trim()} className="self-stretch px-4 flex items-center">
+                <Button onClick={() => send(aiDraft ? 'ai' : 'user')} disabled={!text.trim() || quotaLocked} title={lockProps.title} className="self-stretch px-4 flex items-center">
                   <Send size={14} className="inline mr-1.5 -mt-0.5" />
                   {isSendingAny ? `Invia (${pendingForThread.length})` : 'Invia'}
                 </Button>

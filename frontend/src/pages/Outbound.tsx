@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Input, useToast } from '../components/ui';
 import { useWS } from '../ws';
-import { Search, Send, AlertCircle, X, MessageCircle, Mail, MessageSquare } from 'lucide-react';
+import { Search, Send, AlertCircle, X, MessageCircle, Mail, MessageSquare, Camera, Activity } from 'lucide-react';
 
-type Channel = 'whatsapp' | 'email' | 'telegram';
+type Channel = 'whatsapp' | 'email' | 'telegram' | 'instagram';
+const CHANNEL_FALLBACK = { label: '—', icon: Activity, color: 'text-muted' };
 type Status = 'sent' | 'error';
 
 type Row = {
@@ -26,6 +27,7 @@ const CHANNEL_META: Record<Channel, { label: string; icon: any; color: string }>
   whatsapp: { label: 'WhatsApp', icon: MessageCircle, color: 'text-emerald-300' },
   email: { label: 'Email', icon: Mail, color: 'text-sky-300' },
   telegram: { label: 'Telegram', icon: MessageSquare, color: 'text-blue-300' },
+  instagram: { label: 'Instagram', icon: Camera, color: 'text-pink-300' },
 };
 
 function fmtDate(s: string): string {
@@ -123,7 +125,7 @@ export default function Outbound() {
         ) : (
           <div className="space-y-1">
             {rows.map((r) => {
-              const meta = CHANNEL_META[r.channel];
+              const meta = CHANNEL_META[r.channel] ?? CHANNEL_FALLBACK;
               const Icon = meta.icon;
               const recipient = r.recipient_name || r.recipient || '—';
               return (
@@ -164,7 +166,7 @@ export default function Outbound() {
           <div onClick={(e) => e.stopPropagation()} className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
             <div className="flex items-center justify-between px-5 py-3 border-b border-border">
               <div className="flex items-center gap-2 min-w-0">
-                {(() => { const M = CHANNEL_META[openRow.channel as Channel]; const I = M.icon; return <I size={18} className={M.color} />; })()}
+                {(() => { const M = CHANNEL_META[openRow.channel as Channel] ?? CHANNEL_FALLBACK; const I = M.icon; return <I size={18} className={M.color} />; })()}
                 <div className="min-w-0">
                   <div className="font-semibold text-sm truncate">{openRow.recipient_name || openRow.recipient || '—'}</div>
                   <div className="text-[10px] text-muted font-mono truncate">{fmtDate(openRow.ts)} · {openRow.channel}</div>

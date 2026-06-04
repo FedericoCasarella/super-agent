@@ -114,7 +114,7 @@ export const api = {
   waSuggestReply: (jid: string, hint?: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
   waSyncChat: (jid: string, batches = 3) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/sync`, { method: 'POST', body: JSON.stringify({ batches }) }),
   waSetChatAutoBonify: (jid: string, enabled: boolean) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/auto-bonify`, { method: 'POST', body: JSON.stringify({ enabled }) }),
-  outboundList: (opts: { channel?: 'whatsapp' | 'email' | 'telegram'; status?: 'sent' | 'error'; q?: string; limit?: number; offset?: number } = {}) => {
+  outboundList: (opts: { channel?: 'whatsapp' | 'email' | 'telegram' | 'instagram'; status?: 'sent' | 'error'; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();
     if (opts.channel) p.set('channel', opts.channel);
     if (opts.status) p.set('status', opts.status);
