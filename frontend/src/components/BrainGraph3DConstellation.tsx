@@ -772,11 +772,10 @@ export default function BrainGraph3DConstellation({
           }}
           onBackgroundClick={() => { setSelected(null); onDeselect?.(); }}
           enableNodeDrag
-          cooldownTicks={Infinity}
-          cooldownTime={Infinity}
-          warmupTicks={80}
-          d3AlphaDecay={0.04}
-          d3VelocityDecay={0.5}
+          cooldownTicks={400}
+          warmupTicks={60}
+          d3AlphaDecay={0.05}
+          d3VelocityDecay={0.55}
         />
       )}
     </div>
