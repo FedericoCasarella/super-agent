@@ -476,7 +476,9 @@ export default function BrainGraph3DConstellation({
 
   // Focus set: focused node + 1-hop neighbors
   const focusSet = useMemo(() => {
-    const focus = hover ?? selected;
+    // Selection wins over hover — hovering a different node must NOT replace
+    // the focused subgraph. Hover-only when nothing is selected.
+    const focus = selected ?? hover;
     if (!focus) return null;
     const set = new Set<string>([focus]);
     for (const l of data.links) {
@@ -487,6 +489,46 @@ export default function BrainGraph3DConstellation({
     }
     return set;
   }, [hover, selected, data]);
+
+  // Highlight focused subgraph in the instanced mesh + lines. Dim everything
+  // outside the focus set so the hovered node + its neighbours stand out.
+  useEffect(() => {
+    const inst = instMeshRef.current;
+    const lines = linesRef.current;
+    if (!inst || !lines) return;
+    const _c = new THREE.Color();
+    const DIM = 0.12;
+    const LINE_DIM = 0.05;
+    const LINE_BRIGHT = 0.6;
+    const nodes = data.nodes as any[];
+    // Instance colors
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      _c.set(colorFor(n));
+      const active = !focusSet || focusSet.has(n.id);
+      if (!active) { _c.r *= DIM; _c.g *= DIM; _c.b *= DIM; }
+      inst.setColorAt(i, _c);
+    }
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    // Line per-vertex colors
+    const colAttr = lines.geometry.getAttribute('color') as THREE.BufferAttribute;
+    const arr = colAttr.array as Float32Array;
+    const idToNode = new Map(nodes.map((n) => [n.id, n]));
+    for (let i = 0; i < data.links.length; i++) {
+      const l: any = data.links[i];
+      const sId = typeof l.source === 'object' ? l.source.id : l.source;
+      const tId = typeof l.target === 'object' ? l.target.id : l.target;
+      const sN: any = idToNode.get(sId);
+      const tN: any = idToNode.get(tId);
+      const focusHit = focusSet && (focusSet.has(sId) && focusSet.has(tId));
+      const k = focusSet ? (focusHit ? LINE_BRIGHT : LINE_DIM) : 0.35;
+      _c.set(sN ? colorFor(sN) : '#888');
+      arr[i * 6]     = _c.r * k; arr[i * 6 + 1] = _c.g * k; arr[i * 6 + 2] = _c.b * k;
+      _c.set(tN ? colorFor(tN) : '#888');
+      arr[i * 6 + 3] = _c.r * k; arr[i * 6 + 4] = _c.g * k; arr[i * 6 + 5] = _c.b * k;
+    }
+    colAttr.needsUpdate = true;
+  }, [focusSet, data]);
 
   // Label-only extension; library owns the default sphere so onNodeHover fires reliably
   // =====================================================================
@@ -531,13 +573,42 @@ export default function BrainGraph3DConstellation({
       inst.setColorAt(i, col);
     }
     inst.instanceColor!.needsUpdate = true;
+    inst.frustumCulled = false;
+    // Seed matrices from current node positions so the mesh is visible (and
+    // raycastable) on frame 0, before the engine ticks.
+    const _mat = new THREE.Matrix4();
+    for (let i = 0; i < data.nodes.length; i++) {
+      const n: any = data.nodes[i];
+      const r = 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
+      _mat.makeScale(r, r, r);
+      _mat.setPosition(n.x ?? 0, n.y ?? 0, n.z ?? 0);
+      inst.setMatrixAt(i, _mat);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    inst.computeBoundingSphere();
     scene.add(inst);
     instMeshRef.current = inst;
     // Lines geometry — 2 positions per link, all in one buffer.
+    // Per-vertex colors → each segment gradients from source-node color to
+    // target-node color (matches the connected node visually).
     const linkGeom = new THREE.BufferGeometry();
     const linePos = new Float32Array(data.links.length * 6);
+    const lineCol = new Float32Array(data.links.length * 6);
+    const idToNode = new Map(data.nodes.map((n: any) => [n.id, n]));
+    const _c = new THREE.Color();
+    for (let i = 0; i < data.links.length; i++) {
+      const l: any = data.links[i];
+      const sId = typeof l.source === 'object' ? l.source.id : l.source;
+      const tId = typeof l.target === 'object' ? l.target.id : l.target;
+      const sNode: any = idToNode.get(sId);
+      const tNode: any = idToNode.get(tId);
+      const dim = 0.35;
+      _c.set(sNode ? colorFor(sNode) : '#888'); lineCol[i * 6]     = _c.r * dim; lineCol[i * 6 + 1] = _c.g * dim; lineCol[i * 6 + 2] = _c.b * dim;
+      _c.set(tNode ? colorFor(tNode) : '#888'); lineCol[i * 6 + 3] = _c.r * dim; lineCol[i * 6 + 4] = _c.g * dim; lineCol[i * 6 + 5] = _c.b * dim;
+    }
     linkGeom.setAttribute('position', new THREE.BufferAttribute(linePos, 3).setUsage(THREE.DynamicDrawUsage));
-    const linkMat = new THREE.LineBasicMaterial({ color: 0x778899, transparent: true, opacity: 0.35 });
+    linkGeom.setAttribute('color', new THREE.BufferAttribute(lineCol, 3));
+    const linkMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.22, depthWrite: false });
     const lines = new THREE.LineSegments(linkGeom, linkMat);
     scene.add(lines);
     linesRef.current = lines;
@@ -546,6 +617,169 @@ export default function BrainGraph3DConstellation({
       if (linesRef.current) { scene.remove(linesRef.current); linesRef.current.geometry.dispose(); (linesRef.current.material as THREE.Material).dispose(); linesRef.current = null; }
     };
   }, [data, sharedSphereGeom]);
+
+  // Click + hover on InstancedMesh — raycast manually. Click (short press)
+  // zooms to node and opens the note; pointermove sets hover state used to
+  // render the floating label HTML overlay.
+  useEffect(() => {
+    const fg: any = fgRef.current;
+    if (!fg) return;
+    const renderer = fg.renderer?.();
+    const dom: HTMLElement | undefined = renderer?.domElement;
+    if (!dom) return;
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let downAt = 0; let downX = 0; let downY = 0;
+    let lastHoverIdx = -1;
+
+    const mouseFromEvent = (e: PointerEvent) => {
+      const rect = dom.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    };
+
+    const raycastNode = (e: PointerEvent): number => {
+      const inst = instMeshRef.current;
+      const cam = fg.camera?.();
+      if (!inst || !cam) return -1;
+      mouseFromEvent(e);
+      raycaster.setFromCamera(mouse, cam);
+      const hits = raycaster.intersectObject(inst, false);
+      return (hits.length && hits[0].instanceId != null) ? hits[0].instanceId : -1;
+    };
+
+    const onDown = (e: PointerEvent) => {
+      downAt = performance.now(); downX = e.clientX; downY = e.clientY;
+    };
+    const onUp = (e: PointerEvent) => {
+      const dt = performance.now() - downAt;
+      const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+      if (dt > 300 || moved > 4) return;
+      const idx = raycastNode(e);
+      if (idx < 0) {
+        setSelected(null);
+        setHover(null);
+        onDeselect?.();
+        // Also reset the camera framing so the focus animation fully unwinds.
+        const cam = fg.camera?.();
+        if (cam) {
+          fg.cameraPosition({ x: cam.position.x, y: cam.position.y, z: cam.position.z }, undefined, 0);
+        }
+        return;
+      }
+      const n: any = (data.nodes as any[])[idx];
+      if (!n) return;
+      setSelected(n.id);
+      onSelect(n.id);
+      if (n.x != null) {
+        const dist = 130;
+        const len = Math.hypot(n.x, n.y, n.z) || 1;
+        const ratio = 1 + dist / len;
+        fg.cameraPosition({ x: n.x * ratio, y: n.y * ratio, z: n.z * ratio }, n, 1000);
+      }
+    };
+    // Pointermove throttled to ~25fps — enough for snappy hover, cheap on CPU.
+    let lastMove = 0;
+    const onMove = (e: PointerEvent) => {
+      const t = performance.now();
+      if (t - lastMove < 40) return;
+      lastMove = t;
+      const idx = raycastNode(e);
+      if (idx !== lastHoverIdx) {
+        lastHoverIdx = idx;
+        const n: any = idx >= 0 ? (data.nodes as any[])[idx] : null;
+        setHover(n?.id ?? null);
+      }
+    };
+    dom.addEventListener('pointerdown', onDown);
+    dom.addEventListener('pointerup', onUp);
+    dom.addEventListener('pointermove', onMove);
+    return () => {
+      dom.removeEventListener('pointerdown', onDown);
+      dom.removeEventListener('pointerup', onUp);
+      dom.removeEventListener('pointermove', onMove);
+    };
+  }, [data, onSelect, onDeselect]);
+
+  // Label overlay state — list of {id, title, x, y} computed by projecting
+  // node world position to screen each animation frame. Rendered as absolute
+  // HTML divs over the canvas.
+  type LabelHit = { id: string; title: string; x: number; y: number; mode: 'hover' | 'zoom' };
+  const [labels, setLabels] = useState<LabelHit[]>([]);
+  useEffect(() => {
+    let raf = 0;
+    const tmpV = new THREE.Vector3();
+    const ZOOM_THRESHOLD = 900;          // camera distance below which all labels appear
+    const MAX_AUTO_LABELS = 120;         // cap so DOM stays light
+    const loop = () => {
+      const fg: any = fgRef.current;
+      const cam = fg?.camera?.();
+      const renderer = fg?.renderer?.();
+      const dom: HTMLElement | undefined = renderer?.domElement;
+      if (!cam || !dom) { raf = requestAnimationFrame(loop); return; }
+      const rect = dom.getBoundingClientRect();
+      const target = (fg.controls?.()?.target as THREE.Vector3) ?? new THREE.Vector3();
+      const camDist = cam.position.distanceTo(target);
+      const showAll = camDist < ZOOM_THRESHOLD;
+      const out: LabelHit[] = [];
+      // Project + return depth (smaller = closer to camera). Also reject if
+      // the projected point falls outside the visible viewport.
+      const project = (n: any): { x: number; y: number; depth: number } | null => {
+        tmpV.set(n.x ?? 0, n.y ?? 0, n.z ?? 0).project(cam);
+        if (tmpV.z > 1 || tmpV.z < -1) return null;
+        const x = (tmpV.x * 0.5 + 0.5) * rect.width;
+        const y = (-tmpV.y * 0.5 + 0.5) * rect.height;
+        const PAD = 80;
+        if (x < -PAD || x > rect.width + PAD || y < -PAD || y > rect.height + PAD) return null;
+        return { x, y, depth: tmpV.z };
+      };
+      // Selected label — sticks until user clicks empty space.
+      if (selected) {
+        const n: any = (data.nodes as any[]).find((x: any) => x.id === selected);
+        if (n) {
+          const p = project(n);
+          if (p) out.push({ id: n.id, title: n.title || n.id, x: p.x, y: p.y, mode: 'hover' });
+        }
+      }
+      // Hover label (only if not the same as selected)
+      if (hover && hover !== selected) {
+        const n: any = (data.nodes as any[]).find((x: any) => x.id === hover);
+        if (n) {
+          const p = project(n);
+          if (p) out.push({ id: n.id, title: n.title || n.id, x: p.x, y: p.y, mode: 'hover' });
+        }
+      }
+      // Zoom labels — depth-sort closest first, viewport-clip, anti-overlap.
+      if (showAll) {
+        const projected: { n: any; p: { x: number; y: number; depth: number } }[] = [];
+        for (const n of (data.nodes as any[])) {
+          if (n.id === hover) continue;
+          const p = project(n);
+          if (!p) continue;
+          projected.push({ n, p });
+        }
+        projected.sort((a, b) => a.p.depth - b.p.depth); // closer first
+        const placed: { x: number; y: number }[] = [];
+        const MIN_DIST = 36;                    // pixel spacing between labels
+        let added = 0;
+        for (const { n, p } of projected) {
+          if (added >= MAX_AUTO_LABELS) break;
+          let collide = false;
+          for (const q of placed) {
+            if (Math.hypot(p.x - q.x, p.y - q.y) < MIN_DIST) { collide = true; break; }
+          }
+          if (collide) continue;
+          placed.push({ x: p.x, y: p.y });
+          out.push({ id: n.id, title: n.title || n.id, x: p.x, y: p.y, mode: 'zoom' });
+          added++;
+        }
+      }
+      setLabels(out);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [hover, selected, data]);
 
   // Per-frame position copy. Force-graph fires onEngineTick during simulation;
   // we read each node's x/y/z and write directly to the InstancedMesh matrix.
@@ -556,12 +790,13 @@ export default function BrainGraph3DConstellation({
     const nodes = data.nodes as any[];
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
-      const r = 1.5 + Math.sqrt(n.size ?? 1) * 0.5;
+      const r = 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
       tmpMat4.makeScale(r, r, r);
       tmpMat4.setPosition(n.x ?? 0, n.y ?? 0, n.z ?? 0);
       inst.setMatrixAt(i, tmpMat4);
     }
     inst.instanceMatrix.needsUpdate = true;
+    inst.computeBoundingSphere(); // keep raycast bounds in sync with sim
     // Update line positions from links.
     const lines = linesRef.current;
     if (lines) {
@@ -758,26 +993,50 @@ export default function BrainGraph3DConstellation({
           linkOpacity={0}
           linkWidth={0}
           linkDirectionalParticles={0}
-          onNodeHover={(n: any) => setHover(n?.id ?? null)}
-          onNodeClick={(n: any) => {
-            setSelected(n.id);
-            onSelect(n.id);
-            const fg: any = fgRef.current;
-            if (fg && n.x != null) {
-              const dist = 130;
-              const len = Math.hypot(n.x, n.y, n.z) || 1;
-              const ratio = 1 + dist / len;
-              fg.cameraPosition({ x: n.x * ratio, y: n.y * ratio, z: n.z * ratio }, n, 1000);
-            }
-          }}
-          onBackgroundClick={() => { setSelected(null); onDeselect?.(); }}
-          enableNodeDrag
+          // NOTE: force-graph's onBackgroundClick fires for every click that
+          // doesn't hit a per-node Object3D. Our nodes live in an InstancedMesh
+          // so force-graph sees zero hits → EVERY click triggers background,
+          // including clicks ON nodes, immediately clearing selection. The
+          // custom raycast in the pointer effect above is the canonical
+          // handler; don't wire force-graph's events here.
+          enableNodeDrag={false}
+          enablePointerInteraction={false}
           cooldownTicks={400}
           warmupTicks={60}
           d3AlphaDecay={0.05}
           d3VelocityDecay={0.55}
         />
       )}
+      {/* Label overlay — absolute-positioned DOM, super cheap vs Three sprites. */}
+      <div className="absolute inset-0 pointer-events-none select-none" style={{ overflow: 'hidden' }}>
+        {labels.map((lab) => (
+          <div
+            key={`${lab.mode}-${lab.id}`}
+            style={{
+              position: 'absolute',
+              left: lab.x,
+              top: lab.y,
+              transform: 'translate(-50%, calc(-100% - 12px))',
+              fontFamily: 'Inter, system-ui, sans-serif',
+              fontSize: lab.mode === 'hover' ? 12 : 10,
+              fontWeight: lab.mode === 'hover' ? 600 : 500,
+              lineHeight: 1,
+              padding: lab.mode === 'hover' ? '5px 9px' : '3px 6px',
+              borderRadius: 6,
+              background: lab.mode === 'hover' ? 'rgba(8,16,28,0.95)' : 'rgba(8,16,28,0.65)',
+              border: lab.mode === 'hover' ? '1px solid #4b6bff' : '1px solid rgba(120,140,180,0.25)',
+              color: lab.mode === 'hover' ? '#e8e8f0' : 'rgba(220,225,240,0.85)',
+              whiteSpace: 'normal',
+              wordBreak: 'break-word',
+              boxShadow: lab.mode === 'hover' ? '0 4px 14px rgba(0,0,0,0.6)' : 'none',
+              maxWidth: 260,
+              zIndex: lab.mode === 'hover' ? 20 : 10,
+            }}
+          >
+            {lab.title}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
