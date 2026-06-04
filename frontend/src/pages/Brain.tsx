@@ -130,7 +130,6 @@ export default function Brain() {
       {tab === 'graph' && (
         <div className="flex gap-2 flex-wrap">
           {VaultBar}
-          {OriginBar}
         </div>
       )}
 
