@@ -4,7 +4,7 @@ import { CheckCircle2, XCircle, AlertCircle, Ban, Bot, Clock as ClockIcon } from
 import { api } from '../api';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
-import { useWS } from '../ws';
+import { useWS, useLiveData } from '../ws';
 
 type SubAgent = {
   id: number; title: string; brief: string | null; prompt: string; status: string;
@@ -80,10 +80,11 @@ export function LiveAgentsPanel() {
     } catch (e: any) { toast.push(e.message, 'err'); }
   }
 
-  useEffect(() => { refresh(); const iv = setInterval(refresh, 5000); return () => clearInterval(iv); }, []);
+  useLiveData(refresh, { refreshOn: ['subagent', 'internal_agent', 'agent_proposal'], fallbackMs: 120_000 });
 
   useWS((msg) => {
     if (msg?.type !== 'subagent') return;
+    // also called by useLiveData but kept here in case extra event-side handling
     refresh();
   });
 

@@ -54,6 +54,22 @@ async function main() {
     }
   } catch (e) { console.error('[wa] boot scan failed', e); }
 
+  // Auto-restore Instagram sessions for users with persisted state.json
+  try {
+    const fs = await import('node:fs/promises');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const root = path.join(os.homedir(), '.super-agent', 'ig-sessions');
+    const entries = await fs.readdir(root).catch(() => [] as string[]);
+    const ig = await import('./connectors/builtin/instagram/index.js');
+    for (const e of entries) {
+      const m = e.match(/^u(\d+)$/);
+      if (!m) continue;
+      const uid = Number(m[1]);
+      try { await ig.startIgForUser(uid); } catch (err) { console.error(`[ig:u${uid}] boot start failed`, err); }
+    }
+  } catch (e) { console.error('[ig] boot scan failed', e); }
+
   if (config.devAutoLogin) {
     console.warn('⚠️  [auth] DEV_AUTOLOGIN attivo — login BYPASSATO, auto-auth come utente locale. NON usare in produzione/distribuzione.');
   }

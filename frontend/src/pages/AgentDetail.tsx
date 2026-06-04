@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useLiveData } from '../ws';
 import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 import { usePerkCooldown } from '../hooks/usePerkCooldown';
@@ -31,22 +32,15 @@ export default function AgentDetail() {
   const { left: cdLeft, start: cdStart, clear: cdClear } = usePerkCooldown(60);
   const cd = cdLeft(name);
 
-  async function load() {
+  const load = useCallback(async () => {
     const all = await api.internalAgents();
     const a = all.find((x: any) => x.name === name);
     if (!a) { nav('/perks'); return; }
     setAgent(a); setHour(a.hour); setMinute(a.minute);
     setIntervalHours(a.interval_hours ?? null);
     setCadence(a.interval_hours && a.interval_hours > 0 ? 'interval' : 'daily');
-  }
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [name]);
-  // Poll while running so UI flips back to "runNow" when execution completes
-  useEffect(() => {
-    if (!agent?.running) return;
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent?.running]);
+  }, [name, nav]);
+  useLiveData(load, { refreshOn: ['internal_agent'], fallbackMs: 120_000, deps: [name] });
 
   async function saveSchedule() {
     const ih = cadence === 'interval' ? Math.max(1, Math.min(168, Number(intervalHours ?? 3))) : null;

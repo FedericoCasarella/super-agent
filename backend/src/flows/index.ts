@@ -216,6 +216,14 @@ async function runStep(userId: number, runId: number, step: FlowStep, ctx: any):
       const r = await wa.sendWaMessage(userId, jid, text, `flow:${ctx.flow.id}`);
       return { ok: r.ok, output: { sent: r.ok }, error: r.error };
     }
+    case 'instagram.send': {
+      const ig = await import('../connectors/builtin/instagram/index.js');
+      const tid = String(config.thread_id ?? '');
+      const text = String(config.text ?? '');
+      if (!tid || !text) return { ok: false, error: 'thread_id + text required' };
+      const r = await ig.sendIgMessage(userId, tid, text, `flow:${ctx.flow.id}`, 'ai');
+      return { ok: r.ok, output: { sent: r.ok }, error: r.error };
+    }
     case 'brain.write_note': {
       const path = String(config.path ?? '');
       const body = String(config.body ?? '');
@@ -335,6 +343,8 @@ export function attachFlowDispatchers() {
   busAttached = true;
   // WhatsApp incoming
   bus.on('wa:message', (m: any) => { if (m?.userId) dispatchTrigger('whatsapp.received', m.userId, m); });
+  // Instagram DM incoming
+  bus.on('ig:message', (m: any) => { if (m?.userId) dispatchTrigger('instagram.received', m.userId, m); });
   // Telegram incoming
   bus.on('telegram:incoming', (m: any) => { if (m?.userId) dispatchTrigger('telegram.received', m.userId, m); });
   // Voice transcribed (telegram bot emits as telegram:incoming with transcript text; we also rebroadcast)

@@ -4,7 +4,7 @@ import ForceGraph2D from 'react-force-graph-2d';
 import { api } from '../api';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
-import { useWS } from '../ws';
+import { useWS, useLiveData } from '../ws';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 import MarkdownView from '../components/MarkdownView';
 
@@ -60,7 +60,7 @@ export default function TeamTaskDetail() {
     } catch (e: any) { toast.push(e.message, 'err'); }
   }, [taskId, agents.length, toast]);
 
-  useEffect(() => { load(); const iv = setInterval(load, 3000); return () => clearInterval(iv); }, [load]);
+  useLiveData(load, { refreshOn: ['team_task', 'team_task_tokens', 'tool_use'], fallbackMs: 60_000, deps: [taskId] });
 
   // Live tool feed — every tool_use emitted by an agent running inside THIS task.
   type LiveTool = { ts: number; name: string; brief: string; agent_id: number | null; kind: string | null };

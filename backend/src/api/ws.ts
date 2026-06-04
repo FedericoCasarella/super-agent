@@ -62,4 +62,15 @@ export function attachWs(server: Server) {
   bus.on('wa:message', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:message', payload: m }); });
   bus.on('wa:bonify', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:bonify', payload: m }); });
   bus.on('wa:synced', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:synced', payload: m }); });
+  // Instagram DM events
+  bus.on('ig:status', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'ig:status', payload: m }); });
+  bus.on('ig:message', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'ig:message', payload: m }); });
+  bus.on('ig:bonify', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'ig:bonify', payload: m }); });
+  bus.on('ig:sync', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'ig:sync', payload: m }); });
+  bus.on('ig:activity', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'ig:activity', payload: m }); });
+  // Internal agents (perks): start/done/updated
+  bus.on('internal_agent:event', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'internal_agent', payload: m }); });
+  // Scheduled tasks lifecycle
+  bus.on('task:event', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'task', payload: m }); });
+  bus.on('usage:update', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'usage', payload: m }); });
 }

@@ -149,11 +149,13 @@ export async function createDraft(userId: number, accountLabel: string, draft: {
   if (!accs.find((a) => a.label === accountLabel)) throw new Error(`account ${accountLabel} not found`);
   // Store the resolved real paths so send-time reads exactly what was validated.
   const safePaths = draft.attachments?.length ? await safeAttachmentPaths(draft.attachments) : [];
-  const meta = safePaths.length ? { attachments: safePaths } : null;
+  // meta column is JSONB NOT NULL — never pass null. Always serialize an
+  // object (empty when there are no attachments).
+  const meta = safePaths.length ? { attachments: safePaths } : {};
   const rows = await query<EmailDraft>(
     `INSERT INTO email_drafts(user_id, account_label, to_addr, cc_addr, bcc_addr, subject, body, in_reply_to, references_ids, status, meta)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10) RETURNING *`,
-    [userId, accountLabel, draft.to, draft.cc ?? null, draft.bcc ?? null, draft.subject, draft.body, draft.inReplyTo ?? null, draft.references ?? null, meta],
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10::jsonb) RETURNING *`,
+    [userId, accountLabel, draft.to, draft.cc ?? null, draft.bcc ?? null, draft.subject, draft.body, draft.inReplyTo ?? null, draft.references ?? null, JSON.stringify(meta)],
   );
   const d = rows[0];
   bus.emit('email_draft:created', { userId, draft: d });

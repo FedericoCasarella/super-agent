@@ -15,6 +15,7 @@ import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import PeoplePage from './pages/People';
 import WhatsApp from './pages/WhatsApp';
+import InstagramPage from './pages/Instagram';
 import Outbound from './pages/Outbound';
 import FlowsPage from './pages/Flows';
 import FlowDetail from './pages/FlowDetail';
@@ -93,6 +94,7 @@ export default function App() {
             <Route path="/perks/:name" element={<AgentDetail />} />
             <Route path="/agents" element={<AgentsHub />} />
             <Route path="/whatsapp" element={<WhatsApp />} />
+            <Route path="/instagram" element={<InstagramPage />} />
             <Route path="/people" element={<PeoplePage />} />
             <Route path="/live-agents" element={<Navigate to="/agents" replace />} />
             <Route path="/network" element={<Network />} />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useLiveData } from '../ws';
 import { Button, Card, Chip, Field, Input, useToast } from '../components/ui';
 import { Plus } from 'lucide-react';
 
@@ -24,7 +25,7 @@ export function TeamTasksPanel() {
       setTasks(t); setTeams(tm); setAgents(ag);
     } catch (e: any) { toast.push(e.message, 'err'); }
   }, [toast]);
-  useEffect(() => { load(); const iv = setInterval(load, 5000); return () => clearInterval(iv); }, [load]);
+  useLiveData(load, { refreshOn: ['team_task', 'team_task_tokens'], fallbackMs: 120_000 });
 
   async function submit() {
     if (!draft.title || !draft.prompt || (!draft.team_id && !draft.agent_id)) return;

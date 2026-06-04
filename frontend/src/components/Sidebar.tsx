@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '../i18n';
 import { useAuth } from '../auth';
 import { Button } from './ui';
@@ -7,10 +7,10 @@ import UsageGauge from './UsageGauge';
 import ActiveAgentsBadge from './ActiveAgentsBadge';
 import { useBranding } from '../branding';
 import { api } from '../api';
-import { useWS } from '../ws';
+import { useLiveData } from '../ws';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
-  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow,
+  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow, Camera as IgIcon,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -25,16 +25,12 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
   const { t } = useI18n();
   const { user, logout } = useAuth();
   const { branding } = useBranding();
-  // Tasks running counter — refreshed via WS team_task events + 30s fallback poll
+  // Tasks running counter — WS-driven via team_task events, long fallback safety.
   const [tasksRunning, setTasksRunning] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    const load = () => api.teamTasksRunningCount().then((r) => { if (alive) setTasksRunning(r.running); }).catch(() => {});
-    load();
-    const iv = setInterval(load, 30_000);
-    return () => { alive = false; clearInterval(iv); };
+  const loadTasksRunning = useCallback(async () => {
+    try { const r = await api.teamTasksRunningCount(); setTasksRunning(r.running); } catch {}
   }, []);
-  useWS((msg) => { if (msg?.type === 'team_task') { api.teamTasksRunningCount().then((r) => setTasksRunning(r.running)).catch(() => {}); } });
+  useLiveData(loadTasksRunning, { refreshOn: ['team_task'], fallbackMs: 120_000 });
 
   const items: { to: string; label: string; icon: LucideIcon; badge?: number }[] = [
     { to: '/', label: t('nav.live'), icon: Activity },
@@ -45,6 +41,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/agents', label: 'Agents', icon: Zap },
     { to: '/perks', label: 'Perks', icon: Sparkles },
     { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
+    { to: '/instagram', label: 'Instagram', icon: IgIcon },
     { to: '/people', label: 'People', icon: UsersIcon },
     // { to: '/network', label: 'Network', icon: Share2 }, // hidden: needs server infra
     { to: '/teams', label: 'Teams', icon: NetworkIcon },
@@ -64,9 +61,9 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
 
       <aside
         className={[
-          'glass border-r border-border flex flex-col gap-1 p-3 shrink-0',
+          'glass border-r border-border flex flex-col gap-1 p-3 shrink-0 overflow-hidden',
           'fixed inset-y-0 left-0 z-40 w-64',
-          'md:static md:translate-x-0 transition-transform duration-300 ease-out-expo',
+          'md:static md:h-screen md:translate-x-0 transition-transform duration-300 ease-out-expo',
           widthClass,
           mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
         ].join(' ')}
@@ -82,7 +79,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
           </div>
         </div>
 
-        <nav className="flex flex-col gap-1 mt-2">
+        <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-1 mt-2 pr-1 sidebar-scroll">
           {items.map((it, i) => {
             const Icon = it.icon;
             return (
@@ -118,7 +115,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
           })}
         </nav>
 
-        <div className="mt-auto px-1 pt-4 border-t border-border/60 space-y-2">
+        <div className="shrink-0 px-1 pt-4 border-t border-border/60 space-y-2">
           <ActiveAgentsBadge collapsed={collapsed} />
           <UsageGauge collapsed={collapsed} />
           {!collapsed && <div className="text-xs text-muted truncate font-medium px-1">{user?.name || user?.email}</div>}

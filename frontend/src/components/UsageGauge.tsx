@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { useToast } from './ui';
 import { useDialog } from './dialog';
+import { useLiveData } from '../ws';
 
 type Usage = {
   plan: { name: string; sessionLimitTokens: number; costBudgetUsd: number };
@@ -60,7 +61,7 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
   const prevTokensRef = useRef<number | null>(null);
   const toast = useToast();
   const dlg = useDialog();
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const next = await api.usage();
       const prev = prevTokensRef.current;
@@ -73,8 +74,10 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
       prevTokensRef.current = next.costUsd ?? 0;
       setU(next);
     } catch {}
-  }
-  useEffect(() => { load(); const id = setInterval(load, 60_000); return () => clearInterval(id); }, []);
+  }, [toast]);
+  // WS-driven — backend emits `usage` events when the cached value refreshes.
+  // We still keep a 5min safety fallback so an idle tab eventually reconciles.
+  useLiveData(load, { refreshOn: ['usage'], fallbackMs: 300_000 });
   // Re-render every minute to keep reset timer fresh
   const [, setTick] = useState(0);
   useEffect(() => { const id = setInterval(() => setTick((n) => n + 1), 60_000); return () => clearInterval(id); }, []);

@@ -4,11 +4,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
 import SearchSelect from '../components/SearchSelect';
-import { fetchClaudeModels, fetchCustomAgents, fetchEmailAccounts, fetchPerks, fetchScheduledTasks, fetchTeams, fetchWaChats } from '../components/searchSources';
+import { fetchClaudeModels, fetchCustomAgents, fetchEmailAccounts, fetchPerks, fetchScheduledTasks, fetchTeams, fetchWaChats, fetchIgThreads } from '../components/searchSources';
 import VariableTextarea from '../components/VariableTextarea';
 import { varsForTriggers, type VarDef } from '../components/flowVariables';
 import { useWS } from '../ws';
-import { ArrowLeft, Bell, Bot, ClipboardList, Mail, MessageCircle, MessageSquare, Mic, Plus, Save, Trash2, Workflow, Play, Settings as Cog, Brain, ListChecks, Sparkles, Users as UsersIcon, Globe, Clock, X } from 'lucide-react';
+import { ArrowLeft, Bell, Bot, ClipboardList, Mail, MessageCircle, MessageSquare, Mic, Plus, Save, Trash2, Workflow, Play, Settings as Cog, Brain, ListChecks, Sparkles, Users as UsersIcon, Globe, Clock, X, Camera as IgIcon } from 'lucide-react';
 
 type Trigger = { type: string; config: any };
 type Step = { type: string; name?: string | null; config: any };
@@ -16,6 +16,7 @@ type Flow = { id: number; name: string; description: string | null; enabled: boo
 
 const TRIGGER_TYPES: { type: string; label: string; icon: any; color: string }[] = [
   { type: 'whatsapp.received',  label: 'WhatsApp ricevuto',     icon: MessageCircle,  color: '#25D366' },
+  { type: 'instagram.received', label: 'Instagram DM ricevuto', icon: IgIcon,         color: '#E1306C' },
   { type: 'telegram.received',  label: 'Telegram ricevuto',     icon: MessageSquare,  color: '#26A5E4' },
   { type: 'email.received',     label: 'Email ricevuta',        icon: Mail,           color: '#EA4335' },
   { type: 'voice.received',     label: 'Voce ricevuta',         icon: Mic,            color: '#a78bfa' },
@@ -34,6 +35,7 @@ const STEP_TYPES: { type: string; label: string; icon: any; color: string }[] = 
   { type: 'team.run',         label: 'Attiva team',               icon: UsersIcon,      color: '#c084fc' },
   { type: 'email.send',       label: 'Invia email',               icon: Mail,           color: '#EA4335' },
   { type: 'whatsapp.send',    label: 'Invia WhatsApp',            icon: MessageCircle,  color: '#25D366' },
+  { type: 'instagram.send',   label: 'Invia Instagram DM',        icon: IgIcon,         color: '#E1306C' },
   { type: 'brain.write_note', label: 'Scrivi nota nel brain',     icon: Brain,          color: '#a78bfa' },
   { type: 'delay',            label: 'Attesa (ms)',               icon: Clock,          color: '#fbbf24' },
   { type: 'webhook',          label: 'Webhook HTTP',              icon: Globe,          color: '#94a3b8' },
@@ -68,6 +70,8 @@ function TriggerConfigForm({ trigger, onChange }: { trigger: Trigger; onChange: 
   switch (trigger.type) {
     case 'whatsapp.received':
       return <Field label="Chat (opzionale, filtra)"><SearchSelect value={c.chat_jid} initialLabel={c._chat_jid_label ?? undefined} onChange={(v, opt) => setRef('chat_jid', v, opt)} fetchOptions={fetchWaChats} placeholder="Tutte le chat" /></Field>;
+    case 'instagram.received':
+      return <Field label="Thread (opzionale, filtra)"><SearchSelect value={c.thread_id} initialLabel={c._thread_id_label ?? undefined} onChange={(v, opt) => setRef('thread_id', v, opt)} fetchOptions={fetchIgThreads} placeholder="Tutti i thread" /></Field>;
     case 'telegram.received':
       return <Field label="Contiene testo (opzionale)"><Input value={c.contains ?? ''} onChange={(e) => set('contains', e.target.value || null)} placeholder="es. 'urgente'" /></Field>;
     case 'email.received':
@@ -129,6 +133,11 @@ function StepConfigForm({ step, onChange, vars }: { step: Step; onChange: (s: St
         <Field label="Chat"><SearchSelect value={c.chat_jid} initialLabel={c._chat_jid_label ?? undefined} onChange={(v, opt) => setRef('chat_jid', v, opt)} fetchOptions={fetchWaChats} placeholder="Scegli chat" /></Field>
         <Field label="Testo"><VariableTextarea value={c.text ?? ''} onChange={(v) => set('text', v)} vars={vars} /></Field>
       </>;
+    case 'instagram.send':
+      return <>
+        <Field label="Thread"><SearchSelect value={c.thread_id} initialLabel={c._thread_id_label ?? undefined} onChange={(v, opt) => setRef('thread_id', v, opt)} fetchOptions={fetchIgThreads} placeholder="Scegli thread" /></Field>
+        <Field label="Testo"><VariableTextarea value={c.text ?? ''} onChange={(v) => set('text', v)} vars={vars} /></Field>
+      </>;
     case 'brain.write_note':
       return <>
         <Field label="Path (rel. al vault)"><Input value={c.path ?? ''} onChange={(e) => set('path', e.target.value)} placeholder="flows/output.md" /></Field>
@@ -176,6 +185,7 @@ function stepConfigPreview(s: Step): string {
     case 'team.run':        return c.title ? `→ ${c.title}` : (c.prompt ? String(c.prompt).slice(0, 40) : '');
     case 'email.send':      return [c._account_label ?? c.account, c.to, c.subject].filter(Boolean).join(' · ').slice(0, 60);
     case 'whatsapp.send':   return [c._chat_jid_label ?? c.chat_jid, String(c.text ?? '').slice(0, 30)].filter(Boolean).join(' · ');
+    case 'instagram.send':  return [c._thread_id_label ?? c.thread_id, String(c.text ?? '').slice(0, 30)].filter(Boolean).join(' · ');
     case 'brain.write_note':return c.path ?? '';
     case 'webhook':         return [c.method ?? 'POST', c.url].filter(Boolean).join(' ').slice(0, 60);
     case 'condition':       return String(c.expr ?? '').slice(0, 50);
