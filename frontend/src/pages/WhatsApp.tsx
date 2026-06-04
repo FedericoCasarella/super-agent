@@ -3,6 +3,7 @@ import { api } from '../api';
 import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { useWS } from '../ws';
+import { useQuotaLock } from '../quota';
 import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X } from 'lucide-react';
 import BrainLoading from '../components/BrainLoading';
 
@@ -171,6 +172,7 @@ export default function WhatsApp() {
   useEffect(() => { setDraftReply(''); setSuggesting(false); setSending(false); setComposeText(''); setComposeFromAi(false); }, [selected]);
   const streamRef = useRef<HTMLDivElement>(null);
   const toast = useToast();
+  const { locked: quotaLocked, lockProps } = useQuotaLock();
   const dlg = useDialog();
 
   async function loadPending() { try { const r = await api.waPending(); setPending(r.count ?? 0); } catch {} }
@@ -449,7 +451,7 @@ export default function WhatsApp() {
                       <RefreshCw size={13} className={`inline mr-1 -mt-0.5 ${syncingChat ? 'animate-spin' : ''}`} />
                       {syncingChat ? 'Sync…' : 'Sync chat'}
                     </Button>
-                    <Button size="sm" variant="ghost" disabled={bonifying} onClick={() => bonify(selected)}>
+                    <Button size="sm" variant="ghost" disabled={bonifying || quotaLocked} title={lockProps.title} onClick={() => bonify(selected)}>
                       <Sparkles size={13} className="inline mr-1 -mt-0.5" />Bonifica chat
                     </Button>
                     <div className="inline-flex items-center gap-2 text-[11px] select-none" title="Auto-bonifica ogni 5 minuti i messaggi pending di questa chat">
@@ -469,7 +471,7 @@ export default function WhatsApp() {
                         }}
                       />
                     </div>
-                    <Button size="sm" disabled={suggesting} onClick={suggest}>
+                    <Button size="sm" disabled={suggesting || quotaLocked} title={lockProps.title} onClick={suggest}>
                       <Wand2 size={13} className={`inline mr-1 -mt-0.5 ${suggesting ? 'animate-pulse' : ''}`} />
                       {suggesting ? 'Penso…' : 'Suggerisci risposta'}
                     </Button>
@@ -523,8 +525,8 @@ export default function WhatsApp() {
                   {/* AI button prepended inside the input */}
                   <button
                     onClick={suggest}
-                    disabled={suggesting}
-                    title="Suggerisci risposta AI"
+                    disabled={suggesting || quotaLocked}
+                    title={lockProps.title ?? 'Suggerisci risposta AI'}
                     className="shrink-0 flex items-center justify-center w-10 self-stretch bg-gradient-to-br from-accent2 to-accent text-white hover:opacity-90 disabled:opacity-60 transition"
                   >
                     <Sparkles size={16} className={suggesting ? 'animate-pulse' : ''} />
@@ -538,7 +540,7 @@ export default function WhatsApp() {
                     className="flex-1 bg-transparent px-3 py-2 text-sm resize-none outline-none min-h-[40px] max-h-32"
                   />
                 </div>
-                <Button onClick={sendCompose} disabled={sending || !composeText.trim()} className="self-stretch px-4 flex items-center">
+                <Button onClick={sendCompose} disabled={sending || !composeText.trim() || quotaLocked} title={lockProps.title} className="self-stretch px-4 flex items-center">
                   <Send size={14} className="inline mr-1.5 -mt-0.5" />
                   {sending ? '…' : 'Invia'}
                 </Button>

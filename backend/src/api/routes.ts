@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { query, getSetting, setSetting } from '../db/index.js';
+import { quotaGuard } from '../quota.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
 import { buildGraph } from '../brain/graph.js';
 import { listConnectors, ensureUserConnectorRows } from '../connectors/registry.js';
@@ -730,7 +731,7 @@ router.get('/agent-proposals', async (req, res) => {
   );
   res.json(rows);
 });
-router.post('/agent-proposals/:id/approve', async (req, res) => {
+router.post('/agent-proposals/:id/approve', quotaGuard, async (req, res) => {
   const sa = await import('../sub_agents/index.js');
   try { res.json({ ok: true, spawned: await sa.approveProposal(req.user!.id, Number(req.params.id)) }); }
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
@@ -1025,12 +1026,12 @@ router.post('/whatsapp/chats/:jid/auto-bonify', async (req, res) => {
   try { res.json(await m.setChatAutoBonify(req.user!.id, req.params.jid, enabled)); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
-router.post('/whatsapp/chats/:jid/suggest', async (req, res) => {
+router.post('/whatsapp/chats/:jid/suggest', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   try { res.json(await m.suggestReply(req.user!.id, req.params.jid, { hint: req.body?.hint })); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
-router.post('/whatsapp/chats/:jid/send', async (req, res) => {
+router.post('/whatsapp/chats/:jid/send', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const text = String(req.body?.text ?? '');
   const source: 'user' | 'ai' = req.body?.source === 'ai' ? 'ai' : 'user';
@@ -1059,7 +1060,7 @@ router.get('/whatsapp/pending', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   res.json({ count: await m.pendingCount(req.user!.id) });
 });
-router.post('/whatsapp/bonify', async (req, res) => {
+router.post('/whatsapp/bonify', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const limit = Number(req.body?.limit ?? 100);
   const onlyChat = req.body?.onlyChat ?? undefined;
@@ -1115,13 +1116,13 @@ router.get('/instagram/threads/:id/messages', async (req, res) => {
   const m = await import('../connectors/builtin/instagram/index.js');
   res.json(await m.threadMessages(req.user!.id, req.params.id, Math.min(Number(req.query.limit ?? 200), 500)));
 });
-router.post('/instagram/threads/:id/send', async (req, res) => {
+router.post('/instagram/threads/:id/send', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/instagram/index.js');
   const { text, source } = req.body ?? {};
   if (!text) return res.status(400).json({ error: 'text required' });
   res.json(await m.sendIgMessage(req.user!.id, req.params.id, String(text), 'user', source === 'ai' ? 'ai' : 'user'));
 });
-router.post('/instagram/threads/:id/suggest', async (req, res) => {
+router.post('/instagram/threads/:id/suggest', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/instagram/index.js');
   const { hint } = req.body ?? {};
   res.json(await m.suggestIgReply(req.user!.id, req.params.id, { hint }));
@@ -1136,7 +1137,7 @@ router.post('/instagram/threads/:id/auto-responder', async (req, res) => {
   const { enabled, goal } = req.body ?? {};
   res.json(await m.setThreadAutoResponder(req.user!.id, req.params.id, !!enabled, goal ?? null));
 });
-router.post('/instagram/bonify', async (req, res) => {
+router.post('/instagram/bonify', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/instagram/index.js');
   const { limit, onlyThread } = req.body ?? {};
   res.json(await m.bonifyIgMessages(req.user!.id, { limit, onlyThread }));
@@ -1241,6 +1242,8 @@ router.get('/usage', async (req, res) => {
   }
   // Cache 5min — `/cost` PTY scrape is ~12s so we don't run it on every poll.
   if (usageCache && Date.now() - usageCache.ts < 300_000) {
+    const { recordUsage } = await import('../quota.js');
+    recordUsage(Number(usageCache.data?.sessionPct ?? 0), Number(usageCache.data?.weekPct ?? 0));
     return res.json({ plan, ...usageCache.data });
   }
   // Use ccusage CLI (https://github.com/ryoppippi/ccusage) as canonical data source.
@@ -1407,9 +1410,14 @@ router.get('/usage', async (req, res) => {
     plan = { ...plan, costBudgetUsd: Math.round(syntheticBudget * 100) / 100, autoCalibrated: true, source: 'claude /cost' };
     await setSetting(userId, 'claude_plan', plan);
   }
-  const data = { usedTokens, resetAt, costUsd, burnRate, breakdown, autoBudget, claudeCost };
+  const sessionPct = Number(claudeCost?.sessionPct ?? 0);
+  const weekPct = Number(claudeCost?.weekPct ?? 0);
+  const locked = sessionPct >= 95;
+  const data = { usedTokens, resetAt, costUsd, burnRate, breakdown, autoBudget, claudeCost, sessionPct, weekPct, locked };
   usageCache = { ts: Date.now(), data };
-  // Emit so any open frontend gauge refreshes immediately without polling.
+  // Record into quota module so guards on other endpoints see fresh value.
+  const { recordUsage } = await import('../quota.js');
+  recordUsage(sessionPct, weekPct);
   bus.emit('usage:update', { userId, ...data });
   res.json({ plan, ...data });
 });

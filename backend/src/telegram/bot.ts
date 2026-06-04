@@ -297,6 +297,64 @@ export async function sendTelegram(userId: number, text: string, origin: string 
 // Allowed Telegram reaction emojis (free for bots, no premium)
 const TG_REACTIONS = new Set(['👍','👎','❤','🔥','🥰','👏','😁','🤔','🤯','😱','🤬','😢','🎉','🤩','🤮','💩','🙏','👌','🕊','🤡','🥱','🥴','😍','🐳','❤‍🔥','🌚','🌭','💯','🤣','⚡','🍌','🏆','💔','🤨','😐','🍓','🍾','💋','🖕','😈','😴','😭','🤓','👻','👨‍💻','👀','🎃','🙈','😇','😨','🤝','✍','🤗','🫡','🎅','🎄','☃','💅','🤪','🗿','🆒','💘','🙉','🦄','😘','💊','🙊','😎','👾','🤷‍♂','🤷','🤷‍♀','😡']);
 
+// Built-in Telegram emoji shortcodes for animated emoji ("custom emoji")
+// reachable from any bot. These use the standard Unicode glyphs but render
+// animated on Telegram clients. Useful for sparkly replies.
+export const TG_ANIMATED_EMOJI = ['🎲','🎯','🏀','⚽','🎰','🎳'] as const;
+
+// Send a sticker by file_id (preferred) OR by URL. file_id is reusable across
+// bots once obtained — see getStickerSet for popular packs.
+export async function sendTelegramSticker(userId: number, stickerRef: string, origin: string = 'agent'): Promise<{ ok: boolean; error?: string }> {
+  const { logOutbound } = await import('../comm/outbound_log.js');
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return { ok: false, error: 'telegram not configured' };
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  try {
+    await entry.bot.telegram.sendSticker(cfg.chatId, stickerRef);
+    await logOutbound({ userId, channel: 'telegram', status: 'sent', recipient: String(cfg.chatId), body: `[sticker] ${stickerRef.slice(0, 80)}`, origin });
+    return { ok: true };
+  } catch (e: any) {
+    const err = String(e?.message ?? e).slice(0, 400);
+    await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: `[sticker] ${stickerRef.slice(0, 80)}`, origin, error: err });
+    return { ok: false, error: err };
+  }
+}
+
+// Send an animated emoji (Telegram "dice" API — 🎲 🎯 🏀 ⚽ 🎰 🎳 only).
+// Each one returns a random outcome; great for playful one-shot reactions.
+export async function sendTelegramAnimatedEmoji(userId: number, emoji: string, origin: string = 'agent'): Promise<{ ok: boolean; value?: number; error?: string }> {
+  const { logOutbound } = await import('../comm/outbound_log.js');
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return { ok: false, error: 'telegram not configured' };
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  if (!(TG_ANIMATED_EMOJI as readonly string[]).includes(emoji)) return { ok: false, error: `emoji "${emoji}" non animata. Usa una di: ${TG_ANIMATED_EMOJI.join(' ')}` };
+  try {
+    const res: any = await entry.bot.telegram.sendDice(cfg.chatId, { emoji });
+    await logOutbound({ userId, channel: 'telegram', status: 'sent', recipient: String(cfg.chatId), body: `[animated ${emoji}] value=${res?.dice?.value}`, origin });
+    return { ok: true, value: res?.dice?.value };
+  } catch (e: any) {
+    const err = String(e?.message ?? e).slice(0, 400);
+    return { ok: false, error: err };
+  }
+}
+
+// List a public sticker set so the agent can browse + pick (returns file_ids).
+export async function listTelegramStickerSet(userId: number, name: string): Promise<{ ok: boolean; stickers?: { file_id: string; emoji?: string }[]; error?: string }> {
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  try {
+    const set: any = await entry.bot.telegram.getStickerSet(name);
+    return { ok: true, stickers: (set.stickers ?? []).map((s: any) => ({ file_id: s.file_id, emoji: s.emoji })) };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e).slice(0, 400) };
+  }
+}
+
 export async function updateBotProfile(userId: number, opts: { name?: string; shortDescription?: string }): Promise<{ ok: boolean; updated: string[]; error?: string }> {
   if (!bots.get(userId)) await startBotForUser(userId);
   const entry = bots.get(userId);

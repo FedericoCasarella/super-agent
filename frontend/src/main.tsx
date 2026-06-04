@@ -7,6 +7,8 @@ import { DialogProvider, useDialog } from './components/dialog';
 import { I18nProvider } from './i18n';
 import { AuthProvider } from './auth';
 import { BrandingProvider } from './branding';
+import { QuotaProvider } from './quota';
+import { PageVisibilityProvider } from './pageVisibility';
 import './styles.css';
 
 // Bridge: only `window.alert` rebinds to styled dialog (fire-and-forget OK).
@@ -29,7 +31,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <AuthProvider>
             <BrandingProvider>
               <I18nProvider>
-                <App />
+                <QuotaProvider>
+                  <PageVisibilityProvider>
+                    <App />
+                  </PageVisibilityProvider>
+                </QuotaProvider>
               </I18nProvider>
             </BrandingProvider>
           </AuthProvider>

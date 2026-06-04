@@ -4,6 +4,7 @@ import { runClaude } from '../claude/runner.js';
 import { buildTurnPrompt } from '../claude/prompts.js';
 import { sendTelegram, startTyping } from '../telegram/bot.js';
 import { getVaultRoot } from '../brain/vault.js';
+import { isQuotaLocked, QUOTA_LOCK_ERROR } from '../quota.js';
 
 export function startOrchestrator() {
   // Remove any stale listener (tsx-watch hot-reload, module re-eval) to avoid duplicate replies
@@ -14,6 +15,15 @@ export function startOrchestrator() {
 async function handleIncoming({ userId, text }: { userId: number; chatId: number; text: string }) {
   await logMessage(userId, 'in', 'telegram', text);
   await setSetting(userId, 'agent_next_reflection_at', null);
+  // Quota lock: if Claude session usage is >= 95%, refuse to call the API
+  // (which would burn the last few % on a partial reply) and surface the
+  // freeze message to the user instead.
+  if (isQuotaLocked()) {
+    const msg = '🚫 ' + QUOTA_LOCK_ERROR.error;
+    try { await sendTelegram(userId, msg, 'quota_locked'); } catch (e) { console.error('[orchestrator:quota_locked]', e); }
+    await logMessage(userId, 'out', 'telegram', msg);
+    return;
+  }
   // Pull last 30 so repetition detector can see 4-5 asks across a few turns.
   const history = await query<{ direction: string; content: string }>(
     `SELECT direction, content FROM messages WHERE user_id=$1 AND channel='telegram' ORDER BY id DESC LIMIT 30`, [userId]

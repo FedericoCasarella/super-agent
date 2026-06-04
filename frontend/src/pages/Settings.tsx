@@ -7,6 +7,8 @@ import { useAuth } from '../auth';
 import BrainLoading from '../components/BrainLoading';
 import BrandingEditor from '../components/BrandingEditor';
 import BrainColorsEditor from '../components/BrainColorsEditor';
+import { usePageVisibility, PAGE_META, type PageKey } from '../pageVisibility';
+import { LayoutGrid } from 'lucide-react';
 
 export default function Settings() {
   const [s, setS] = useState<any>(null);
@@ -98,6 +100,8 @@ export default function Settings() {
   return (
     <div className="space-y-6 max-w-3xl">
       <h1 className="text-2xl font-semibold">{t('settings.title')}</h1>
+
+      <PageVisibilityCard />
 
       <Card>
         <h2 className="text-lg font-semibold mb-1">Branding app</h2>
@@ -284,5 +288,47 @@ export default function Settings() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+// =====================================================================
+// Layout card — toggles per-page in the sidebar. Locally stored.
+// =====================================================================
+function PageVisibilityCard() {
+  const { visible, toggle } = usePageVisibility();
+  const keys = Object.keys(PAGE_META) as PageKey[];
+  return (
+    <Card>
+      <div className="flex items-start gap-3 mb-3">
+        <LayoutGrid size={20} className="text-accent shrink-0 mt-0.5" />
+        <div>
+          <h2 className="text-lg font-semibold">Layout sidebar</h2>
+          <p className="text-sm text-muted mt-0.5">
+            Mostra / nascondi pagine intere. Disabilitate sono inaccessibili anche tramite URL diretto. Default: minimo
+            essenziale così la barra resta pulita.
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+        {keys.map((k) => {
+          const meta = PAGE_META[k];
+          const on = !!visible[k];
+          return (
+            <div
+              key={k}
+              className={`flex items-start gap-3 p-3 rounded-xl border transition ${
+                on ? 'border-accent/40 bg-accent/5' : 'border-border bg-surface2/30'
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">{meta.label}</div>
+                <div className="text-xs text-muted mt-0.5">{meta.description}</div>
+              </div>
+              <Toggle checked={on} onChange={() => toggle(k)} />
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }

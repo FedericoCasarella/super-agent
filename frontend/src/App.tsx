@@ -1,7 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { api } from './api';
 import { useAuth } from './auth';
+import { QuotaBanner } from './quota';
+import { usePageVisibility, type PageKey } from './pageVisibility';
+
+// Gate route content behind a page-visibility flag. Hidden pages redirect to
+// the dashboard instead of rendering — keeps gated routes from being reachable
+// via bookmarks until the user opts them in from Settings.
+function Gated({ page, children }: { page: PageKey; children: ReactNode }) {
+  const { isVisible } = usePageVisibility();
+  if (!isVisible(page)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
 import Sidebar from './components/Sidebar';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
@@ -68,6 +79,7 @@ export default function App() {
         onCloseMobile={() => setMobileOpen(false)}
       />
       <main className="flex-1 min-w-0 overflow-y-auto">
+        <QuotaBanner />
         {/* Mobile top bar */}
         <div className="md:hidden sticky top-0 z-20 glass border-b border-border flex items-center justify-between px-4 py-2.5">
           <button
@@ -93,17 +105,17 @@ export default function App() {
             <Route path="/perks" element={<Agents />} />
             <Route path="/perks/:name" element={<AgentDetail />} />
             <Route path="/agents" element={<AgentsHub />} />
-            <Route path="/whatsapp" element={<WhatsApp />} />
-            <Route path="/instagram" element={<InstagramPage />} />
-            <Route path="/people" element={<PeoplePage />} />
+            <Route path="/whatsapp" element={<Gated page="whatsapp"><WhatsApp /></Gated>} />
+            <Route path="/instagram" element={<Gated page="instagram"><InstagramPage /></Gated>} />
+            <Route path="/people" element={<Gated page="people"><PeoplePage /></Gated>} />
             <Route path="/live-agents" element={<Navigate to="/agents" replace />} />
             <Route path="/network" element={<Network />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/outbound" element={<Outbound />} />
-            <Route path="/flows" element={<FlowsPage />} />
-            <Route path="/flows/:id" element={<FlowDetail />} />
+            <Route path="/logs" element={<Gated page="logs"><Logs /></Gated>} />
+            <Route path="/outbound" element={<Gated page="outbound"><Outbound /></Gated>} />
+            <Route path="/flows" element={<Gated page="flows"><FlowsPage /></Gated>} />
+            <Route path="/flows/:id" element={<Gated page="flows"><FlowDetail /></Gated>} />
             <Route path="/custom-agents" element={<Navigate to="/agents?tab=custom" replace />} />
-            <Route path="/teams" element={<Teams />} />
+            <Route path="/teams" element={<Gated page="teams"><Teams /></Gated>} />
             <Route path="/team-tasks" element={<Navigate to="/tasks?tab=team" replace />} />
             <Route path="/team-tasks/:id" element={<TeamTaskDetail />} />
             <Route path="/settings" element={<Settings />} />
