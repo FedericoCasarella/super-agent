@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { useWS } from '../ws';
+import { useWS, useLiveData } from '../ws';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 import { AlarmClock, Moon, BellOff, Clock, MessageSquare, Hash, Zap, Activity, Coffee, Bot, Wrench, Plug } from 'lucide-react';
@@ -68,14 +68,11 @@ export default function Dashboard() {
     try { setActiveAgents(await api.subAgentsActive()); } catch {}
   }
 
-  async function loadMsgs() { try { setMsgs(await api.messages(100)); } catch {} }
-  useEffect(() => {
-    loadMsgs();
-    loadState();
-    const idState = setInterval(loadState, 10_000);
-    const idMsgs = setInterval(loadMsgs, 30_000); // refresh from server too
-    return () => { clearInterval(idState); clearInterval(idMsgs); };
-  }, []);
+  const loadMsgs = useCallback(async () => { try { setMsgs(await api.messages(100)); } catch {} }, []);
+  const loadStateCb = useCallback(loadState, [loadState]);
+  // State refreshes on any agent event; msgs on inbound message-ish events.
+  useLiveData(loadStateCb, { refreshOn: ['team_task', 'subagent', 'internal_agent', 'flow', 'task'], fallbackMs: 60_000 });
+  useLiveData(loadMsgs, { refreshOn: ['wa:message', 'ig:message', 'outbound'], fallbackMs: 120_000 });
 
   async function wake() { await api.agentWake(); toast.push(t('dash.woken'), 'on'); loadState(); }
 

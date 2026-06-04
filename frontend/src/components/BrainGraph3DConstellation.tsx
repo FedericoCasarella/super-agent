@@ -97,6 +97,8 @@ export default function BrainGraph3DConstellation({
   onVaultsChange?: (vaults: string[]) => void;
 }) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
+  // degree map kept in a ref so nodeVisibility callback doesn't allocate.
+  const degreeRef = useRef<Map<string, number>>(new Map());
   const [hover, setHover] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
@@ -246,6 +248,15 @@ export default function BrainGraph3DConstellation({
     }
     neighborsRef.current = neighbors;
     idToIdxRef.current = idToIdx;
+    // Build degree map for LOD orphan hiding.
+    const deg = new Map<string, number>();
+    for (const l of data.links) {
+      const s = typeof l.source === 'object' ? (l.source as Node).id : l.source;
+      const t = typeof l.target === 'object' ? (l.target as Node).id : l.target;
+      deg.set(s, (deg.get(s) ?? 0) + 1);
+      deg.set(t, (deg.get(t) ?? 0) + 1);
+    }
+    degreeRef.current = deg;
   }, [data, PER_NODE]);
 
   // Build focus index set + mark dirty whenever hover/select changes
@@ -290,14 +301,17 @@ export default function BrainGraph3DConstellation({
     let raf = 0;
     let stopped = false;
     let last = performance.now();
+    let frameTick = 0;
     const loop = () => {
       if (stopped) return;
       const now = performance.now();
       const dt = Math.min(0.06, (now - last) / 1000);
       last = now;
+      frameTick++;
       const f = fieldRef.current;
       const nbrs = neighborsRef.current;
-      if (f && data.nodes.length > 0) {
+      // Skip the entire particle simulation when synapse animation is off.
+      if (showParticles && f && data.nodes.length > 0) {
         const { positions, colors, baseColors, sourceIdx, targetIdx, t, speed, curveAmp, curveAxis } = f;
         const nodes = data.nodes as any[];
         const totalP = sourceIdx.length;
@@ -475,16 +489,103 @@ export default function BrainGraph3DConstellation({
   }, [hover, selected, data]);
 
   // Label-only extension; library owns the default sphere so onNodeHover fires reliably
-  const nodeLabelExt = useMemo(() => {
-    return (node: any): THREE.Object3D => {
-      if (!(showLabels && (node.size ?? 1) >= labelThreshold)) return new THREE.Object3D();
-      const color = colorFor(node);
-      const r = 1.5 + Math.sqrt(node.size ?? 1) * 0.5;
-      const sprite = makeLabelSprite(node.title || node.id, color);
-      sprite.position.set(0, r + 3, 0);
-      return sprite;
+  // =====================================================================
+  // Single-draw-call GPU pipeline (Pixi/Obsidian style).
+  // Nodes  → InstancedMesh (1 draw call for ALL N nodes)
+  // Edges  → BufferGeometry of THREE.LineSegments (1 draw call for ALL links)
+  // Per-frame work in onEngineTick = position copy, no allocations.
+  // =====================================================================
+  const sharedSphereGeom = useMemo(() => new THREE.SphereGeometry(1, 8, 6), []);
+  const instMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const linesRef = useRef<THREE.LineSegments | null>(null);
+  const tmpMat4 = useRef(new THREE.Matrix4()).current;
+
+  // Build the instanced mesh + line geometry when graph data changes. Mounted
+  // into force-graph's scene; force-graph still owns layout, we own draw.
+  useEffect(() => {
+    const fg: any = fgRef.current;
+    if (!fg) return;
+    const scene: THREE.Scene | undefined = fg.scene?.();
+    if (!scene) return;
+    // Cleanup previous
+    if (instMeshRef.current) {
+      scene.remove(instMeshRef.current);
+      (instMeshRef.current.material as THREE.Material).dispose();
+      instMeshRef.current = null;
+    }
+    if (linesRef.current) {
+      scene.remove(linesRef.current);
+      linesRef.current.geometry.dispose();
+      (linesRef.current.material as THREE.Material).dispose();
+      linesRef.current = null;
+    }
+    if (data.nodes.length === 0) return;
+    // Instanced node mesh
+    const mat = new THREE.MeshBasicMaterial({ vertexColors: false });
+    const inst = new THREE.InstancedMesh(sharedSphereGeom, mat, data.nodes.length);
+    inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const col = new THREE.Color();
+    for (let i = 0; i < data.nodes.length; i++) {
+      const n: any = data.nodes[i];
+      col.set(colorFor(n));
+      inst.setColorAt(i, col);
+    }
+    inst.instanceColor!.needsUpdate = true;
+    scene.add(inst);
+    instMeshRef.current = inst;
+    // Lines geometry — 2 positions per link, all in one buffer.
+    const linkGeom = new THREE.BufferGeometry();
+    const linePos = new Float32Array(data.links.length * 6);
+    linkGeom.setAttribute('position', new THREE.BufferAttribute(linePos, 3).setUsage(THREE.DynamicDrawUsage));
+    const linkMat = new THREE.LineBasicMaterial({ color: 0x778899, transparent: true, opacity: 0.35 });
+    const lines = new THREE.LineSegments(linkGeom, linkMat);
+    scene.add(lines);
+    linesRef.current = lines;
+    return () => {
+      if (instMeshRef.current) { scene.remove(instMeshRef.current); (instMeshRef.current.material as THREE.Material).dispose(); instMeshRef.current = null; }
+      if (linesRef.current) { scene.remove(linesRef.current); linesRef.current.geometry.dispose(); (linesRef.current.material as THREE.Material).dispose(); linesRef.current = null; }
     };
-  }, [labelThreshold, showLabels]);
+  }, [data, sharedSphereGeom]);
+
+  // Per-frame position copy. Force-graph fires onEngineTick during simulation;
+  // we read each node's x/y/z and write directly to the InstancedMesh matrix.
+  // O(N) work, no allocations.
+  const onEngineTick = useCallback(() => {
+    const inst = instMeshRef.current;
+    if (!inst) return;
+    const nodes = data.nodes as any[];
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const r = 1.5 + Math.sqrt(n.size ?? 1) * 0.5;
+      tmpMat4.makeScale(r, r, r);
+      tmpMat4.setPosition(n.x ?? 0, n.y ?? 0, n.z ?? 0);
+      inst.setMatrixAt(i, tmpMat4);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    // Update line positions from links.
+    const lines = linesRef.current;
+    if (lines) {
+      const attr = lines.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const arr = attr.array as Float32Array;
+      const links = data.links as any[];
+      for (let i = 0; i < links.length; i++) {
+        const l = links[i];
+        const s: any = typeof l.source === 'object' ? l.source : nodes.find((nn) => nn.id === l.source);
+        const t: any = typeof l.target === 'object' ? l.target : nodes.find((nn) => nn.id === l.target);
+        if (!s || !t) continue;
+        const o = i * 6;
+        arr[o] = s.x ?? 0; arr[o + 1] = s.y ?? 0; arr[o + 2] = s.z ?? 0;
+        arr[o + 3] = t.x ?? 0; arr[o + 4] = t.y ?? 0; arr[o + 5] = t.z ?? 0;
+      }
+      attr.needsUpdate = true;
+    }
+  }, [data, tmpMat4]);
+
+  // Force-graph default per-node Mesh: suppress with an empty object. We're
+  // drawing them ourselves via the InstancedMesh above.
+  const nodeLabelExt = useMemo(() => {
+    return (_node: any): THREE.Object3D => new THREE.Object3D();
+  }, []);
 
   const nodeColorCb = useCallback((n: any) => {
     const v = mriRef.current.get(n.id);
@@ -523,8 +624,7 @@ export default function BrainGraph3DConstellation({
     };
     const sNode0: any = resolveNode(l.source);
     const tNode0: any = resolveNode(l.target);
-    const mriEnv = mriEnvForLink(l);
-    if (mriEnv > 0) return `rgba(57,255,122,${(0.95 * mriEnv).toFixed(3)})`;
+    // MRI pulse on edges disabled — was causing visible flicker along links.
     if (!focus) {
       const ref = sNode0 ?? tNode0;
       if (!ref) return 'rgba(192,132,252,0.4)';
@@ -547,18 +647,16 @@ export default function BrainGraph3DConstellation({
     // convert hex → rgba w/ moderate alpha so particles overlay reads as glow
     const c = new THREE.Color(base);
     return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},0.55)`;
-  }, [hover, selected, showParticles, mriTick, data]);
+  }, [hover, selected, showParticles, data]);
   const linkWidthCb = useCallback((l: any) => {
     const focus = hover ?? selected;
     const sId = typeof l.source === 'object' ? l.source.id : l.source;
     const tId = typeof l.target === 'object' ? l.target.id : l.target;
-    const mriEnv = mriEnvForLink(l);
     const baseW = !focus ? (showParticles ? 0 : 0.25)
       : (sId === focus || tId === focus) ? 0.6
       : (showParticles ? 0 : 0.18);
-    if (mriEnv > 0) return baseW + (1.8 - baseW) * mriEnv; // lerp base → 1.8
     return baseW;
-  }, [hover, selected, showParticles, mriTick]);
+  }, [hover, selected, showParticles]);
 
   function triggerMriDemo() {
     if (data.nodes.length === 0) return;
@@ -647,13 +745,18 @@ export default function BrainGraph3DConstellation({
           nodeVal={(n: any) => (n.size ?? 1)}
           nodeColor={nodeColorCb}
           nodeOpacity={0.95}
-          nodeResolution={16}
+          // Lower sphere LOD to cut triangle count ~4× — visually identical at
+          // this zoom level, large win at high node counts.
           nodeThreeObject={nodeLabelExt}
-          nodeThreeObjectExtend={true}
+          nodeThreeObjectExtend={false}
           nodeLabel={(n: any) => `<div style="font:500 11px Inter,system-ui; padding:6px 10px; background:rgba(8,16,28,0.92); border:1px solid #1f4a55; border-radius:8px; color:#e8e8f0;">${n.title}<div style="font-size:9px;color:#7a7a8c;margin-top:2px;">${n.id}</div></div>`}
+          onEngineTick={onEngineTick}
+          // Hide force-graph's own lines — we draw them ourselves via the
+          // single LineSegments above (1 draw call instead of N).
+          linkVisibility={false}
           linkColor={linkColor}
-          linkOpacity={1}
-          linkWidth={linkWidthCb}
+          linkOpacity={0}
+          linkWidth={0}
           linkDirectionalParticles={0}
           onNodeHover={(n: any) => setHover(n?.id ?? null)}
           onNodeClick={(n: any) => {

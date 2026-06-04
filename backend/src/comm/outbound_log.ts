@@ -5,7 +5,7 @@ import { bus } from '../bus.js';
 // Called by senders (whatsapp.sendWaMessage, imap.sendDraft, telegram.sendTelegram).
 // Append-only — no updates, no deletes. Body capped to 16KB to keep rows sane.
 
-export type OutboundChannel = 'whatsapp' | 'email' | 'telegram';
+export type OutboundChannel = 'whatsapp' | 'email' | 'telegram' | 'instagram';
 export type OutboundStatus = 'sent' | 'error';
 
 export type OutboundLogInput = {

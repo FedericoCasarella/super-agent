@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api } from '../api';
+import { useLiveData } from '../ws';
 import { Activity } from 'lucide-react';
 
 type Active = { kind: 'perk' | 'subagent'; name: string; title: string };
@@ -9,7 +10,7 @@ type Active = { kind: 'perk' | 'subagent'; name: string; title: string };
 export default function ActiveAgentsBadge({ collapsed = false }: { collapsed?: boolean }) {
   const [items, setItems] = useState<Active[]>([]);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const [perks, subs] = await Promise.all([
         api.internalAgents().catch(() => []),
@@ -20,8 +21,8 @@ export default function ActiveAgentsBadge({ collapsed = false }: { collapsed?: b
       for (const s of subs as any[]) if (s.status === 'running' || s.status === 'pending') out.push({ kind: 'subagent', name: String(s.id), title: s.title || `Sub-agent #${s.id}` });
       setItems(out);
     } catch {}
-  }
-  useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []);
+  }, []);
+  useLiveData(load, { refreshOn: ['internal_agent', 'subagent'], fallbackMs: 120_000 });
 
   if (items.length === 0) return null;
 

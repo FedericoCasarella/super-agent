@@ -813,6 +813,89 @@ const connector: Connector = {
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       handler: async (ctx) => getWaStatus(ctx.userId),
     },
+    {
+      name: 'list_chats',
+      description: 'Lista chat WhatsApp recenti (anche NON bonificate). Ritorna jid, nome, ultimo messaggio, conteggio pending. Usa questo quando l\'utente menziona una chat o gruppo che non trovi nel brain.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Filtro substring sul nome chat (opzionale)' },
+          limit: { type: 'number', default: 50 },
+        },
+        additionalProperties: false,
+      },
+      handler: async (ctx, { query: q, limit }) => {
+        const all = await listChats(ctx.userId);
+        const filtered = q ? all.filter((c: any) => (c.sender_name || '').toLowerCase().includes(String(q).toLowerCase())) : all;
+        return filtered.slice(0, limit ?? 50).map((c: any) => ({
+          chat_jid: c.chat_jid, name: c.sender_name, is_group: c.is_group,
+          last_text: c.text, last_ts: c.ts,
+          total: c.total_count, pending: c.pending_count, bonified: c.bonified_count,
+        }));
+      },
+    },
+    {
+      name: 'chat_messages',
+      description: 'Leggi messaggi raw di una specifica chat WhatsApp (anche NON bonificati). Usa dopo list_chats per trovare il jid giusto. Ritorna anche messaggi mai ingeriti nel brain.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_jid: { type: 'string' },
+          limit: { type: 'number', default: 100 },
+        },
+        required: ['chat_jid'], additionalProperties: false,
+      },
+      handler: async (ctx, { chat_jid, limit }) => {
+        const msgs = await chatMessages(ctx.userId, chat_jid, Math.min(Number(limit ?? 100), 500));
+        return msgs.map((m: any) => ({
+          ts: m.ts, sender: m.sender_name ?? m.sender_phone ?? m.sender_jid,
+          from_me: m.from_me, text: m.text, person_slug: m.person_slug,
+        }));
+      },
+    },
+    {
+      name: 'search_messages',
+      description: 'Cerca testo full-text nei messaggi WhatsApp raw (anche NON bonificati). Usa quando l\'utente cita un messaggio specifico ma il brain non lo trova. Cerca case-insensitive su contenuto.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          since_days: { type: 'number', default: 30, description: 'Limita a ultimi N giorni' },
+          limit: { type: 'number', default: 30 },
+        },
+        required: ['query'], additionalProperties: false,
+      },
+      handler: async (ctx, { query: q, since_days, limit }) => {
+        const rows = await query<any>(
+          `SELECT m.chat_jid,
+                  COALESCE(c.name, c.verified_name, c.notify, m.sender_name) AS chat_name,
+                  m.sender_name, m.sender_phone, m.from_me, m.text, m.ts, m.person_slug, m.is_group
+           FROM wa_messages m
+           LEFT JOIN wa_contacts c ON c.user_id=$1 AND c.jid=m.chat_jid
+           WHERE m.user_id=$1
+             AND m.text ILIKE $2
+             AND m.ts > now() - ($3::int || ' days')::interval
+             AND m.msg_id NOT LIKE 'chat:%'
+           ORDER BY m.ts DESC
+           LIMIT $4`,
+          [ctx.userId, `%${q}%`, since_days ?? 30, Math.min(Number(limit ?? 30), 200)],
+        );
+        return rows;
+      },
+    },
+    {
+      name: 'send_message',
+      description: 'Invia un messaggio WhatsApp a una chat. Usa SOLO quando l\'utente chiede esplicitamente di inviare qualcosa.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_jid: { type: 'string' },
+          text: { type: 'string' },
+        },
+        required: ['chat_jid', 'text'], additionalProperties: false,
+      },
+      handler: async (ctx, { chat_jid, text }) => sendWaMessage(ctx.userId, chat_jid, text, 'agent', 'ai'),
+    },
   ],
 };
 

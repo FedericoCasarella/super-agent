@@ -1078,6 +1078,84 @@ router.get('/whatsapp/chats/:jid/messages', async (req, res) => {
   res.json(await m.chatMessages(req.user!.id, req.params.jid, Math.min(Number(req.query.limit ?? 200), 500)));
 });
 
+// =====================================================================
+// Instagram DM routes — mirrors WhatsApp shape
+// =====================================================================
+router.get('/instagram/status', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  res.json(m.getIgStatus(req.user!.id));
+});
+router.post('/instagram/start', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { username, password } = req.body ?? {};
+  res.json(await m.startIgForUser(req.user!.id, { username, password }));
+});
+router.post('/instagram/2fa', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { code } = req.body ?? {};
+  if (!code) return res.status(400).json({ error: 'code required' });
+  res.json(await m.submitIgTwoFactor(req.user!.id, String(code)));
+});
+router.post('/instagram/checkpoint', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { code } = req.body ?? {};
+  if (!code) return res.status(400).json({ error: 'code required' });
+  res.json(await m.submitIgCheckpoint(req.user!.id, String(code)));
+});
+router.post('/instagram/logout', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  await m.logoutIgForUser(req.user!.id);
+  res.json({ ok: true });
+});
+router.get('/instagram/threads', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  res.json(await m.listThreads(req.user!.id));
+});
+router.get('/instagram/threads/:id/messages', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  res.json(await m.threadMessages(req.user!.id, req.params.id, Math.min(Number(req.query.limit ?? 200), 500)));
+});
+router.post('/instagram/threads/:id/send', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { text, source } = req.body ?? {};
+  if (!text) return res.status(400).json({ error: 'text required' });
+  res.json(await m.sendIgMessage(req.user!.id, req.params.id, String(text), 'user', source === 'ai' ? 'ai' : 'user'));
+});
+router.post('/instagram/threads/:id/suggest', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { hint } = req.body ?? {};
+  res.json(await m.suggestIgReply(req.user!.id, req.params.id, { hint }));
+});
+router.post('/instagram/threads/:id/auto-bonify', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { enabled } = req.body ?? {};
+  res.json(await m.setThreadAutoBonify(req.user!.id, req.params.id, !!enabled));
+});
+router.post('/instagram/threads/:id/auto-responder', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { enabled, goal } = req.body ?? {};
+  res.json(await m.setThreadAutoResponder(req.user!.id, req.params.id, !!enabled, goal ?? null));
+});
+router.post('/instagram/bonify', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { limit, onlyThread } = req.body ?? {};
+  res.json(await m.bonifyIgMessages(req.user!.id, { limit, onlyThread }));
+});
+router.get('/instagram/pending', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  res.json({ pending: await m.pendingCount(req.user!.id) });
+});
+router.post('/instagram/sync', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const pages = Math.max(1, Math.min(Number(req.body?.pages ?? 3), 10));
+  res.json(await m.syncIgNow(req.user!.id, pages));
+});
+router.post('/instagram/threads/:id/sync', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const pages = Math.max(1, Math.min(Number(req.body?.pages ?? 5), 20));
+  res.json(await m.syncIgThread(req.user!.id, req.params.id, pages));
+});
+
 router.get('/tool-events', async (req, res) => {
   const userId = req.user!.id;
   const filter = String(req.query.filter ?? 'all'); // all|mcp|native
@@ -1331,8 +1409,9 @@ router.get('/usage', async (req, res) => {
   }
   const data = { usedTokens, resetAt, costUsd, burnRate, breakdown, autoBudget, claudeCost };
   usageCache = { ts: Date.now(), data };
+  // Emit so any open frontend gauge refreshes immediately without polling.
+  bus.emit('usage:update', { userId, ...data });
   res.json({ plan, ...data });
-  void userId;
 });
 router.put('/usage/plan', async (req, res) => {
   const userId = req.user!.id;

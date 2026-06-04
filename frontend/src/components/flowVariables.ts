@@ -13,6 +13,15 @@ export const TRIGGER_OUTPUTS: Record<string, VarDef[]> = {
     { key: 'trigger.msg.ts',           label: 'Timestamp',           sample: '2026-06-02T10:30:00Z' },
     { key: 'trigger.msg.person_slug',  label: 'Slug persona (brain)' },
   ],
+  'instagram.received': [
+    { key: 'trigger.msg.text',            label: 'Testo messaggio',  sample: 'Ciao!' },
+    { key: 'trigger.msg.thread_id',       label: 'Thread ID',        sample: '340282...' },
+    { key: 'trigger.msg.sender_username', label: 'Username mittente', sample: 'mario.rossi' },
+    { key: 'trigger.msg.sender_name',     label: 'Nome mittente',    sample: 'Mario Rossi' },
+    { key: 'trigger.msg.item_type',       label: 'Tipo (text/media/voice…)' },
+    { key: 'trigger.msg.ts',              label: 'Timestamp' },
+    { key: 'trigger.msg.person_slug',     label: 'Slug persona (brain)' },
+  ],
   'telegram.received': [
     { key: 'trigger.text',     label: 'Testo messaggio' },
     { key: 'trigger.chatId',   label: 'Chat id' },

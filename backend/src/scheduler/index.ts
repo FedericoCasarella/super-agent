@@ -122,6 +122,51 @@ export async function startScheduler() {
   });
   console.log('[scheduler] wa auto-bonify loop armed (every 5m, per-chat opt-in)');
 
+  // IG auto-bonify loop — same pattern as WA but on ig_messages/ig_threads.
+  let igBonifyRunning = false;
+  cron.schedule('*/5 * * * *', async () => {
+    if (igBonifyRunning) return;
+    igBonifyRunning = true;
+    try {
+      const ig = await import('../connectors/builtin/instagram/index.js');
+      const rows = await query<{ user_id: number; thread_id: string; pending: number }>(
+        `SELECT t.user_id::int, t.thread_id,
+                (SELECT count(*)::int FROM ig_messages m
+                 WHERE m.user_id=t.user_id AND m.thread_id=t.thread_id
+                   AND m.processed_at IS NULL AND m.text <> '' AND NOT m.from_me) AS pending
+         FROM ig_threads t WHERE t.auto_bonify=true`,
+      );
+      for (const r of rows) {
+        if (!r.pending || r.pending <= 0) continue;
+        let remaining = r.pending;
+        let cycles = 0;
+        while (remaining > 0 && cycles < 5) {
+          const limit = Math.min(remaining, 500);
+          console.log(`[ig-auto-bonify:u${r.user_id}] ${r.thread_id} cycle ${cycles+1}/5 pending=${remaining} → running ${limit}`);
+          try { const res = await ig.bonifyIgMessages(r.user_id, { onlyThread: r.thread_id, limit }); remaining -= res.processed ?? limit; }
+          catch (e) { console.error('[ig-auto-bonify]', e); break; }
+          cycles++;
+        }
+      }
+    } catch (e) { console.error('[ig-auto-bonify] loop error', e); }
+    finally { igBonifyRunning = false; }
+  });
+  console.log('[scheduler] ig auto-bonify loop armed (every 5m, per-thread opt-in)');
+
+  // IG follow-up tick — every minute walks ig_threads with follow_up_at <= now
+  // and fires runFollowUp via the connector.
+  let igFollowUpRunning = false;
+  cron.schedule('* * * * *', async () => {
+    if (igFollowUpRunning) return;
+    igFollowUpRunning = true;
+    try {
+      const ig = await import('../connectors/builtin/instagram/index.js');
+      await ig.tickIgFollowUps();
+    } catch (e) { console.error('[ig-followup] loop error', e); }
+    finally { igFollowUpRunning = false; }
+  });
+  console.log('[scheduler] ig follow-up loop armed (every 1m)');
+
   await refreshScheduledTasks();
   console.log('[scheduler] user-defined tasks loaded');
   startInternalAgentsScheduler();

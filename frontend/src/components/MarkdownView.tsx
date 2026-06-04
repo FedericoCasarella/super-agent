@@ -14,12 +14,21 @@ function transformWikilinks(src: string): string {
   });
 }
 
+// Strip a YAML frontmatter block at the start if present. Backend should
+// already do this via gray-matter, but agent-generated notes occasionally
+// have leading whitespace / BOM that defeat matter() parsing — clean here.
+function stripFrontmatter(src: string): string {
+  const m = src.match(/^﻿?\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return m ? src.slice(m[0].length) : src;
+}
+
 export default function MarkdownView({ content, onWikilinkClick }: Props) {
-  const md = transformWikilinks(content ?? '');
+  const md = transformWikilinks(stripFrontmatter(content ?? ''));
   return (
     <div className="prose-md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={(url) => url}
         components={{
           a({ href, children }) {
             if (href?.startsWith('wikilink:')) {

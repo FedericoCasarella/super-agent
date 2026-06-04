@@ -616,3 +616,78 @@ CREATE TABLE IF NOT EXISTS plugins (
   installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- =====================================================================
+-- Instagram DM connector (instagram-private-api). Mirrors wa_* shape.
+-- thread_id   = IG conversation id (string)
+-- user_ig_id  = IG numeric user id of the other party (PK helper)
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS ig_messages (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  msg_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  sender_ig_id TEXT NOT NULL,
+  sender_username TEXT,
+  sender_name TEXT,
+  person_slug TEXT,
+  from_me BOOLEAN NOT NULL DEFAULT false,
+  text TEXT NOT NULL DEFAULT '',
+  item_type TEXT NOT NULL DEFAULT 'text',
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ,
+  source TEXT,
+  UNIQUE(user_id, msg_id)
+);
+CREATE INDEX IF NOT EXISTS ig_messages_user_thread_ts_idx ON ig_messages(user_id, thread_id, ts DESC);
+CREATE INDEX IF NOT EXISTS ig_messages_user_ts_idx ON ig_messages(user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS ig_messages_user_processed_idx ON ig_messages(user_id, processed_at);
+
+CREATE TABLE IF NOT EXISTS ig_threads (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL,
+  title TEXT,
+  is_group BOOLEAN NOT NULL DEFAULT false,
+  participants JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_activity TIMESTAMPTZ,
+  auto_bonify BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(user_id, thread_id)
+);
+CREATE INDEX IF NOT EXISTS ig_threads_user_activity_idx ON ig_threads(user_id, last_activity DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS ig_threads_user_autobonify_idx ON ig_threads(user_id) WHERE auto_bonify=true;
+
+CREATE TABLE IF NOT EXISTS ig_contacts (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ig_id TEXT NOT NULL,
+  username TEXT,
+  full_name TEXT,
+  profile_pic_url TEXT,
+  is_verified BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(user_id, ig_id)
+);
+CREATE INDEX IF NOT EXISTS ig_contacts_user_username_idx ON ig_contacts(user_id, username);
+
+-- IG auto-responder: when enabled on a thread, agent auto-replies to incoming
+-- DMs trying to drive the conversation toward the goal text. Goal is the
+-- user-supplied objective ("vendere consulenza", "qualifica lead", ecc.).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ig_threads' AND column_name='auto_responder') THEN
+    ALTER TABLE ig_threads ADD COLUMN auto_responder BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE ig_threads ADD COLUMN auto_responder_goal TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS ig_threads_user_autoresponder_idx ON ig_threads(user_id) WHERE auto_responder=true;
+
+-- Follow-up tracking for auto-responder. When agent sends, schedule a check.
+-- If counterpart still silent at follow_up_at, fire follow-up message and bump
+-- count. Max 3 follow-ups per thread.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ig_threads' AND column_name='follow_up_at') THEN
+    ALTER TABLE ig_threads ADD COLUMN follow_up_at TIMESTAMPTZ;
+    ALTER TABLE ig_threads ADD COLUMN follow_up_count INT NOT NULL DEFAULT 0;
+    ALTER TABLE ig_threads ADD COLUMN last_outbound_at TIMESTAMPTZ;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS ig_threads_followup_idx ON ig_threads(user_id, follow_up_at) WHERE follow_up_at IS NOT NULL;

@@ -177,4 +177,21 @@ export const api = {
   proposalsList: () => req<any[]>('/agent-proposals'),
   proposalApprove: (id: number) => req<any>(`/agent-proposals/${id}/approve`, { method: 'POST' }),
   proposalDeny: (id: number) => req<any>(`/agent-proposals/${id}/deny`, { method: 'POST' }),
+
+  // Instagram DM
+  igStatus: () => req<any>('/instagram/status'),
+  igStart: (username?: string, password?: string) => req<any>('/instagram/start', { method: 'POST', body: JSON.stringify({ username: username || undefined, password: password || undefined }) }),
+  ig2fa: (code: string) => req<any>('/instagram/2fa', { method: 'POST', body: JSON.stringify({ code }) }),
+  igCheckpoint: (code: string) => req<any>('/instagram/checkpoint', { method: 'POST', body: JSON.stringify({ code }) }),
+  igLogout: () => req<any>('/instagram/logout', { method: 'POST' }),
+  igThreads: () => req<any[]>('/instagram/threads'),
+  igThreadMessages: (id: string) => req<any[]>(`/instagram/threads/${encodeURIComponent(id)}/messages`),
+  igSendMessage: (id: string, text: string, source: 'user' | 'ai' = 'user') => req<any>(`/instagram/threads/${encodeURIComponent(id)}/send`, { method: 'POST', body: JSON.stringify({ text, source }) }),
+  igSuggestReply: (id: string, hint?: string) => req<any>(`/instagram/threads/${encodeURIComponent(id)}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
+  igSetThreadAutoBonify: (id: string, enabled: boolean) => req<any>(`/instagram/threads/${encodeURIComponent(id)}/auto-bonify`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  igSetThreadAutoResponder: (id: string, enabled: boolean, goal?: string | null) => req<any>(`/instagram/threads/${encodeURIComponent(id)}/auto-responder`, { method: 'POST', body: JSON.stringify({ enabled, goal }) }),
+  igBonify: (limit: number, onlyThread?: string) => req<any>('/instagram/bonify', { method: 'POST', body: JSON.stringify({ limit, onlyThread }) }),
+  igPending: () => req<any>('/instagram/pending'),
+  igSync: (pages = 3) => req<any>('/instagram/sync', { method: 'POST', body: JSON.stringify({ pages }) }),
+  igSyncThread: (id: string, pages = 5) => req<any>(`/instagram/threads/${encodeURIComponent(id)}/sync`, { method: 'POST', body: JSON.stringify({ pages }) }),
 };

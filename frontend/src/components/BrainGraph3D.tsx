@@ -135,18 +135,60 @@ export default function BrainGraph3D({
     }).catch(() => {}).finally(() => setLoaded(true));
   }, [visibilityFilter, originFilter, vaultFilter]);
 
-  // Spread nodes further apart and add collision so they don't overlap
+  // Obsidian-style layout:
+  //   - connected nodes form an organic cluster near the center (regular
+  //     forceLink + charge does this)
+  //   - orphan nodes (zero links) are pushed onto an outer ring so they don't
+  //     drift into the main brain or scatter randomly into space
+  // Implemented as: per-node degree count → radial force per group.
   useEffect(() => {
     const fg = fgRef.current as any;
     if (!fg) return;
     try {
+      const nodes = data.nodes as any[];
+      const links = data.links as any[];
+      if (!nodes.length) return;
+      // Degree map
+      const deg = new Map<string, number>();
+      for (const l of links) {
+        const s = typeof l.source === 'object' ? l.source.id : l.source;
+        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        deg.set(s, (deg.get(s) ?? 0) + 1);
+        deg.set(t, (deg.get(t) ?? 0) + 1);
+      }
+      const orphanCount = nodes.filter((n) => !deg.get(n.id)).length;
+      // Ring radius scales with orphan count so they fit on a circle.
+      const ringR = Math.max(800, 250 + Math.sqrt(Math.max(orphanCount, 1)) * 60);
       const charge = fg.d3Force('charge');
       if (charge?.strength) charge.strength(-520).distanceMax(900);
       const link = fg.d3Force('link');
-      if (link?.distance) link.distance(160).strength(0.25);
-      // Custom collision: big padding so labels don't overlap
+      if (link?.distance) link.distance(160).strength(0.4);
+      // Pull connected nodes toward center
+      fg.d3Force('centerConnected', (alpha: number) => {
+        for (const n of nodes) {
+          if (!deg.get(n.id)) continue;
+          const k = 0.05 * alpha;
+          n.vx = (n.vx ?? 0) - (n.x ?? 0) * k;
+          n.vy = (n.vy ?? 0) - (n.y ?? 0) * k;
+        }
+      });
+      // Push orphan nodes outward to a ring; tangential drift keeps them
+      // spread around it instead of clumping.
+      fg.d3Force('orphanRing', (alpha: number) => {
+        for (const n of nodes) {
+          if (deg.get(n.id)) continue;
+          const x = n.x ?? 0;
+          const y = n.y ?? 0;
+          const r = Math.hypot(x, y) || 0.01;
+          const k = 0.18 * alpha;
+          // radial spring toward ringR
+          const factor = (ringR - r) / r * k;
+          n.vx = (n.vx ?? 0) + x * factor;
+          n.vy = (n.vy ?? 0) + y * factor;
+        }
+      });
+      // Collision so labels don't overlap
       fg.d3Force('collide', (alpha: number) => {
-        const nodes = data.nodes as any[];
         for (let i = 0; i < nodes.length; i++) {
           const a = nodes[i];
           const ra = 14 + Math.sqrt(a.size ?? 1) * 1.6 + 28;

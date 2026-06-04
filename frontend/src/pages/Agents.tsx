@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 import { usePerkCooldown } from '../hooks/usePerkCooldown';
+import { useLiveData } from '../ws';
 
 // Per-agent icon map. Drop new PNGs in `frontend/public/` and add here.
 const AGENT_ICON: Record<string, string> = {
@@ -41,15 +42,8 @@ export default function Agents() {
   const nav = useNavigate();
   const { t } = useI18n();
 
-  async function load() { setItems(await api.internalAgents()); }
-  useEffect(() => { load(); }, []);
-  // Poll every 5s while at least one perk is running, so the disabled button + label sync.
-  useEffect(() => {
-    const anyRunning = items.some((i) => i.running);
-    if (!anyRunning) return;
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
-  }, [items]);
+  const load = useCallback(async () => { setItems(await api.internalAgents()); }, []);
+  useLiveData(load, { refreshOn: ['internal_agent'], fallbackMs: 120_000 });
 
   async function toggle(a: Agent) {
     await api.updateInternalAgent(a.name, { enabled: !a.enabled });
