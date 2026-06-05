@@ -693,3 +693,21 @@ DO $$ BEGIN
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ig_threads_followup_idx ON ig_threads(user_id, follow_up_at) WHERE follow_up_at IS NOT NULL;
+
+-- WA profile picture cache. Baileys returns a temporary URL; we store last
+-- fetched value + ts so we can refresh stale ones (IG/WA rotate signed URLs).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='profile_pic_url') THEN
+    ALTER TABLE wa_contacts ADD COLUMN profile_pic_url TEXT;
+    ALTER TABLE wa_contacts ADD COLUMN profile_pic_fetched_at TIMESTAMPTZ;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+-- Manual brain-link per WA chat (or contact). No more auto-linking by phone;
+-- user explicitly cables a chat to a Person via the UI.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='linked_person_slug') THEN
+    ALTER TABLE wa_contacts ADD COLUMN linked_person_slug TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS wa_contacts_linked_person_idx ON wa_contacts(user_id, linked_person_slug) WHERE linked_person_slug IS NOT NULL;

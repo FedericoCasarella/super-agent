@@ -4,7 +4,7 @@ import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { useWS } from '../ws';
 import { useQuotaLock } from '../quota';
-import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X } from 'lucide-react';
+import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X, MoreHorizontal, ImageIcon, GitMerge, Trash2 } from 'lucide-react';
 import BrainLoading from '../components/BrainLoading';
 
 type Chat = {
@@ -19,6 +19,8 @@ type Chat = {
   bonified_count: number;
   pending_count: number;
   auto_bonify?: boolean;
+  profile_pic_url?: string | null;
+  linked_person_slug?: string | null;
 };
 
 type Msg = {
@@ -27,6 +29,7 @@ type Msg = {
   is_group: boolean; group_jid: string | null;
   from_me: boolean; text: string; ts: string;
   source?: 'user' | 'ai' | null;
+  sender_pic_url?: string | null;
 };
 
 function fmtTime(ts: string): string {
@@ -55,6 +58,176 @@ const AVATAR_PALETTE = [
   'linear-gradient(135deg,#34d399,#22d3ee)', // emerald → cyan
   'linear-gradient(135deg,#fbbf24,#f0abfc)', // amber → fuchsia
 ];
+// Dropdown menu grouping secondary toolbar actions. Closes on outside click
+// and Escape so it doesn't sit visually open.
+function WaToolbarMenu({
+  sync, syncing, refreshContacts, refreshingContacts, onAfterAction,
+}: {
+  sync: () => Promise<void>; syncing: boolean;
+  refreshContacts: () => Promise<void>; refreshingContacts: boolean;
+  onAfterAction?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const toast = useToast();
+  const dlg = useDialog();
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onClick); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  async function runDedupe() {
+    setBusy('dedupe');
+    try {
+      // First pass: signal-based dedupe (fast, deterministic).
+      const r: any = await api.waDedupe();
+      const cm = Number(r?.chats_merged ?? 0);
+      const dm = Number(r?.msg_dups_removed ?? 0);
+      if (cm > 0 || dm > 0) toast.push(`Unite ${cm} chat · ${dm} msg duplicati rimossi`, 'on');
+      else toast.push('Nessun duplicato evidente', 'warn');
+      onAfterAction?.();
+    } catch (e: any) { toast.push(e?.message ?? 'Errore dedupe', 'err'); }
+    finally { setBusy(null); setOpen(false); }
+  }
+  async function runAiDedupe() {
+    setBusy('ai-dedupe');
+    setOpen(false);
+    toast.push('AI sta analizzando le chat… (può richiedere 1-2 min)', 'on');
+    try {
+      const r: any = await api.waAiDedupe();
+      if (!r?.ok) { toast.push(r?.error ?? 'AI dedupe fallito', 'err'); return; }
+      if ((r.merged ?? 0) === 0) toast.push('AI: nessun duplicato identificato', 'warn');
+      else toast.push(`AI ha unito ${r.merged} chat · ${r.touched} messaggi spostati`, 'on');
+      onAfterAction?.();
+    } catch (e: any) { toast.push(e?.message ?? 'Errore AI dedupe', 'err'); }
+    finally { setBusy(null); }
+  }
+  async function runRefreshPics() {
+    setBusy('pics');
+    try {
+      const r: any = await api.waRefreshPics();
+      toast.push(`${r?.queued ?? 0} avatar in coda`, 'on');
+      onAfterAction?.();
+    } catch (e: any) { toast.push(e?.message ?? 'Errore avatar', 'err'); }
+    finally { setBusy(null); setOpen(false); }
+  }
+
+  const items: { id: string; icon: any; label: string; onClick: () => void | Promise<void>; running?: boolean; danger?: boolean }[] = [
+    { id: 'sync',     icon: RefreshCw, label: 'Sincronizza chat',      onClick: sync, running: syncing },
+    { id: 'contacts', icon: UserCog,   label: 'Aggiorna contatti',     onClick: refreshContacts, running: refreshingContacts },
+    { id: 'pics',     icon: ImageIcon, label: 'Aggiorna avatar',       onClick: runRefreshPics, running: busy === 'pics' },
+    { id: 'dedupe',    icon: GitMerge, label: 'Unisci duplicati (rapido)',     onClick: runDedupe,   running: busy === 'dedupe' },
+    { id: 'ai-dedupe', icon: Sparkles, label: 'Unisci duplicati con AI (brain)', onClick: runAiDedupe, running: busy === 'ai-dedupe' },
+    { id: 'wipe',      icon: Trash2,   label: 'Cancella TUTTE le chat',         onClick: runWipe,     running: busy === 'wipe', danger: true },
+    { id: 'rescan',    icon: RefreshCw,label: 'Reset sessione (re-QR + history)', onClick: runRescan,  running: busy === 'rescan', danger: true },
+  ];
+
+  async function runRescan() {
+    setOpen(false);
+    const ok = await dlg.confirm(
+      'Disconnettere WhatsApp + cancellare creds locali?\n\nDovrai scansionare nuovamente il QR dalla pagina Connettori. Dopo lo scan, Baileys re-importerà l\'intera cronologia chat (sync iniziale).\n\nQuesta è l\'unica via per riavere il backlog completo se Sincronizza chat scarica solo poche conversazioni.',
+      { tone: 'danger', confirmLabel: 'Disconnetti + reset' },
+    );
+    if (!ok) return;
+    setBusy('rescan');
+    try {
+      await api.waLogout();
+      toast.push('Sessione resettata. Vai in Connettori → WhatsApp → scansiona il QR.', 'on');
+      onAfterAction?.();
+    } catch (e: any) { toast.push(e?.message ?? 'Errore reset', 'err'); }
+    finally { setBusy(null); }
+  }
+
+  async function runWipe() {
+    setOpen(false);
+    const ok = await dlg.confirm(
+      'Cancellare TUTTE le chat WhatsApp dal database?\n\nVerranno rimossi messaggi + contatti locali. La sessione WA resta collegata: alla prossima Sync rebuilderà da zero senza duplicati.\n\nIrreversibile.',
+      { tone: 'danger', confirmLabel: 'Cancella tutto' },
+    );
+    if (!ok) return;
+    setBusy('wipe');
+    try {
+      const r: any = await api.waWipe();
+      toast.push(`Cancellati ${r?.deleted_messages ?? 0} msg + ${r?.deleted_contacts ?? 0} contatti. Premi Sincronizza chat.`, 'on');
+      onAfterAction?.();
+    } catch (e: any) { toast.push(e?.message ?? 'Errore wipe', 'err'); }
+    finally { setBusy(null); }
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)} title="Altre azioni">
+        <MoreHorizontal size={16} />
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 min-w-[240px] rounded-xl border border-border bg-surface shadow-2xl overflow-hidden">
+          {items.map((it) => {
+            const Icon = it.icon;
+            const danger = (it as any).danger;
+            return (
+              <button
+                key={it.id}
+                onClick={it.onClick}
+                disabled={!!it.running}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition border-b border-border/60 last:border-b-0 ${
+                  it.running
+                    ? (danger ? 'bg-red-500/10 cursor-wait' : 'bg-accent/10 cursor-wait')
+                    : danger
+                      ? 'hover:bg-red-500/10 text-red-300 border-t border-red-500/20'
+                      : 'hover:bg-surface2/60'
+                }`}
+              >
+                <Icon size={14} className={`shrink-0 ${danger ? 'text-red-400' : 'text-accent'}`} />
+                <span className="flex-1">{it.label}</span>
+                {it.running && (
+                  <span className={`inline-flex items-center gap-0.5 ${danger ? 'text-red-400' : 'text-accent'}`}>
+                    <span className={`w-1 h-1 rounded-full ${danger ? 'bg-red-400' : 'bg-accent'} animate-pulse`} />
+                    <span className={`w-1 h-1 rounded-full ${danger ? 'bg-red-400' : 'bg-accent'} animate-pulse [animation-delay:120ms]`} />
+                    <span className={`w-1 h-1 rounded-full ${danger ? 'bg-red-400' : 'bg-accent'} animate-pulse [animation-delay:240ms]`} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Render the WhatsApp profile picture when available; fall back to initials
+// inside a colored circle. <img> onError swaps back to initials if the URL
+// expired (WA rotates signed URLs).
+function Avatar({ name, url, size = 40, isGroup = false }: { name: string; url?: string | null; size?: number; isGroup?: boolean }) {
+  const [broken, setBroken] = useState(false);
+  const px = `${size}px`;
+  const fontSize = size >= 36 ? 12 : 10;
+  if (url && !broken) {
+    return (
+      <img
+        src={url}
+        alt={name}
+        onError={() => setBroken(true)}
+        style={{ width: px, height: px }}
+        className="rounded-full object-cover shrink-0 ring-1 ring-white/10"
+      />
+    );
+  }
+  return (
+    <div
+      className="rounded-full flex items-center justify-center font-semibold text-white shrink-0"
+      style={{ width: px, height: px, fontSize, background: avatarColor(name) }}
+    >
+      {isGroup ? <Users size={Math.round(size * 0.4)} /> : initials(name)}
+    </div>
+  );
+}
+
 function avatarColor(s: string): string {
   let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
@@ -104,8 +277,23 @@ export default function WhatsApp() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [pending, setPending] = useState<number>(0);
+  // Manual chat merge — when auto-dedupe can't link two chats via signals,
+  // the user picks the canonical and dup explicitly.
+  const [mergeFor, setMergeFor] = useState<string | null>(null);
+  const [mergeQuery, setMergeQuery] = useState('');
+  const [merging, setMerging] = useState(false);
+  // Manual brain-link: user explicitly bind a WA chat to a Person.
+  const [linkFor, setLinkFor] = useState<string | null>(null);
+  const [linkQuery, setLinkQuery] = useState('');
+  const [linkPeople, setLinkPeople] = useState<Array<{ slug: string; name: string; avatar_url?: string | null }>>([]);
+  const [linking, setLinking] = useState(false);
   const [bonifying, setBonifying] = useState(false);
   const [bonifyProgress, setBonifyProgress] = useState<{ total: number; toolCalls: number; onlyChat: string | null; startedAt: number } | null>(null);
+  // AI dedupe progress — phase + rolling log lines streamed from backend.
+  type AiPair = { canon: string; dup: string; reason: string };
+  const [aiDedupeProgress, setAiDedupeProgress] = useState<{
+    phase: string; startedAt: number; lines: string[]; pairs: AiPair[]; merged: number; touched: number;
+  } | null>(null);
   // Per-chat busy set — chat-jid currently being bonified (auto-sync or manual). Drives spinner on sidebar row.
   const [busyChats, setBusyChats] = useState<Set<string>>(new Set());
   const [elapsed, setElapsed] = useState(0);
@@ -273,6 +461,37 @@ export default function WhatsApp() {
       if (selected) loadMessages(selected);
       return;
     }
+    if (msg.type === 'wa:ai_dedupe') {
+      const p = msg.payload;
+      const phase = p.phase as string;
+      setAiDedupeProgress((cur) => {
+        const base = cur ?? { phase, startedAt: Date.now(), lines: [], pairs: [], merged: 0, touched: 0 };
+        const next = { ...base, phase };
+        const label = ({
+          start:        `Analizzo ${p.total} chat…`,
+          manifest:     `Manifest costruito (${p.chats} chat)`,
+          asking_ai:    `Mando manifest a Claude (${Math.round((p.prompt_chars ?? 0) / 1000)}K caratteri)…`,
+          parsing:      `Risposta ricevuta — parso (cost $${Number(p.cost ?? 0).toFixed(4)})`,
+          proposed:     `${(p.pairs ?? []).length} coppie identificate`,
+          merging:      `Unisco ${p.canon?.slice(-12) ?? '?'} ← ${(p.dups ?? []).length} dup`,
+          merged:       `✓ Unite ${(p.dups ?? []).length} chat in ${p.canon?.slice(-12) ?? '?'} (${p.touched ?? 0} msg)`,
+          merge_error:  `✗ Errore merge: ${String(p.error ?? '').slice(0, 100)}`,
+          done:         `Completato: ${p.merged} chat unite · ${p.touched} msg spostati · ${Math.round((p.durationMs ?? 0) / 1000)}s`,
+          error:        `Errore: ${String(p.error ?? '').slice(0, 200)}`,
+        } as Record<string, string>)[phase] ?? phase;
+        next.lines = [...base.lines, `[${new Date().toLocaleTimeString('it-IT')}] ${label}`].slice(-30);
+        if (phase === 'proposed') next.pairs = p.pairs ?? [];
+        if (phase === 'merged') next.merged += (p.dups ?? []).length;
+        if (phase === 'done') { next.merged = p.merged ?? next.merged; next.touched = p.touched ?? next.touched; }
+        return next;
+      });
+      if (phase === 'done' || phase === 'error') {
+        // Keep card visible 6s after completion so user can read summary.
+        setTimeout(() => setAiDedupeProgress(null), 6000);
+        loadChats();
+      }
+      return;
+    }
     if (msg.type === 'wa:bonify') {
       const p = msg.payload;
       if (p.kind === 'start') {
@@ -320,20 +539,55 @@ export default function WhatsApp() {
         <div className="flex items-center gap-2 flex-wrap">
           <Chip tone="on"><span className="inline-block w-1.5 h-1.5 rounded-full bg-ok mr-1.5 animate-pulse" />live</Chip>
           {pending > 0 && <Chip tone="warn">{pending} da bonificare</Chip>}
-          <Button size="sm" variant="ghost" onClick={refreshContacts} disabled={refreshingContacts}>
-            <UserCog size={14} className={`inline mr-1.5 -mt-0.5 ${refreshingContacts ? 'animate-spin' : ''}`} />
-            {refreshingContacts ? 'Contatti…' : 'Aggiorna contatti'}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={sync} disabled={syncing}>
-            <RefreshCw size={14} className={`inline mr-1.5 -mt-0.5 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Sincronizzo…' : 'Sincronizza chat'}
-          </Button>
           <Button size="sm" onClick={() => bonify()} disabled={bonifying || pending === 0}>
             <Sparkles size={14} className="inline mr-1.5 -mt-0.5" />
             {bonifying ? 'Lancio…' : `Bonifica (${Math.min(pending, 100)})`}
           </Button>
+          <WaToolbarMenu
+            sync={sync} syncing={syncing}
+            refreshContacts={refreshContacts} refreshingContacts={refreshingContacts}
+            onAfterAction={() => { loadChats(); loadPending(); }}
+          />
         </div>
       </div>
+
+      {aiDedupeProgress && (
+        <Card className="border-accent2/40 bg-gradient-to-br from-accent/5 to-accent2/5 p-3">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-2 text-sm">
+              <Sparkles size={16} className="animate-pulse text-accent2" />
+              <span className="font-semibold">AI dedupe in corso</span>
+              <Chip>{aiDedupeProgress.phase}</Chip>
+              {aiDedupeProgress.pairs.length > 0 && <Chip tone="accent">{aiDedupeProgress.pairs.length} coppie</Chip>}
+              {aiDedupeProgress.merged > 0 && <Chip tone="on">{aiDedupeProgress.merged} unite</Chip>}
+            </div>
+            <span className="text-[10px] text-muted font-mono">{Math.floor((Date.now() - aiDedupeProgress.startedAt) / 1000)}s</span>
+          </div>
+          <div className="bg-bg/60 border border-border rounded-lg p-2 max-h-40 overflow-y-auto font-mono text-[11px] space-y-0.5">
+            {aiDedupeProgress.lines.map((ln, i) => (
+              <div key={i} className="text-muted">{ln}</div>
+            ))}
+          </div>
+          {aiDedupeProgress.pairs.length > 0 && (
+            <div className="mt-2 text-[11px] space-y-1">
+              <div className="text-muted uppercase tracking-wider font-semibold text-[9px]">Proposte AI</div>
+              {aiDedupeProgress.pairs.slice(0, 8).map((p, i) => {
+                const canonName = chats.find((c) => c.chat_jid === p.canon)?.sender_name ?? p.canon;
+                const dupName = chats.find((c) => c.chat_jid === p.dup)?.sender_name ?? p.dup;
+                return (
+                  <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-surface2/40">
+                    <span className="font-medium text-accent">{canonName}</span>
+                    <span className="text-muted">←</span>
+                    <span className="text-muted line-through">{dupName}</span>
+                    {p.reason && <span className="text-[10px] text-muted ml-auto italic truncate">{p.reason}</span>}
+                  </div>
+                );
+              })}
+              {aiDedupeProgress.pairs.length > 8 && <div className="text-muted">+{aiDedupeProgress.pairs.length - 8} altri</div>}
+            </div>
+          )}
+        </Card>
+      )}
 
       {bonifyProgress && (
         <Card className="border-accent/40 bg-accent/5 flex items-center gap-4 flex-wrap p-3">
@@ -374,15 +628,29 @@ export default function WhatsApp() {
                 <button
                   key={c.chat_jid}
                   onClick={() => setSelected(c.chat_jid)}
-                  className={`w-full text-left px-3 py-2.5 flex items-center gap-3 border-b border-border/60 transition ${active ? 'bg-accent/10' : 'hover:bg-surface2/40'}`}
+                  className={`group w-full text-left px-3 py-2.5 flex items-center gap-3 border-b border-border/60 transition ${active ? 'bg-accent/10' : 'hover:bg-surface2/40'}`}
                 >
-                  <div className="w-10 h-10 rounded-full flex items-center justify-center font-semibold text-xs text-white shrink-0" style={{ background: avatarColor(name) }}>
-                    {c.is_group ? <Users size={16} /> : initials(name)}
-                  </div>
+                  <Avatar name={name} url={c.profile_pic_url} size={40} isGroup={c.is_group} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium truncate text-sm">{name}</span>
-                      <span className="text-[10px] text-muted shrink-0">{fmtTime(c.ts)}</span>
+                      <span className="text-[10px] text-muted shrink-0 flex items-center gap-1">
+                        {fmtTime(c.ts)}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setLinkFor(c.chat_jid); setLinkQuery(''); }}
+                          className={(c.linked_person_slug ? 'opacity-100 text-accent' : 'opacity-0 group-hover:opacity-100') + ' hover:text-accent transition p-0.5'}
+                          title={c.linked_person_slug ? `Cablato a ${c.linked_person_slug} — clicca per cambiare` : 'Cabla questa chat ad una persona del brain'}
+                        >
+                          <UserCog size={11} />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setMergeFor(c.chat_jid); setMergeQuery(''); }}
+                          className="opacity-0 group-hover:opacity-100 hover:text-accent transition p-0.5"
+                          title="Unisci con altra chat (questa diventa canonica)"
+                        >
+                          <GitMerge size={11} />
+                        </button>
+                      </span>
                     </div>
                     <div className="text-xs text-muted truncate flex items-center gap-1.5">
                       <span className="truncate flex-1">
@@ -436,9 +704,7 @@ export default function WhatsApp() {
                 const name = c?.sender_name || c?.sender_phone || selected;
                 return (
                   <div className="p-3 border-b border-border flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full flex items-center justify-center font-semibold text-xs text-white" style={{ background: avatarColor(name) }}>
-                      {c?.is_group ? <Users size={14} /> : initials(name)}
-                    </div>
+                    <Avatar name={name} url={c?.profile_pic_url} size={36} isGroup={!!c?.is_group} />
                     <div className="flex-1 min-w-0">
                       <div className="font-medium truncate">{name}</div>
                       <div className="text-[10px] text-muted font-mono truncate">{selected}</div>
@@ -492,7 +758,10 @@ export default function WhatsApp() {
                         : 'bg-surface2 border border-border rounded-bl-md'
                     }`}>
                       {m.is_group && !m.from_me && m.sender_name && (
-                        <div className="text-[10px] font-semibold text-accent2 mb-0.5">{m.sender_name}</div>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <Avatar name={m.sender_name} url={m.sender_pic_url} size={16} />
+                          <span className="text-[10px] font-semibold text-accent2 truncate">{m.sender_name}</span>
+                        </div>
                       )}
                       {isAi && (
                         <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-accent2 font-semibold mb-1">
@@ -505,7 +774,7 @@ export default function WhatsApp() {
                           {audioCaption(m.text) && <div className="text-xs text-muted mt-1.5">{audioCaption(m.text)}</div>}
                         </div>
                       ) : (
-                        <div className="whitespace-pre-wrap">{m.text || <span className="text-muted italic">(empty)</span>}</div>
+                        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{m.text || <span className="text-muted italic">(empty)</span>}</div>
                       )}
                       <div className="text-[9px] text-muted mt-1 text-right">{fmtAgo(m.ts)} fa</div>
                     </div>
@@ -606,6 +875,183 @@ export default function WhatsApp() {
           )}
         </div>
       </div>
+
+      {/* Manual brain-link picker — bind a WA chat to an existing Person. */}
+      {linkFor && (() => {
+        const target = chats.find((x) => x.chat_jid === linkFor);
+        const targetName = target?.sender_name ?? target?.sender_phone ?? linkFor;
+        async function loadPeople(q: string) {
+          try {
+            const r: any = await api.people({ q, limit: 30 });
+            setLinkPeople((r?.rows ?? []).map((p: any) => ({ slug: p.slug, name: p.name, avatar_url: p.avatar_url ?? null })));
+          } catch {}
+        }
+        async function doLink(slug: string | null) {
+          setLinking(true);
+          try {
+            await api.waLinkChat(linkFor!, slug);
+            toast.push(slug ? `Chat cablata a ${slug}` : 'Cablaggio rimosso', 'on');
+            setLinkFor(null);
+            // optimistic update local chats
+            setChats((prev) => prev.map((x) => x.chat_jid === linkFor ? { ...x, linked_person_slug: slug } : x));
+          } catch (e: any) { toast.push(e?.message ?? 'Errore', 'err'); }
+          finally { setLinking(false); }
+        }
+        return (
+          <div className="fixed inset-0 z-50 bg-bg/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setLinkFor(null)}>
+            <Card className="w-full max-w-md">
+              <div className="p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+                <div>
+                  <div className="text-xs text-muted">Cabla chat a persona del brain</div>
+                  <div className="font-medium truncate text-sm">{targetName}</div>
+                  {target?.linked_person_slug && (
+                    <div className="text-[11px] text-accent mt-1">Già cablata a <code>{target.linked_person_slug}</code></div>
+                  )}
+                </div>
+                <input
+                  autoFocus
+                  placeholder="Cerca persona…"
+                  value={linkQuery}
+                  onChange={(e) => { setLinkQuery(e.target.value); loadPeople(e.target.value); }}
+                  onFocus={() => loadPeople(linkQuery)}
+                  className="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-accent"
+                />
+                <div className="max-h-72 overflow-y-auto space-y-1">
+                  {linkPeople.length === 0 && <div className="text-xs text-muted py-2">Nessun risultato. Digita per cercare.</div>}
+                  {linkPeople.map((p) => (
+                    <button
+                      key={p.slug}
+                      onClick={() => doLink(p.slug)}
+                      disabled={linking}
+                      className="w-full text-left px-2 py-1.5 rounded hover:bg-surface flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {p.avatar_url
+                        ? <img src={p.avatar_url} className="w-6 h-6 rounded-full object-cover" />
+                        : <div className="w-6 h-6 rounded-full bg-surface border border-border" />}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm truncate">{p.name}</div>
+                        <div className="text-[10px] text-muted truncate">{p.slug}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-border">
+                  {target?.linked_person_slug
+                    ? <Button size="sm" variant="ghost" onClick={() => doLink(null)} disabled={linking}>Rimuovi cablaggio</Button>
+                    : <span />}
+                  <Button size="sm" variant="ghost" onClick={() => setLinkFor(null)} disabled={linking}>Chiudi</Button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        );
+      })()}
+
+      {/* Manual merge picker — user marks "mergeFor" as canonical, then picks
+          the duplicate chat from the searchable list. */}
+      {mergeFor && (() => {
+        const canonChat = chats.find((x) => x.chat_jid === mergeFor);
+        const canonName = canonChat?.sender_name ?? canonChat?.sender_phone ?? mergeFor;
+        const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, '').trim();
+        const canonTokens = new Set(norm(canonName).split(/\s+/).filter((t) => t.length >= 3));
+        const canonPic = canonChat?.profile_pic_url ?? '';
+        const canonPerson = canonChat?.person_slug ?? '';
+        const canonPhone = canonChat?.sender_phone ?? '';
+        const q = mergeQuery.toLowerCase().trim();
+        // Score: same profile pic (huge), same person slug (huge), same phone
+        // (huge), token overlap (medium).
+        const candidates = chats
+          .filter((c) => c.chat_jid !== mergeFor && !c.is_group)
+          .map((c) => {
+            const name = (c.sender_name ?? '').toLowerCase();
+            const tokens = norm(name).split(/\s+/).filter((t) => t.length >= 3);
+            let score = 0;
+            // Same WhatsApp avatar URL ⇒ almost certainly same human.
+            if (canonPic && c.profile_pic_url && canonPic === c.profile_pic_url) score += 10;
+            if (canonPerson && c.person_slug && canonPerson === c.person_slug) score += 10;
+            if (canonPhone && c.sender_phone && canonPhone === c.sender_phone) score += 8;
+            for (const t of tokens) if (canonTokens.has(t)) score += 1;
+            return { c, name, score };
+          })
+          .filter(({ c, name }) => {
+            if (!q) return true;
+            const p = (c.sender_phone ?? '').toLowerCase();
+            return name.includes(q) || p.includes(q) || c.chat_jid.toLowerCase().includes(q);
+          })
+          .sort((a, b) => b.score - a.score)
+          .map(({ c, score }) => ({ ...c, _score: score }))
+          // No more 60 cap — let user scroll the full list. Search filters it.
+          ;
+        async function doMerge(dupJid: string) {
+          if (merging) return;
+          setMerging(true);
+          try {
+            const r: any = await api.waMergeChats(mergeFor!, [dupJid]);
+            toast.push(`Unite. ${r?.touched ?? 0} messaggi spostati.`, 'on');
+            setMergeFor(null);
+            setMergeQuery('');
+            await loadChats();
+          } catch (e: any) { toast.push(e?.message ?? 'Errore unione', 'err'); }
+          finally { setMerging(false); }
+        }
+        return (
+          <div className="fixed inset-0 z-50 bg-bg/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setMergeFor(null)}>
+            <div onClick={(e) => e.stopPropagation()} className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
+              <div className="p-4 border-b border-border">
+                <div className="flex items-center gap-2 text-sm">
+                  <GitMerge size={14} className="text-accent" />
+                  <span className="font-semibold">Unisci chat duplicata</span>
+                </div>
+                <div className="mt-2 text-xs text-muted">
+                  Canonica: <span className="text-text font-medium">{canonName}</span>. Seleziona la chat duplicata da fondere qui dentro.
+                </div>
+                <input
+                  autoFocus
+                  value={mergeQuery}
+                  onChange={(e) => setMergeQuery(e.target.value)}
+                  placeholder="Cerca per nome o numero…"
+                  className="w-full mt-3 bg-surface2 border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-accent"
+                />
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {candidates.length === 0 && <div className="text-xs text-muted text-center py-6">Nessuna chat trovata.</div>}
+                {candidates.length > 0 && candidates[0]._score > 0 && !q && (
+                  <div className="text-[9px] uppercase tracking-wider text-accent font-semibold px-4 pt-2 pb-1">Suggeriti — token in comune</div>
+                )}
+                {candidates.map((c, i) => {
+                  const n = c.sender_name ?? c.sender_phone ?? c.chat_jid;
+                  const suggested = c._score > 0;
+                  // Separator between suggested + others when no query.
+                  const showSep = !q && i > 0 && candidates[i - 1]._score > 0 && c._score === 0;
+                  return (
+                    <div key={c.chat_jid}>
+                      {showSep && <div className="text-[9px] uppercase tracking-wider text-muted font-semibold px-4 pt-2 pb-1 border-t border-border/40">Altre chat</div>}
+                      <button
+                        onClick={() => doMerge(c.chat_jid)}
+                        disabled={merging}
+                        className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-left border-b border-border/60 last:border-b-0 hover:bg-surface2/60 disabled:opacity-50 transition ${suggested ? 'bg-accent/5' : ''}`}
+                      >
+                        <Avatar name={n} url={c.profile_pic_url} size={32} />
+                        <div className="flex-1 min-w-0">
+                          <div className="truncate font-medium flex items-center gap-1.5">
+                            {n}
+                            {suggested && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30 uppercase tracking-wider">match</span>}
+                          </div>
+                          <div className="text-[10px] text-muted truncate font-mono">{c.chat_jid}</div>
+                        </div>
+                        <span className="text-[10px] text-muted shrink-0">{c.total_count} msg</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="p-3 border-t border-border flex justify-end">
+                <Button size="sm" variant="ghost" onClick={() => setMergeFor(null)} disabled={merging}>Annulla</Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

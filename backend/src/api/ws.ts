@@ -61,6 +61,8 @@ export function attachWs(server: Server) {
   bus.on('wa:closed', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:closed', payload: m }); });
   bus.on('wa:message', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:message', payload: m }); });
   bus.on('wa:bonify', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:bonify', payload: m }); });
+  bus.on('wa:contact_pic', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:contact_pic', payload: m }); });
+  bus.on('wa:ai_dedupe', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:ai_dedupe', payload: m }); });
   bus.on('wa:synced', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'wa:synced', payload: m }); });
   // Instagram DM events
   bus.on('ig:status', (m: any) => { if (m.userId) broadcast(m.userId, { type: 'ig:status', payload: m }); });

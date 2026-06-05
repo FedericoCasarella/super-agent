@@ -301,13 +301,26 @@ const connector: Connector = {
         // "Command failed" is ImapFlow's default Error message — surface the
         // real server response so the user can act (wrong app password, 2FA,
         // mailbox missing, IP blocked, etc.).
+        // Dig the human-readable BAD/NO text out of ImapFlow's response shape:
+        // response = { tag, command, attributes: [{ type, section?, value? }] }
+        let detail = '';
+        try {
+          const attrs = e?.response?.attributes ?? [];
+          detail = JSON.stringify(attrs);
+          for (const a of attrs) {
+            if (a?.value && typeof a.value === 'string') detail = a.value;
+            else if (Array.isArray(a)) detail = a.map((x: any) => x?.value ?? x).join(' ');
+          }
+        } catch {}
         ctx.log('account-error', {
           account: acc.label,
           host: acc.host,
           user: acc.user,
           err: String(e?.message ?? e),
           code: e?.code ?? null,
-          response: e?.response ?? e?.responseText ?? null,
+          response_command: e?.response?.command ?? null,
+          response_detail: detail || null,
+          response_raw: JSON.stringify(e?.response ?? null),
           authenticationFailed: !!e?.authenticationFailed,
         });
       } finally {

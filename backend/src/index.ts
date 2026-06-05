@@ -77,6 +77,43 @@ async function main() {
   server.listen(config.port, config.host, () => {
     console.log(`[backend] http://${config.host}:${config.port}`);
   });
+
+  // Graceful shutdown — tsx watch sends SIGINT/SIGTERM on reload + concurrently
+  // does the same when the user hits ^C. Without explicit teardown of HTTP
+  // server, Playwright contexts, IMAP polls, cron timers etc. the event loop
+  // stays alive and tsx force-kills after timeout, spamming the console.
+  let shuttingDown = false;
+  async function shutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[shutdown] ${signal} received — closing connections…`);
+    // Hard deadline: if anything hangs, exit anyway after 4s so tsx doesn't have to kill us.
+    const hardKill = setTimeout(() => {
+      console.warn('[shutdown] hard exit after 4s timeout');
+      process.exit(0);
+    }, 4000);
+    hardKill.unref();
+    try { await new Promise<void>((res) => server.close(() => res())); } catch {}
+    // Stop Instagram Playwright contexts
+    try {
+      const ig = await import('./connectors/builtin/instagram/index.js');
+      const fs = await import('node:fs/promises');
+      const os = await import('node:os');
+      const path = await import('node:path');
+      const root = path.join(os.homedir(), '.super-agent', 'ig-sessions');
+      const entries = await fs.readdir(root).catch(() => [] as string[]);
+      for (const e of entries) {
+        const m = e.match(/^u(\d+)$/);
+        if (m) { try { await ig.stopIgForUser(Number(m[1])); } catch {} }
+      }
+    } catch {}
+    // Close pg pool
+    try { const { pool } = await import('./db/index.js'); await pool.end(); } catch {}
+    console.log('[shutdown] done');
+    process.exit(0);
+  }
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
