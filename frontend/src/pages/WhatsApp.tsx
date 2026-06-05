@@ -4,7 +4,8 @@ import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { useWS } from '../ws';
 import { useQuotaLock } from '../quota';
-import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X, MoreHorizontal, ImageIcon, GitMerge, Trash2 } from 'lucide-react';
+import { Users, MessageCircle, RefreshCw, Sparkles, UserCog, Wand2, Send, X, MoreHorizontal, ImageIcon, GitMerge, Trash2, Pencil, Brain, ExternalLink } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import BrainLoading from '../components/BrainLoading';
 
 type Chat = {
@@ -21,6 +22,8 @@ type Chat = {
   auto_bonify?: boolean;
   profile_pic_url?: string | null;
   linked_person_slug?: string | null;
+  display_name_override?: string | null;
+  display_phone_override?: string | null;
 };
 
 type Msg = {
@@ -287,6 +290,19 @@ export default function WhatsApp() {
   const [linkQuery, setLinkQuery] = useState('');
   const [linkPeople, setLinkPeople] = useState<Array<{ slug: string; name: string; avatar_url?: string | null }>>([]);
   const [linking, setLinking] = useState(false);
+  // Per-chat display override dialog (custom name + phone).
+  const [editFor, setEditFor] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const chatMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!chatMenuOpen) return;
+    const fn = (e: MouseEvent) => { if (chatMenuRef.current && !chatMenuRef.current.contains(e.target as Node)) setChatMenuOpen(false); };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, [chatMenuOpen]);
   const [bonifying, setBonifying] = useState(false);
   const [bonifyProgress, setBonifyProgress] = useState<{ total: number; toolCalls: number; onlyChat: string | null; startedAt: number } | null>(null);
   // AI dedupe progress — phase + rolling log lines streamed from backend.
@@ -636,20 +652,20 @@ export default function WhatsApp() {
                       <span className="font-medium truncate text-sm">{name}</span>
                       <span className="text-[10px] text-muted shrink-0 flex items-center gap-1">
                         {fmtTime(c.ts)}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setLinkFor(c.chat_jid); setLinkQuery(''); }}
-                          className={(c.linked_person_slug ? 'opacity-100 text-accent' : 'opacity-0 group-hover:opacity-100') + ' hover:text-accent transition p-0.5'}
-                          title={c.linked_person_slug ? `Cablato a ${c.linked_person_slug} — clicca per cambiare` : 'Cabla questa chat ad una persona del brain'}
-                        >
-                          <UserCog size={11} />
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setMergeFor(c.chat_jid); setMergeQuery(''); }}
-                          className="opacity-0 group-hover:opacity-100 hover:text-accent transition p-0.5"
-                          title="Unisci con altra chat (questa diventa canonica)"
-                        >
-                          <GitMerge size={11} />
-                        </button>
+                        {(c.display_name_override || c.display_phone_override) && <Pencil size={9} className="text-accent" />}
+                        {c.linked_person_slug && (
+                          <span className="inline-flex items-center gap-0.5">
+                            <Brain size={10} className="text-accent2" />
+                            <Link
+                              to={`/people?slug=${encodeURIComponent(c.linked_person_slug)}`}
+                              onClick={(e) => e.stopPropagation()}
+                              title={`Apri dossier di ${c.linked_person_slug}`}
+                              className="text-accent2 hover:text-accent transition"
+                            >
+                              <ExternalLink size={9} />
+                            </Link>
+                          </span>
+                        )}
                       </span>
                     </div>
                     <div className="text-xs text-muted truncate flex items-center gap-1.5">
@@ -703,49 +719,141 @@ export default function WhatsApp() {
                 const c = chats.find((x) => x.chat_jid === selected);
                 const name = c?.sender_name || c?.sender_phone || selected;
                 return (
-                  <div className="p-3 border-b border-border flex items-center gap-3">
-                    <Avatar name={name} url={c?.profile_pic_url} size={36} isGroup={!!c?.is_group} />
+                  <div className="px-4 py-2.5 border-b border-border bg-surface/60 backdrop-blur-sm flex items-center gap-3">
+                    {/* Identity */}
+                    <Avatar name={name} url={c?.profile_pic_url} size={40} isGroup={!!c?.is_group} />
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{name}</div>
-                      <div className="text-[10px] text-muted font-mono truncate">{selected}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold truncate text-[15px]">{name}</span>
+                        {c?.linked_person_slug && (
+                          <Link
+                            to={`/people?slug=${encodeURIComponent(c.linked_person_slug)}`}
+                            className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-accent2 border border-accent2/40 rounded-full px-2 py-px hover:bg-accent2/10 transition"
+                            title={`Apri dossier di ${c.linked_person_slug}`}
+                          >
+                            <Brain size={10} /> {c.linked_person_slug}
+                            <ExternalLink size={9} />
+                          </Link>
+                        )}
+                        {(c?.display_name_override || c?.display_phone_override) && (
+                          <span className="text-[9px] uppercase tracking-wider text-accent2 border border-accent2/40 rounded-full px-1.5 py-px" title="Nome/numero personalizzati">custom</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-muted">
+                        <span className="font-mono truncate">{c?.sender_phone || selected}</span>
+                        {c && c.total_count > 0 && c.pending_count === 0 && <span className="text-on">●&nbsp;bonificata</span>}
+                        {c && c.pending_count > 0 && c.bonified_count > 0 && <span className="text-warn">●&nbsp;{c.bonified_count}/{c.total_count}</span>}
+                        {c && c.pending_count > 0 && c.bonified_count === 0 && <span className="text-muted">●&nbsp;nuova</span>}
+                      </div>
                     </div>
-                    {c?.person_slug && <Chip tone="accent">{c.person_slug}</Chip>}
-                    {c && c.total_count > 0 && c.pending_count === 0 && <Chip tone="on">✓ bonificata</Chip>}
-                    {c && c.pending_count > 0 && c.bonified_count > 0 && <Chip tone="warn">{c.bonified_count}/{c.total_count}</Chip>}
-                    {c && c.pending_count > 0 && c.bonified_count === 0 && <Chip>nuova</Chip>}
-                    <Button size="sm" variant="ghost" disabled={syncingChat} onClick={syncChat} title="Sincronizza storia di questa chat">
-                      <RefreshCw size={13} className={`inline mr-1 -mt-0.5 ${syncingChat ? 'animate-spin' : ''}`} />
-                      {syncingChat ? 'Sync…' : 'Sync chat'}
-                    </Button>
+
+                    {/* Auto-sync inline pill */}
+                    <button
+                      onClick={() => {
+                        const v = !c?.auto_bonify;
+                        setChats((prev) => prev.map((x) => x.chat_jid === selected ? { ...x, auto_bonify: v } : x));
+                        api.waSetChatAutoBonify(selected!, v)
+                          .then(() => toast.push(v ? '✓ Auto-sync attivo' : 'Auto-sync off', v ? 'on' : 'warn'))
+                          .catch((err: any) => {
+                            setChats((prev) => prev.map((x) => x.chat_jid === selected ? { ...x, auto_bonify: !v } : x));
+                            toast.push(err.message, 'err');
+                          });
+                      }}
+                      className={`group inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border transition ${c?.auto_bonify ? 'bg-on/15 border-on/40 text-on' : 'bg-surface2 border-border text-muted hover:text-text'}`}
+                      title="Auto-bonifica i nuovi messaggi pending ogni 5 minuti"
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${c?.auto_bonify ? 'bg-on' : 'bg-muted'}`} />
+                      Auto-sync
+                    </button>
+
+                    {/* Sync chat — icon-only */}
+                    <button
+                      onClick={syncChat}
+                      disabled={syncingChat}
+                      title="Sincronizza storia di questa chat"
+                      className="p-1.5 rounded-lg border border-border bg-surface2 hover:text-accent disabled:opacity-50 transition"
+                    >
+                      <RefreshCw size={14} className={syncingChat ? 'animate-spin' : ''} />
+                    </button>
+
+                    {/* Bonifica — secondary */}
                     <Button size="sm" variant="ghost" disabled={bonifying || quotaLocked} title={lockProps.title} onClick={() => bonify(selected)}>
-                      <Sparkles size={13} className="inline mr-1 -mt-0.5" />Bonifica chat
+                      <Sparkles size={13} className="inline mr-1 -mt-0.5" />Bonifica
                     </Button>
-                    <div className="inline-flex items-center gap-2 text-[11px] select-none" title="Auto-bonifica ogni 5 minuti i messaggi pending di questa chat">
-                      <span className="text-muted">Auto-sync</span>
-                      <Toggle
-                        checked={!!c?.auto_bonify}
-                        onChange={(v) => {
-                          // Optimistic: flip local state instantly, request in background.
-                          setChats((prev) => prev.map((x) => x.chat_jid === selected ? { ...x, auto_bonify: v } : x));
-                          api.waSetChatAutoBonify(selected, v)
-                            .then(() => toast.push(v ? '✓ Auto-sync attivo' : 'Auto-sync disattivato', v ? 'on' : 'warn'))
-                            .catch((err: any) => {
-                              // Revert on failure
-                              setChats((prev) => prev.map((x) => x.chat_jid === selected ? { ...x, auto_bonify: !v } : x));
-                              toast.push(err.message, 'err');
-                            });
-                        }}
-                      />
-                    </div>
+
+                    {/* Suggerisci — primary CTA */}
                     <Button size="sm" disabled={suggesting || quotaLocked} title={lockProps.title} onClick={suggest}>
                       <Wand2 size={13} className={`inline mr-1 -mt-0.5 ${suggesting ? 'animate-pulse' : ''}`} />
-                      {suggesting ? 'Penso…' : 'Suggerisci risposta'}
+                      {suggesting ? 'Penso…' : 'Suggerisci'}
                     </Button>
+
+                    {/* Kebab — contact-level actions */}
+                    <div className="relative" ref={chatMenuRef}>
+                      <button
+                        onClick={() => setChatMenuOpen((v) => !v)}
+                        className="p-1.5 rounded-lg border border-border bg-surface2 hover:text-accent transition"
+                        title="Azioni contatto"
+                      >
+                        <MoreHorizontal size={14} />
+                      </button>
+                      {chatMenuOpen && (
+                        <div className="absolute right-0 top-full mt-1 z-50 min-w-[220px] rounded-xl border border-border bg-surface shadow-2xl overflow-hidden">
+                          <button
+                            onClick={() => {
+                              setChatMenuOpen(false);
+                              setEditFor(selected!);
+                              setEditName(c?.display_name_override ?? c?.sender_name ?? '');
+                              setEditPhone(c?.display_phone_override ?? c?.sender_phone ?? '');
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-surface2 flex items-center gap-2"
+                          >
+                            <Pencil size={13} className={(c?.display_name_override || c?.display_phone_override) ? 'text-accent' : 'text-muted'} />
+                            <div className="flex-1">Modifica nome/numero</div>
+                            {(c?.display_name_override || c?.display_phone_override) && <span className="text-[9px] text-accent">attivo</span>}
+                          </button>
+                          <button
+                            onClick={() => { setChatMenuOpen(false); setLinkFor(selected!); setLinkQuery(''); }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-surface2 flex items-center gap-2"
+                          >
+                            <UserCog size={13} className={c?.linked_person_slug ? 'text-accent' : 'text-muted'} />
+                            <div className="flex-1">Cabla a persona del brain</div>
+                            {c?.linked_person_slug && <span className="text-[9px] text-accent truncate max-w-[80px]">{c.linked_person_slug}</span>}
+                          </button>
+                          <button
+                            onClick={() => { setChatMenuOpen(false); setMergeFor(selected!); setMergeQuery(''); }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-surface2 flex items-center gap-2"
+                          >
+                            <GitMerge size={13} className="text-muted" />
+                            <div className="flex-1">Unisci con altra chat</div>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })()}
               <div ref={streamRef} className="flex-1 overflow-y-auto p-4 space-y-2">
-                {loading && <BrainLoading size={80} label="Caricamento messaggi…" className="my-4" />}
+                {loading && messages.length === 0 && (
+                  <div className="space-y-3 animate-pulse">
+                    {[
+                      { side: 'left', w: 'w-2/5' },
+                      { side: 'right', w: 'w-1/2' },
+                      { side: 'left', w: 'w-1/3' },
+                      { side: 'left', w: 'w-3/5' },
+                      { side: 'right', w: 'w-2/5' },
+                      { side: 'right', w: 'w-1/3' },
+                      { side: 'left', w: 'w-1/2' },
+                      { side: 'left', w: 'w-2/5' },
+                    ].map((s, i) => (
+                      <div key={i} className={`flex ${s.side === 'right' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`${s.w} max-w-[70%]`}>
+                          <div className={`h-9 rounded-2xl ${s.side === 'right' ? 'bg-accent/20 rounded-br-md' : 'bg-surface2 border border-border rounded-bl-md'}`} />
+                          <div className={`mt-1 h-2 w-10 rounded bg-muted/15 ${s.side === 'right' ? 'ml-auto' : ''}`} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {messages.map((m) => {
                   const isAi = m.from_me && m.source === 'ai';
                   return (
@@ -875,6 +983,71 @@ export default function WhatsApp() {
           )}
         </div>
       </div>
+
+      {/* Per-chat display override — set custom name + phone shown in UI. */}
+      {editFor && (() => {
+        const target = chats.find((x) => x.chat_jid === editFor);
+        const hasOverride = !!(target?.display_name_override || target?.display_phone_override);
+        async function save(clear = false) {
+          setEditSaving(true);
+          try {
+            const payload = clear
+              ? { display_name: null, display_phone: null }
+              : { display_name: editName.trim() || null, display_phone: editPhone.trim() || null };
+            await api.waSetChatDisplay(editFor!, payload);
+            setChats((prev) => prev.map((x) => x.chat_jid === editFor
+              ? { ...x, display_name_override: payload.display_name, display_phone_override: payload.display_phone,
+                  sender_name: payload.display_name ?? x.sender_name,
+                  sender_phone: payload.display_phone ?? x.sender_phone }
+              : x));
+            toast.push(clear ? 'Override rimosso' : 'Salvato', 'on');
+            setEditFor(null);
+          } catch (e: any) { toast.push(e?.message ?? 'Errore', 'err'); }
+          finally { setEditSaving(false); }
+        }
+        return (
+          <div className="fixed inset-0 z-50 bg-bg/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setEditFor(null)}>
+            <Card className="w-full max-w-md">
+              <div className="p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+                <div>
+                  <div className="text-xs text-muted">Modifica chat</div>
+                  <div className="font-medium truncate text-sm">{target?.sender_name ?? editFor}</div>
+                  <div className="text-[10px] text-muted truncate">{editFor}</div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted">Nome visualizzato</label>
+                  <input
+                    autoFocus
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Es. Mario Rossi"
+                    className="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-accent"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted">Numero visualizzato</label>
+                  <input
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    placeholder="Es. +39 333 1234567"
+                    className="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-accent"
+                  />
+                </div>
+                <div className="text-[10px] text-muted">Override locale — sopravvive a ogni sync. Lascia vuoto per usare il valore di WhatsApp.</div>
+                <div className="flex items-center justify-between pt-2 border-t border-border">
+                  {hasOverride
+                    ? <Button size="sm" variant="ghost" onClick={() => save(true)} disabled={editSaving}>Rimuovi override</Button>
+                    : <span />}
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="ghost" onClick={() => setEditFor(null)} disabled={editSaving}>Annulla</Button>
+                    <Button size="sm" onClick={() => save(false)} disabled={editSaving}>Salva</Button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
+        );
+      })()}
 
       {/* Manual brain-link picker — bind a WA chat to an existing Person. */}
       {linkFor && (() => {

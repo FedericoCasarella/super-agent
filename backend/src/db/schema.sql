@@ -711,3 +711,12 @@ DO $$ BEGIN
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS wa_contacts_linked_person_idx ON wa_contacts(user_id, linked_person_slug) WHERE linked_person_slug IS NOT NULL;
+
+-- Per-chat user overrides: name + phone shown in UI. Survive every WA sync,
+-- never overwritten by Baileys upsertContacts (it only touches `name`/`notify`).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='display_name') THEN
+    ALTER TABLE wa_contacts ADD COLUMN display_name TEXT;
+    ALTER TABLE wa_contacts ADD COLUMN display_phone TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;

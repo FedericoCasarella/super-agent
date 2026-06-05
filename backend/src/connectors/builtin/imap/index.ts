@@ -268,14 +268,21 @@ const connector: Connector = {
         await client.connect();
         const lock = await client.getMailboxLock(acc.mailbox || 'INBOX');
         try {
+          // Strict servers (Aruba, privateemail) return BAD "Invalid messageset"
+          // when the FETCH range is past UIDNEXT (no new msgs) instead of empty.
+          // Resolve UIDNEXT first and bail out cleanly when there's nothing new.
+          const status = await client.status(acc.mailbox || 'INBOX', { messages: true, uidNext: true });
+          const uidNext = (status.uidNext ?? 1) as number;
+          const totalMsgs = (status.messages ?? 0) as number;
           let range: string;
           if (lastUid > 0) {
+            if (lastUid + 1 >= uidNext) { /* nothing new */ continue; }
             range = `${lastUid + 1}:*`;
           } else {
-            const status = await client.status(acc.mailbox || 'INBOX', { messages: true, uidNext: true });
-            const uidNext = (status.uidNext ?? 1) as number;
+            if (totalMsgs === 0) continue;
             const backlog = Math.max(0, acc.initialBacklog ?? 0);
             const from = backlog > 0 ? Math.max(1, uidNext - backlog) : uidNext;
+            if (from >= uidNext) { maxUid = uidNext - 1; continue; }
             range = `${from}:*`;
             maxUid = from - 1;
           }
@@ -532,6 +539,7 @@ const connector: Connector = {
             const uids = await client.search(q, { uid: true });
             const slice = (uids as number[]).slice(-Math.min(limit, 50));
             const out: any[] = [];
+            if (slice.length === 0) return out;
             for await (const msg of client.fetch(slice, { uid: true, source: true }, { uid: true })) {
               const parsed = await simpleParser(msg.source as Buffer);
               const body = emailBodyText(parsed);

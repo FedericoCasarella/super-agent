@@ -586,6 +586,8 @@ export async function listChats(userId: number): Promise<any[]> {
               -- No more auto phone-lookup against People — chat list mirrors
               -- what's on WhatsApp itself.
               lower(trim(COALESCE(
+                NULLIF(c_chat.display_name, ''),
+                NULLIF(c_sender.display_name, ''),
                 (SELECT pp.name FROM people pp
                   WHERE pp.user_id=$1 AND c_chat.linked_person_slug IS NOT NULL
                     AND pp.slug = c_chat.linked_person_slug
@@ -637,7 +639,10 @@ export async function listChats(userId: number): Promise<any[]> {
      )
      SELECT l.chat_jid,
             COALESCE(
-              -- Manually-linked Person wins (only if user clicked "cable").
+              -- User override wins (per-chat dialog).
+              NULLIF(c_chat.display_name, ''),
+              NULLIF(c_sender.display_name, ''),
+              -- Manually-linked Person next (only if user clicked "cable").
               (SELECT pp.name FROM people pp
                 WHERE pp.user_id=$1 AND c_chat.linked_person_slug IS NOT NULL
                   AND pp.slug = c_chat.linked_person_slug
@@ -651,7 +656,10 @@ export async function listChats(userId: number): Promise<any[]> {
               NULLIF(li.sender_name, ''),
               CASE WHEN l.sender_phone IS NOT NULL AND l.sender_phone <> '' THEN '+' || l.sender_phone END
             ) AS sender_name,
-            l.sender_phone, l.person_slug, l.is_group, l.text, l.ts,
+            COALESCE(NULLIF(c_chat.display_phone, ''), NULLIF(c_sender.display_phone, ''), l.sender_phone) AS sender_phone,
+            c_chat.display_name AS display_name_override,
+            c_chat.display_phone AS display_phone_override,
+            l.person_slug, l.is_group, l.text, l.ts,
             COALESCE(c_chat.profile_pic_url, c_sender.profile_pic_url) AS profile_pic_url,
             c_chat.linked_person_slug AS linked_person_slug,
             COALESCE(s.total, 0)::int AS total_count,
@@ -722,6 +730,37 @@ export async function mergeChats(userId: number, canonJid: string, dupJids: stri
   const touched = r1.length + r2.length;
   console.log(`[wa:u${userId}] merge done: deleted=${del.length} updated_chat=${r1.length} updated_sender=${r2.length}`);
   return { ok: true, touched, updatedChat: r1.length, updatedSender: r2.length, deletedCollisions: del.length };
+}
+
+// Per-chat user override of displayed name + phone. Survives every WA sync
+// (Baileys only writes `name`/`notify` — never these columns).
+export async function setChatDisplayOverride(
+  userId: number, chatJid: string,
+  payload: { display_name?: string | null; display_phone?: string | null },
+): Promise<{ ok: boolean }> {
+  const dn = payload.display_name === undefined ? undefined : (payload.display_name?.trim() || null);
+  const dp = payload.display_phone === undefined ? undefined : (payload.display_phone?.trim() || null);
+  if (dn === undefined && dp === undefined) return { ok: true };
+  await query(
+    `INSERT INTO wa_contacts(user_id, jid, display_name, display_phone, updated_at)
+     VALUES($1,$2,$3,$4, now())
+     ON CONFLICT(user_id, jid) DO UPDATE SET
+       display_name = COALESCE($3, wa_contacts.display_name),
+       display_phone = COALESCE($4, wa_contacts.display_phone),
+       updated_at = now()`,
+    [userId, chatJid, dn ?? null, dp ?? null],
+  );
+  // Allow nulling explicitly when caller passed empty string.
+  if (dn === null || dp === null) {
+    await query(
+      `UPDATE wa_contacts SET
+         display_name = CASE WHEN $3::bool THEN NULL ELSE display_name END,
+         display_phone = CASE WHEN $4::bool THEN NULL ELSE display_phone END
+       WHERE user_id=$1 AND jid=$2`,
+      [userId, chatJid, dn === null, dp === null],
+    );
+  }
+  return { ok: true };
 }
 
 // Manually cable a WA chat to a Person in the brain. Pass slug=null to unlink.
@@ -1209,7 +1248,6 @@ async function refreshProfilePicsLoop(userId: number, sock: any) {
           `SELECT jid FROM wa_contacts
            WHERE user_id=$1
              AND jid NOT LIKE '%@broadcast'
-             AND jid NOT LIKE '%@lid'
              AND (profile_pic_fetched_at IS NULL OR profile_pic_fetched_at < now() - ($2 || ' days')::interval)
            ORDER BY profile_pic_fetched_at NULLS FIRST
            LIMIT $3`,

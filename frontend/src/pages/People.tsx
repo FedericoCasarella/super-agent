@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Input, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
@@ -58,6 +58,25 @@ export default function PeoplePage() {
   }, [q, limit, offset, sort, dir, toast]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Deep-link: ?slug=foo auto-opens the dossier when row is in current page.
+  // If not in current page, query People API directly for that slug.
+  const [sp, setSp] = useSearchParams();
+  const deepSlug = sp.get('slug');
+  useEffect(() => {
+    if (!deepSlug) return;
+    let cancelled = false;
+    (async () => {
+      const inPage = rows.find((p) => p.slug === deepSlug);
+      if (inPage) { setOpenPerson(inPage); return; }
+      try {
+        const r = await api.people({ q: deepSlug, limit: 1 });
+        if (!cancelled && r.rows?.[0]) setOpenPerson(r.rows[0]);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepSlug]);
 
   // Debounce search input
   useEffect(() => {

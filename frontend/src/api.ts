@@ -115,6 +115,8 @@ export const api = {
   waAiDedupe: () => req<any>('/whatsapp/chats/ai-dedupe', { method: 'POST' }),
   waWipe: () => req<any>('/whatsapp/chats/wipe', { method: 'POST' }),
   waLinkChat: (jid: string, slug: string | null) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/link`, { method: 'POST', body: JSON.stringify({ slug }) }),
+  waSetChatDisplay: (jid: string, payload: { display_name?: string | null; display_phone?: string | null }) =>
+    req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/display`, { method: 'POST', body: JSON.stringify(payload) }),
   waMergeChats: (canon: string, dups: string[]) => req<any>('/whatsapp/chats/merge', { method: 'POST', body: JSON.stringify({ canon, dups }) }),
   waSuggestReply: (jid: string, hint?: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
   waSyncChat: (jid: string, batches = 3) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/sync`, { method: 'POST', body: JSON.stringify({ batches }) }),

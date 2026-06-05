@@ -323,6 +323,20 @@ const TRIGGER_MATCHERS: Record<string, TriggerMatch> = {
   'team.fired':       (cfg, p) => !cfg.team_id || Number(cfg.team_id) === Number(p.teamId),
 };
 
+// True iff at least one enabled, non-archived flow has a trigger of this type
+// for this user. Orchestrator uses it to skip its default reply when the user
+// has explicitly wired a flow to handle the channel — otherwise both fire and
+// the user gets two answers.
+export async function hasFlowForTrigger(userId: number, triggerType: string): Promise<boolean> {
+  const rows = await query<{ n: number }>(
+    `SELECT count(*)::int AS n
+     FROM flow_triggers t JOIN flows f ON f.id=t.flow_id
+     WHERE t.type=$1 AND f.user_id=$2 AND f.enabled=true AND f.archived=false`,
+    [triggerType, userId],
+  );
+  return (rows[0]?.n ?? 0) > 0;
+}
+
 async function dispatchTrigger(triggerType: string, userId: number, payload: any) {
   const rows = await query<{ flow_id: number; user_id: number; cfg: any }>(
     `SELECT t.flow_id::int, f.user_id::int, t.config AS cfg

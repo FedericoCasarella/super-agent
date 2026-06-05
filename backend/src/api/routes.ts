@@ -1071,6 +1071,15 @@ router.post('/whatsapp/chats/wipe', async (req, res) => {
   try { res.json(await m.wipeAllChats(req.user!.id)); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
+router.post('/whatsapp/chats/:jid/display', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try {
+    res.json(await m.setChatDisplayOverride(req.user!.id, req.params.jid, {
+      display_name: req.body?.display_name === undefined ? undefined : (req.body.display_name === null ? null : String(req.body.display_name)),
+      display_phone: req.body?.display_phone === undefined ? undefined : (req.body.display_phone === null ? null : String(req.body.display_phone)),
+    }));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/chats/:jid/link', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const slug = req.body?.slug === null ? null : (req.body?.slug ? String(req.body.slug) : null);

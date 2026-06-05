@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "node scripts/dev-loop.mjs",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:migrate": "tsx src/db/migrate.ts"

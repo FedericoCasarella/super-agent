@@ -15,6 +15,16 @@ export function startOrchestrator() {
 async function handleIncoming({ userId, text }: { userId: number; chatId: number; text: string }) {
   await logMessage(userId, 'in', 'telegram', text);
   await setSetting(userId, 'agent_next_reflection_at', null);
+  // If user wired a Flow on telegram.received, that flow owns the reply path.
+  // Skip the default Claude turn to avoid double replies (issue: two AI answers
+  // to one incoming Telegram message).
+  try {
+    const { hasFlowForTrigger } = await import('../flows/index.js');
+    if (await hasFlowForTrigger(userId, 'telegram.received')) {
+      console.log(`[orchestrator:u${userId}] telegram.received flow active — skipping default reply`);
+      return;
+    }
+  } catch (e) { console.error('[orchestrator] hasFlowForTrigger check failed', e); }
   // Quota lock: if Claude session usage is >= 95%, refuse to call the API
   // (which would burn the last few % on a partial reply) and surface the
   // freeze message to the user instead.
