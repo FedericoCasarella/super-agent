@@ -90,6 +90,42 @@ router.get('/messages', async (req, res) => {
   res.json(rows.reverse());
 });
 
+// One-off test for the TTS connector: synthesizes a sample line via the
+// configured provider (ElevenLabs) and sends it as a Telegram voice note.
+// Surfaces the real failure reason so the user can debug API key / voice id.
+// List voices available on the ElevenLabs account tied to the saved apiKey.
+// Lets the UI / user know which voices actually work (owned vs library) without
+// digging through the dashboard. Free tier sees only premade — UI surfaces a
+// "Add a voice" hint when no owned voices exist.
+router.get('/connectors/tts/voices', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const { getTtsConfig } = await import('../connectors/builtin/tts/index.js');
+    const cfg = await getTtsConfig(userId);
+    if (!cfg.apiKey) return res.json({ ok: false, error: 'apiKey vuota' });
+    const apiKey = String(cfg.apiKey).replace(/\s/g, '');
+    const r = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': apiKey } });
+    if (!r.ok) return res.json({ ok: false, error: `elevenlabs ${r.status}: ${(await r.text()).slice(0, 200)}` });
+    const data: any = await r.json();
+    const voices = (data?.voices ?? []).map((v: any) => ({ voice_id: v.voice_id, name: v.name, category: v.category, labels: v.labels ?? {} }));
+    const owned = voices.filter((v: any) => v.category !== 'premade');
+    res.json({ ok: true, voices, owned_count: owned.length, total: voices.length });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+router.post('/connectors/tts/test', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const text = String(req.body?.text ?? 'Ciao Federico, questa è una prova per dimostrarti che funziona.');
+    const { synthesizeDetailed } = await import('../connectors/builtin/tts/index.js');
+    const { sendTelegramVoice } = await import('../telegram/bot.js');
+    const audio = await synthesizeDetailed(userId, text);
+    if (!audio.ok) return res.json({ ok: false, error: audio.error });
+    const r = await sendTelegramVoice(userId, text, 'test');
+    res.json({ ok: r.ok, fallback: r.fallback ?? null, error: r.error ?? null, bytes: audio.buf.length, ext: audio.ext });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
 router.get('/connectors', async (req, res) => {
   await ensureUserConnectorRows(req.user!.id);
   const rows = await query<{ name: string; enabled: boolean; config: any; state: any }>(

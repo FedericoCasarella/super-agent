@@ -62,6 +62,17 @@ export default function Connectors() {
     await api.runConnector(name);
     toast.push(t('connectors.toastTickStarted').replace('{name}', name), 'info');
   }
+  async function testTts() {
+    try {
+      const r: any = await api.ttsTest();
+      if (r?.ok) {
+        if (r.fallback) toast.push(`Audio fallback testo (${r.error ?? 'TTS failed'})`, 'warn');
+        else toast.push(`✓ Audio inviato (${r.bytes ?? 0}B ${r.ext ?? ''})`, 'on');
+      } else {
+        toast.push(`Errore TTS: ${r?.error ?? 'unknown'} — ${r?.hint ?? ''}`, 'err');
+      }
+    } catch (e: any) { toast.push(`Errore: ${e?.message ?? e}`, 'err'); }
+  }
 
   return (
     <div className="space-y-4">
@@ -129,6 +140,9 @@ export default function Connectors() {
                 <Button variant="ghost" onClick={() => run(c.manifest.name)}>{t('connectors.runNowBtn')}</Button>
                 {c.manifest.name === 'whatsapp' && (
                   <Button onClick={() => setWaOpen(true)}>📱 Apri WhatsApp</Button>
+                )}
+                {c.manifest.name === 'tts' && (
+                  <Button onClick={() => testTts()}>🎙 Invia audio di prova</Button>
                 )}
               </div>
             )}

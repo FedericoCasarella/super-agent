@@ -164,11 +164,19 @@ async function main() {
   // Log only — do NOT exit. Baileys, IG playwright, IMAP all throw transient
   // unhandledRejections (timeouts, socket drops) we want to absorb silently.
   // Exiting here caused a respawn loop on every WhatsApp image / reconnect.
+  // Baileys throws "Timed Out" as an unhandledRejection on every reconnect.
+  // Mute it (and similar transient socket errors) — keeps the dev console
+  // readable. Everything else still warns.
+  const MUTED_PATTERNS = [/^Timed Out$/i, /stream errored out/i, /conflict/i];
   process.on('unhandledRejection', (reason: any) => {
-    console.warn('[warn] unhandledRejection', reason?.message ?? reason);
+    const msg = String(reason?.message ?? reason);
+    if (MUTED_PATTERNS.some((re) => re.test(msg))) return;
+    console.warn('[warn] unhandledRejection', msg);
   });
   process.on('uncaughtException', (err: any) => {
-    console.warn('[warn] uncaughtException', err?.message ?? err);
+    const msg = String(err?.message ?? err);
+    if (MUTED_PATTERNS.some((re) => re.test(msg))) return;
+    console.warn('[warn] uncaughtException', msg);
   });
 }
 

@@ -331,7 +331,7 @@ ${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a
       const { text: transcript } = await transcribeBuffer(userId, buf, `voice.${ext}`, mime, audioSeconds);
       if (!transcript) { await ctx.reply('🎙 (vuoto)'); return; }
       await ctx.reply(`🎙 "${transcript}"`).catch(() => {});
-      bus.emit('telegram:incoming', { userId, chatId, text: transcript });
+      bus.emit('telegram:incoming', { userId, chatId, text: transcript, voice: true });
     } catch (e: any) {
       console.error('[telegram] voice error', e);
       await ctx.reply(`⚠️ Voice transcription failed: ${String(e?.message ?? e).slice(0, 160)}`);
@@ -452,6 +452,43 @@ export async function sendTelegram(userId: number, text: string, origin: string 
       error: err, meta: { parts: parts.length },
     });
     await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+// TTS reply path: synthesize via ElevenLabs (or any TTS provider configured)
+// and post as a Telegram voice note. Falls back silently to text via the
+// caller if TTS not configured or fails. Logs to outbound_log.
+export async function sendTelegramVoice(userId: number, text: string, origin: string = 'agent'): Promise<{ ok: boolean; fallback?: 'text'; error?: string }> {
+  const { logOutbound } = await import('../comm/outbound_log.js');
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return { ok: false, error: 'telegram not configured' };
+  const { synthesize } = await import('../connectors/builtin/tts/index.js');
+  const audio = await synthesize(userId, text);
+  if (!audio) {
+    // Fallback: send as text so the user still gets the reply.
+    try { await sendTelegram(userId, text, origin); }
+    catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
+    return { ok: true, fallback: 'text' };
+  }
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  try {
+    // Telegraf voice expects an audio source. For mp3 use sendAudio; for ogg
+    // sendVoice. Telegram voice notes appear as the WhatsApp-style waveform.
+    if (audio.ext === 'ogg') {
+      await entry.bot.telegram.sendVoice(cfg.chatId, { source: audio.buf });
+    } else {
+      await entry.bot.telegram.sendAudio(cfg.chatId, { source: audio.buf, filename: `voice.${audio.ext}` });
+    }
+    await logOutbound({ userId, channel: 'telegram', status: 'sent', recipient: String(cfg.chatId), body: text, origin, meta: { tts: true, ext: audio.ext, bytes: audio.buf.length } });
+    return { ok: true };
+  } catch (e: any) {
+    const err = String(e?.message ?? e).slice(0, 500);
+    await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: text, origin, error: err, meta: { tts: true } });
+    // Fallback to text on send failure
+    try { await sendTelegram(userId, text, origin); return { ok: true, fallback: 'text', error: err }; }
+    catch { return { ok: false, error: err }; }
   }
 }
 

@@ -143,6 +143,7 @@ export const api = {
   waSuggestReply: (jid: string, hint?: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
   waSyncChat: (jid: string, batches = 3) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/sync`, { method: 'POST', body: JSON.stringify({ batches }) }),
   waSetChatAutoBonify: (jid: string, enabled: boolean) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/auto-bonify`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  ttsTest: (text?: string) => req<{ ok: boolean; fallback?: string | null; error?: string | null; hint?: string; bytes?: number; ext?: string }>('/connectors/tts/test', { method: 'POST', body: JSON.stringify({ text }) }),
   outboundList: (opts: { channels?: string[]; statuses?: string[]; channel?: 'whatsapp' | 'email' | 'telegram' | 'instagram'; status?: 'sent' | 'error'; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();
     if (opts.channels?.length) p.set('channel', opts.channels.join(','));

@@ -24,7 +24,10 @@ type Session = {
 };
 
 const sessions = new Map<number, Session>(); // userId → session
-const logger = pino({ level: 'warn' });
+// Baileys spams pino at level=50 for transient socket errors (stream:error
+// conflict, init query timeout). They're noise — Baileys auto-reconnects.
+// Setting `silent` mutes the JSON pino blobs that flooded the dev console.
+const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL ?? 'silent' });
 
 function sessionDir(userId: number): string {
   return path.join(os.homedir(), '.super-agent', 'wa-sessions', `u${userId}`);
@@ -126,7 +129,14 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
 
   sock.ev.on('connection.update', async (u: any) => {
     const { connection, lastDisconnect, qr } = u;
-    console.log(`[wa:u${userId}] connection.update`, { connection, hasQr: !!qr, errMsg: (lastDisconnect?.error as any)?.message });
+    // Only log meaningful transitions. Skip `undefined` updates AND the
+    // "Stream Errored (conflict)" spam (means another WA client took over —
+    // Baileys reconnects automatically, nothing to do).
+    const errMsg = (lastDisconnect?.error as any)?.message ?? '';
+    const isConflict = /conflict|replaced/i.test(errMsg);
+    if ((connection || qr || lastDisconnect?.error) && !isConflict) {
+      console.log(`[wa:u${userId}] connection.update`, { connection, hasQr: !!qr, errMsg });
+    }
     if (qr) {
       session.status = 'qr';
       session.qr = qr;
@@ -151,7 +161,8 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const shouldRetry = code !== DisconnectReason.loggedOut;
       bus.emit('wa:closed', { userId, code });
-      console.log(`[wa:u${userId}] closed (code=${code}, retry=${shouldRetry})`);
+      // 440 = conflict (another client). Mute — Baileys auto-reconnects.
+      if (code !== 440) console.log(`[wa:u${userId}] closed (code=${code}, retry=${shouldRetry})`);
       sessions.delete(userId);
       // Explicit logout = user disconnected from phone or pressed Reset.
       // Wipe local rows so next pair starts clean (no @lid duplicate stacking).
