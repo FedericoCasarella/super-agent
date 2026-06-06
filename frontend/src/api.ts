@@ -38,7 +38,15 @@ export const api = {
   brainGraph: () => req<{ nodes: any[]; links: any[] }>('/brain/graph'),
   brainNote: (path: string) => req<any>(`/brain/note?path=${encodeURIComponent(path)}`),
   callTool: (name: string, args: any = {}) => req<any>(`/tools/${name}`, { method: 'POST', body: JSON.stringify(args) }),
-  logs: (kind?: string, limit = 100) => req<any[]>(`/logs?limit=${limit}${kind ? `&kind=${kind}` : ''}`),
+  logs: (opts: { kinds?: string[]; statuses?: string[]; q?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.kinds?.length) p.set('kind', opts.kinds.join(','));
+    if (opts.statuses?.length) p.set('status', opts.statuses.join(','));
+    if (opts.q) p.set('q', opts.q);
+    p.set('limit', String(opts.limit ?? 100));
+    p.set('offset', String(opts.offset ?? 0));
+    return req<{ rows: any[]; total: number }>(`/logs?${p}`);
+  },
   log: (id: number) => req<any>(`/logs/${id}`),
   logStats: () => req<any>('/logs/stats/summary'),
   agentState: () => req<any>('/agent/state'),
@@ -135,14 +143,16 @@ export const api = {
   waSuggestReply: (jid: string, hint?: string) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
   waSyncChat: (jid: string, batches = 3) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/sync`, { method: 'POST', body: JSON.stringify({ batches }) }),
   waSetChatAutoBonify: (jid: string, enabled: boolean) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/auto-bonify`, { method: 'POST', body: JSON.stringify({ enabled }) }),
-  outboundList: (opts: { channel?: 'whatsapp' | 'email' | 'telegram' | 'instagram'; status?: 'sent' | 'error'; q?: string; limit?: number; offset?: number } = {}) => {
+  outboundList: (opts: { channels?: string[]; statuses?: string[]; channel?: 'whatsapp' | 'email' | 'telegram' | 'instagram'; status?: 'sent' | 'error'; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();
-    if (opts.channel) p.set('channel', opts.channel);
-    if (opts.status) p.set('status', opts.status);
+    if (opts.channels?.length) p.set('channel', opts.channels.join(','));
+    else if (opts.channel) p.set('channel', opts.channel);
+    if (opts.statuses?.length) p.set('status', opts.statuses.join(','));
+    else if (opts.status) p.set('status', opts.status);
     if (opts.q) p.set('q', opts.q);
     if (opts.limit) p.set('limit', String(opts.limit));
     if (opts.offset) p.set('offset', String(opts.offset));
-    return req<{ rows: any[]; totals: any }>(`/outbound?${p}`);
+    return req<{ rows: any[]; total: number; totals: any }>(`/outbound?${p}`);
   },
   outboundGet: (id: number) => req<any>(`/outbound/${id}`),
   // Custom agents
@@ -191,6 +201,14 @@ export const api = {
   waPending: () => req<any>('/whatsapp/pending'),
   waBonify: (limit: number, onlyChat?: string) => req<any>('/whatsapp/bonify', { method: 'POST', body: JSON.stringify({ limit, onlyChat }) }),
   subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
+  subAgentsListPaginated: (opts: { statuses?: string[]; q?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams({ paginated: '1' });
+    if (opts.statuses?.length) p.set('status', opts.statuses.join(','));
+    if (opts.q) p.set('q', opts.q);
+    p.set('limit', String(opts.limit ?? 25));
+    p.set('offset', String(opts.offset ?? 0));
+    return req<{ rows: any[]; total: number }>(`/sub-agents?${p}`);
+  },
   subAgentsActive: () => req<any[]>('/sub-agents/active'),
   subAgentsStats: () => req<any>('/sub-agents/stats'),
   subAgentGet: (id: number) => req<any>(`/sub-agents/${id}`),

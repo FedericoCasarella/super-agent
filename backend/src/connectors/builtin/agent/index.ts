@@ -569,7 +569,8 @@ const connector: Connector = {
       },
       handler: async (ctx, { status }) => {
         const list = await subAgents.listSubAgents(ctx.userId, { status, limit: 50 });
-        return list.map((s) => ({ id: s.id, title: s.title, brief: s.brief, status: s.status, started_at: s.started_at, ended_at: s.ended_at }));
+        const arr = Array.isArray(list) ? list : list.rows;
+        return arr.map((s: any) => ({ id: s.id, title: s.title, brief: s.brief, status: s.status, started_at: s.started_at, ended_at: s.ended_at }));
       },
     },
     {

@@ -321,19 +321,27 @@ router.get('/brain/index', async (req, res) => {
 
 // Logs
 router.get('/logs', async (req, res) => {
-  const limit = Math.min(Number(req.query.limit ?? 100), 500);
-  const kind = req.query.kind ? String(req.query.kind) : null;
-  const where = kind ? 'WHERE user_id=$1 AND kind=$3' : 'WHERE user_id=$1';
-  const params: any[] = [req.user!.id, limit];
-  if (kind) params.push(kind);
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const kinds = String(req.query.kind ?? '').split(',').filter(Boolean);
+  const statuses = String(req.query.status ?? '').split(',').filter(Boolean);
+  const q = String(req.query.q ?? '').trim();
+  const where: string[] = ['user_id=$1'];
+  const params: any[] = [req.user!.id];
+  if (kinds.length) { params.push(kinds); where.push(`kind = ANY($${params.length}::text[])`); }
+  if (statuses.length) { params.push(statuses); where.push(`status = ANY($${params.length}::text[])`); }
+  if (q) { params.push(`%${q}%`); where.push(`(result ILIKE $${params.length} OR prompt ILIKE $${params.length} OR error ILIKE $${params.length})`); }
+  const totalRows = await query<{ c: number }>(`SELECT count(*)::int AS c FROM agent_runs WHERE ${where.join(' AND ')}`, params);
+  params.push(limit, offset);
   const rows = await query(
     `SELECT id::int, ts, kind, status, model, duration_ms, input_tokens, output_tokens,
             cache_creation_tokens, cache_read_tokens, cost_usd::float8, num_turns,
             LEFT(result, 240) AS preview, meta, error
-     FROM agent_runs ${where}
-     ORDER BY id DESC LIMIT $2`, params
+     FROM agent_runs WHERE ${where.join(' AND ')}
+     ORDER BY id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
   );
-  res.json(rows);
+  res.json({ rows, total: totalRows[0]?.c ?? 0 });
 });
 
 router.get('/logs/:id', async (req, res) => {
@@ -350,16 +358,19 @@ router.get('/logs/:id', async (req, res) => {
 // Outbound communications audit log
 router.get('/outbound', async (req, res) => {
   const userId = req.user!.id;
-  const limit = Math.min(Number(req.query.limit ?? 100), 500);
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
   const offset = Math.max(0, Number(req.query.offset ?? 0));
-  const channel = req.query.channel ? String(req.query.channel) : null;
-  const status = req.query.status ? String(req.query.status) : null;
+  const channels = String(req.query.channel ?? '').split(',').filter(Boolean);
+  const statuses = String(req.query.status ?? '').split(',').filter(Boolean);
   const q = req.query.q ? String(req.query.q).trim() : null;
   const where: string[] = ['user_id=$1'];
   const params: any[] = [userId];
-  if (channel && ['whatsapp','email','telegram'].includes(channel)) { where.push(`channel=$${params.length + 1}`); params.push(channel); }
-  if (status && ['sent','error'].includes(status)) { where.push(`status=$${params.length + 1}`); params.push(status); }
-  if (q) { where.push(`(lower(coalesce(recipient,'')) LIKE $${params.length + 1} OR lower(coalesce(recipient_name,'')) LIKE $${params.length + 1} OR lower(coalesce(subject,'')) LIKE $${params.length + 1} OR lower(coalesce(body,'')) LIKE $${params.length + 1})`); params.push(`%${q.toLowerCase()}%`); }
+  const validCh = channels.filter((c) => ['whatsapp','email','telegram','instagram'].includes(c));
+  const validSt = statuses.filter((s) => ['sent','error'].includes(s));
+  if (validCh.length) { params.push(validCh); where.push(`channel = ANY($${params.length}::text[])`); }
+  if (validSt.length) { params.push(validSt); where.push(`status = ANY($${params.length}::text[])`); }
+  if (q) { params.push(`%${q.toLowerCase()}%`); where.push(`(lower(coalesce(recipient,'')) LIKE $${params.length} OR lower(coalesce(recipient_name,'')) LIKE $${params.length} OR lower(coalesce(subject,'')) LIKE $${params.length} OR lower(coalesce(body,'')) LIKE $${params.length})`); }
+  const totalRows = await query<{ c: number }>(`SELECT count(*)::int AS c FROM outbound_log WHERE ${where.join(' AND ')}`, params);
   params.push(limit); params.push(offset);
   const rows = await query<any>(
     `SELECT id::int, ts, channel, status, recipient, recipient_name, subject,
@@ -373,11 +384,12 @@ router.get('/outbound', async (req, res) => {
             count(*) FILTER (WHERE status='error')::int AS errors,
             count(*) FILTER (WHERE channel='whatsapp')::int AS whatsapp,
             count(*) FILTER (WHERE channel='email')::int AS email,
-            count(*) FILTER (WHERE channel='telegram')::int AS telegram
+            count(*) FILTER (WHERE channel='telegram')::int AS telegram,
+            count(*) FILTER (WHERE channel='instagram')::int AS instagram
      FROM outbound_log WHERE user_id=$1`,
     [userId],
   );
-  res.json({ rows, totals: totals[0] ?? { total: 0 } });
+  res.json({ rows, total: totalRows[0]?.c ?? 0, totals: totals[0] ?? { total: 0 } });
 });
 router.get('/outbound/:id', async (req, res) => {
   const rows = await query(
@@ -736,8 +748,15 @@ REGOLE:
 // Sub-agents
 router.get('/sub-agents', async (req, res) => {
   const sa = await import('../sub_agents/index.js');
-  const status = req.query.status ? String(req.query.status) : undefined;
-  res.json(await sa.listSubAgents(req.user!.id, { status }));
+  const statuses = String(req.query.status ?? '').split(',').filter(Boolean);
+  const q = String(req.query.q ?? '').trim();
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  if (req.query.paginated === '1') {
+    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset, withTotal: true }));
+  } else {
+    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset }));
+  }
 });
 router.get('/sub-agents/stats', async (req, res) => {
   const userId = req.user!.id;

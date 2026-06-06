@@ -5,6 +5,7 @@ import { api } from '../api';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 import { useWS, useLiveData } from '../ws';
+import DataTable from '../components/DataTable';
 
 type SubAgent = {
   id: number; title: string; brief: string | null; prompt: string; status: string;
@@ -201,34 +202,49 @@ export function LiveAgentsPanel() {
         )}
       </Card>
 
-      <Card>
-        <div className="text-xs uppercase text-muted mb-3 font-semibold">Recenti ({recent.length})</div>
-        {recent.length === 0 ? (
-          <div className="text-muted text-sm">Niente da mostrare.</div>
-        ) : (
-          <ul className="space-y-2">
-            {recent.map((a) => (
-              <li key={a.id}>
-                <button onClick={() => setOpen(a)} className="w-full text-left border border-border rounded-2xl p-3 hover:border-accent/40 bg-surface2/30 transition flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-xl bg-surface2 border border-border flex items-center justify-center shrink-0">
-                    <StatusIcon status={a.status} size={16} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="font-medium truncate">{a.title}</div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Chip tone={STATUS_TONE[a.status] ?? 'default'}>{a.status}</Chip>
-                        <span className="text-xs text-muted">{fmtAgo(a.ended_at ?? a.created_at)}</span>
-                      </div>
-                    </div>
-                    {a.brief && <div className="text-xs text-muted mt-1 break-words line-clamp-3">{a.brief}</div>}
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      <div className="text-xs uppercase text-muted font-semibold">Storico agenti</div>
+      <DataTable<SubAgent>
+        refreshKey={agents.length}
+        fetcher={async ({ q, page, pageSize, filters }) => {
+          const r: any = await api.subAgentsListPaginated({ statuses: filters.status, q, limit: pageSize, offset: page * pageSize });
+          // Fallback if backend returns plain array (older route)
+          if (Array.isArray(r)) return { rows: r as SubAgent[], total: r.length };
+          return { rows: r.rows ?? [], total: r.total ?? 0 };
+        }}
+        columns={[
+          { key: 'status', header: '', width: 'w-10', render: (a) => <StatusIcon status={a.status} size={16} /> },
+          { key: 'title', header: 'Titolo', render: (a) => (
+            <div className="min-w-0">
+              <div className="font-medium truncate">{a.title}</div>
+              {a.brief && <div className="text-[11px] text-muted truncate max-w-[420px]">{a.brief}</div>}
+            </div>
+          )},
+          { key: 'status_chip', header: 'Stato', width: 'w-28', render: (a) => <Chip tone={STATUS_TONE[a.status] ?? 'default'}>{a.status}</Chip> },
+          { key: 'cost_usd', header: 'Costo', width: 'w-20', align: 'right', render: (a) => <span className="font-mono text-xs">{a.cost_usd != null ? `$${Number(a.cost_usd).toFixed(4)}` : '—'}</span> },
+          { key: 'duration', header: 'Durata', width: 'w-20', align: 'right', render: (a) => <span className="font-mono text-xs text-muted">{fmtDur(a.started_at, a.ended_at)}</span> },
+          { key: 'created_at', header: 'Quando', width: 'w-24', align: 'right', render: (a) => <span className="text-xs text-muted">{fmtAgo(a.ended_at ?? a.created_at)}</span> },
+        ]}
+        chipFilters={[
+          {
+            key: 'status',
+            label: 'Stato',
+            multi: true,
+            options: [
+              { value: 'running', label: 'running', tone: 'on' },
+              { value: 'pending', label: 'pending', tone: 'warn' },
+              { value: 'done', label: 'done', tone: 'on' },
+              { value: 'error', label: 'error', tone: 'err' },
+              { value: 'cancelled', label: 'cancelled', tone: 'warn' },
+            ],
+          },
+        ]}
+        searchPlaceholder="Cerca titolo, brief, result…"
+        rowKey={(a) => a.id}
+        onRowClick={(a) => setOpen(a)}
+        emptyText="Niente da mostrare."
+      />
+      {/* keep `recent` reference alive for legacy users — silenced */}
+      <span className="hidden">{recent.length}</span>
 
       {open && createPortal(
         <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setOpen(null)} role="dialog" aria-modal="true">

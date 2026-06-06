@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
-import { Button, Card, Chip, Input, useToast } from '../components/ui';
+import { Chip, useToast } from '../components/ui';
 import { useWS } from '../ws';
-import { Search, Send, AlertCircle, X, MessageCircle, Mail, MessageSquare, Camera, Activity } from 'lucide-react';
+import { Send, AlertCircle, X, MessageCircle, Mail, MessageSquare, Camera, Activity } from 'lucide-react';
+import DataTable, { Column, ChipFilter } from '../components/DataTable';
 
 type Channel = 'whatsapp' | 'email' | 'telegram' | 'instagram';
 const CHANNEL_FALLBACK = { label: '—', icon: Activity, color: 'text-muted' };
@@ -35,131 +36,95 @@ function fmtDate(s: string): string {
 }
 
 export default function Outbound() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [totals, setTotals] = useState<any>({ total: 0, errors: 0, whatsapp: 0, email: 0, telegram: 0 });
-  const [channel, setChannel] = useState<Channel | 'all'>('all');
-  const [status, setStatus] = useState<Status | 'all'>('all');
-  const [qInput, setQInput] = useState('');
-  const [q, setQ] = useState('');
-  const [loading, setLoading] = useState(false);
   const [openRow, setOpenRow] = useState<any | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [totals, setTotals] = useState<any>({ total: 0, errors: 0, whatsapp: 0, email: 0, telegram: 0, instagram: 0 });
   const toast = useToast();
 
-  // Debounce search input
-  useEffect(() => {
-    const t = setTimeout(() => setQ(qInput.trim()), 300);
-    return () => clearTimeout(t);
-  }, [qInput]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const r = await api.outboundList({
-        channel: channel === 'all' ? undefined : channel,
-        status: status === 'all' ? undefined : status,
-        q: q || undefined,
-        limit: 200,
-      });
-      setRows(r.rows); setTotals(r.totals);
-    } catch (e: any) { toast.push(e.message, 'err'); }
-    finally { setLoading(false); }
-  }, [channel, status, q, toast]);
-
-  useEffect(() => { load(); }, [load]);
-
-  // Live append on new outbound events
-  useWS((msg) => {
-    if (msg?.type !== 'outbound') return;
-    load();
-  });
+  useWS((msg) => { if (msg?.type === 'outbound') setRefreshKey((k) => k + 1); });
 
   async function openDetail(row: Row) {
     try { setOpenRow(await api.outboundGet(row.id)); }
     catch (e: any) { toast.push(e.message, 'err'); }
   }
 
-  const filters = useMemo(() => (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
-        {(['all', 'whatsapp', 'email', 'telegram'] as const).map((c) => (
-          <Button key={c} size="sm" variant={channel === c ? 'primary' : 'ghost'} onClick={() => setChannel(c)}>
-            {c === 'all' ? 'Tutti' : CHANNEL_META[c].label} {c !== 'all' && <span className="ml-1 text-[10px] text-muted">{totals[c] ?? 0}</span>}
-          </Button>
-        ))}
+  const columns: Column<Row>[] = [
+    { key: 'ts', header: 'Quando', width: 'w-44', render: (r) => <span className="text-[10px] text-muted font-mono">{fmtDate(r.ts)}</span> },
+    { key: 'channel', header: 'Canale', width: 'w-28', render: (r) => {
+      const m = CHANNEL_META[r.channel] ?? CHANNEL_FALLBACK;
+      const I = m.icon;
+      return <span className="inline-flex items-center gap-1.5 text-xs"><I size={13} className={m.color} />{m.label}</span>;
+    }},
+    { key: 'status', header: 'Stato', width: 'w-24', render: (r) => r.status === 'sent'
+      ? <Chip tone="on">✓ inviato</Chip>
+      : <Chip tone="err"><AlertCircle size={10} className="inline mr-1 -mt-0.5" />errore</Chip>
+    },
+    { key: 'recipient', header: 'Destinatario', render: (r) => (
+      <div className="min-w-0">
+        <div className="text-sm font-medium truncate">{r.recipient_name || r.recipient || '—'}</div>
+        {r.subject && <div className="text-[11px] text-muted truncate">{r.subject}</div>}
       </div>
-      <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
-        {(['all', 'sent', 'error'] as const).map((s) => (
-          <Button key={s} size="sm" variant={status === s ? 'primary' : 'ghost'} onClick={() => setStatus(s)}>
-            {s === 'all' ? 'Stato' : s === 'sent' ? '✓ inviato' : `✗ errore (${totals.errors ?? 0})`}
-          </Button>
-        ))}
-      </div>
-    </div>
-  ), [channel, status, totals]);
+    )},
+    { key: 'body_preview', header: 'Contenuto', render: (r) => (
+      <div className="text-xs text-muted line-clamp-2 max-w-[420px]">{r.body_preview}</div>
+    )},
+    { key: 'origin', header: 'Origine', width: 'w-32', render: (r) => r.origin ? (
+      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${r.origin.startsWith('perk:') ? 'bg-accent/15 text-accent border border-accent/30' : r.origin.startsWith('subagent:') ? 'bg-accent2/15 text-accent2 border border-accent2/30' : r.origin === 'agent' ? 'bg-sky-500/15 text-sky-300 border border-sky-400/30' : 'bg-surface2 text-muted border border-border'}`}>
+        {r.origin.length > 22 ? r.origin.slice(0, 19) + '…' : r.origin}
+      </span>
+    ) : <span className="text-muted">—</span> },
+  ];
+
+  const chipFilters: ChipFilter[] = [
+    {
+      key: 'channels',
+      label: 'Canale',
+      multi: true,
+      options: [
+        { value: 'whatsapp', label: <>WhatsApp <span className="opacity-60">({totals.whatsapp ?? 0})</span></>, tone: 'on' },
+        { value: 'email', label: <>Email <span className="opacity-60">({totals.email ?? 0})</span></>, tone: 'accent2' },
+        { value: 'telegram', label: <>Telegram <span className="opacity-60">({totals.telegram ?? 0})</span></>, tone: 'accent' },
+        { value: 'instagram', label: <>Instagram <span className="opacity-60">({totals.instagram ?? 0})</span></>, tone: 'accent2' },
+      ],
+    },
+    {
+      key: 'statuses',
+      label: 'Stato',
+      multi: true,
+      options: [
+        { value: 'sent', label: 'inviato', tone: 'on' },
+        { value: 'error', label: <>errore <span className="opacity-60">({totals.errors ?? 0})</span></>, tone: 'err' },
+      ],
+    },
+  ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 h-full flex flex-col">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <Send className="text-accent" size={22} />
           <h1 className="text-2xl font-semibold text-gradient">Comunicazioni inviate</h1>
           <Chip>{totals.total ?? 0} record</Chip>
         </div>
-        {filters}
       </div>
 
-      <Card>
-        <div className="flex items-center gap-2 mb-3">
-          <Search size={16} className="text-muted" />
-          <Input
-            placeholder="Cerca destinatario, oggetto, contenuto…"
-            value={qInput}
-            onChange={(e) => setQInput(e.target.value)}
-            className="flex-1"
-          />
-        </div>
-        {loading ? (
-          <div className="py-10 text-center text-muted text-sm">Caricamento…</div>
-        ) : rows.length === 0 ? (
-          <div className="py-10 text-center text-muted text-sm">Nessuna comunicazione inviata.</div>
-        ) : (
-          <div className="space-y-1">
-            {rows.map((r) => {
-              const meta = CHANNEL_META[r.channel] ?? CHANNEL_FALLBACK;
-              const Icon = meta.icon;
-              const recipient = r.recipient_name || r.recipient || '—';
-              return (
-                <button
-                  key={r.id}
-                  onClick={() => openDetail(r)}
-                  className="w-full text-left flex items-start gap-3 p-3 rounded-xl border border-border/60 hover:border-accent/40 hover:bg-surface2/40 transition"
-                >
-                  <Icon size={16} className={`mt-0.5 shrink-0 ${meta.color}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium truncate">{recipient}</span>
-                      {r.subject && <span className="text-xs text-muted truncate">· {r.subject}</span>}
-                      {r.status === 'error' && (
-                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-300 border border-red-400/30">
-                          <AlertCircle size={10} /> errore
-                        </span>
-                      )}
-                      {r.origin && (
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${r.origin.startsWith('perk:') ? 'bg-accent/15 text-accent border border-accent/30' : r.origin.startsWith('subagent:') ? 'bg-accent2/15 text-accent2 border border-accent2/30' : r.origin === 'agent' ? 'bg-sky-500/15 text-sky-300 border border-sky-400/30' : 'bg-surface2 text-muted border border-border'}`}>
-                          {r.origin.length > 28 ? r.origin.slice(0, 25) + '…' : r.origin}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted mt-1 line-clamp-2 break-words">{r.body_preview}</div>
-                    {r.error && <div className="text-xs text-red-300 mt-1 font-mono line-clamp-1">{r.error}</div>}
-                  </div>
-                  <div className="text-[10px] text-muted font-mono shrink-0">{fmtDate(r.ts)}</div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </Card>
+      <DataTable<Row>
+        fetcher={async ({ q, page, pageSize, filters }) => {
+          const r = await api.outboundList({
+            channels: filters.channels, statuses: filters.statuses, q,
+            limit: pageSize, offset: page * pageSize,
+          });
+          setTotals(r.totals ?? totals);
+          return { rows: r.rows, total: r.total };
+        }}
+        columns={columns}
+        chipFilters={chipFilters}
+        searchPlaceholder="Cerca destinatario, oggetto, contenuto…"
+        rowKey={(r) => r.id}
+        onRowClick={openDetail}
+        refreshKey={refreshKey}
+        emptyText="Nessuna comunicazione inviata."
+      />
 
       {openRow && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md p-4" onClick={() => setOpenRow(null)}>

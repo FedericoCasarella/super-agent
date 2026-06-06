@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 import { usePerkCooldown } from '../hooks/usePerkCooldown';
 import { useLiveData } from '../ws';
+import DataTable from '../components/DataTable';
 
 // Per-agent icon map. Drop new PNGs in `frontend/public/` and add here.
 const AGENT_ICON: Record<string, string> = {
@@ -44,6 +45,9 @@ export default function Agents() {
 
   const load = useCallback(async () => { setItems(await api.internalAgents()); }, []);
   useLiveData(load, { refreshOn: ['internal_agent'], fallbackMs: 120_000 });
+  // Ref to dodge stale-closure inside DataTable fetcher.
+  const itemsRef = useRef<Agent[]>([]);
+  useEffect(() => { itemsRef.current = items; }, [items]);
 
   async function toggle(a: Agent) {
     await api.updateInternalAgent(a.name, { enabled: !a.enabled });
@@ -76,13 +80,84 @@ export default function Agents() {
     finally { setBusy(null); }
   }
 
+  const [view, setView] = useState<'grid' | 'table'>(() => (localStorage.getItem('perks_view') === 'table' ? 'table' : 'grid'));
+  useEffect(() => { localStorage.setItem('perks_view', view); }, [view]);
+
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold text-gradient">{t('agents.title')}</h1>
-        <p className="text-sm text-muted mt-1">{t('agents.subtitle')}</p>
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold text-gradient">{t('agents.title')}</h1>
+          <p className="text-sm text-muted mt-1">{t('agents.subtitle')}</p>
+        </div>
+        <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
+          <Button size="sm" variant={view === 'grid' ? 'primary' : 'ghost'} onClick={() => setView('grid')}>Card</Button>
+          <Button size="sm" variant={view === 'table' ? 'primary' : 'ghost'} onClick={() => setView('table')}>Tabella</Button>
+        </div>
       </div>
 
+      {view === 'table' ? (
+        <DataTable<Agent>
+          fetcher={async ({ q, page, pageSize, filters }) => {
+            // Client-side filter/paginate (perks list is small).
+            let rows = itemsRef.current;
+            if (q) {
+              const t = q.toLowerCase();
+              rows = rows.filter((a) => a.title.toLowerCase().includes(t) || a.name.toLowerCase().includes(t) || (a.description ?? '').toLowerCase().includes(t));
+            }
+            const state = filters.state ?? [];
+            if (state.includes('on')) rows = rows.filter((a) => a.enabled);
+            if (state.includes('off')) rows = rows.filter((a) => !a.enabled);
+            if (state.includes('running')) rows = rows.filter((a) => a.running);
+            if (state.includes('notify')) rows = rows.filter((a) => a.notify_on_run);
+            const total = rows.length;
+            return { rows: rows.slice(page * pageSize, (page + 1) * pageSize), total };
+          }}
+          columns={[
+            { key: 'icon', header: '', width: 'w-12', render: (a) => <img src={AGENT_ICON[a.name] ?? FALLBACK_ICON} className="w-8 h-8 rounded-lg object-cover" /> },
+            { key: 'title', header: 'Perk', render: (a) => (
+              <div className="min-w-0">
+                <div className="font-medium truncate">{a.title}</div>
+                <div className="text-[11px] text-muted truncate max-w-[420px]">{a.description}</div>
+              </div>
+            )},
+            { key: 'schedule', header: 'Orario', width: 'w-24', render: (a) => <span className="font-mono text-xs">{pad(a.hour)}:{pad(a.minute)}</span> },
+            { key: 'enabled', header: 'Stato', width: 'w-24', render: (a) => a.enabled ? <Chip tone="on">on</Chip> : <Chip>off</Chip> },
+            { key: 'last_run_at', header: 'Ultima esec.', width: 'w-44', render: (a) => a.last_run_at ? (
+              <div className="text-xs">
+                <div className="text-muted">{new Date(a.last_run_at).toLocaleString()}</div>
+                <div className={a.last_status === 'ok' ? 'text-ok' : 'text-err'}>{a.last_status}</div>
+              </div>
+            ) : <span className="text-muted">—</span> },
+            { key: 'actions', header: '', width: 'w-32', align: 'right', render: (a) => (
+              <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 justify-end">
+                <Toggle checked={a.enabled} onChange={() => toggle(a)} />
+                <Button size="sm" variant="ghost" onClick={(e) => run(a, e)} disabled={!!a.running || busy === a.name || cdLeft(a.name) > 0}>
+                  {a.running ? '⏳' : cdLeft(a.name) > 0 ? `${cdLeft(a.name)}s` : 'Run'}
+                </Button>
+              </div>
+            )},
+          ]}
+          chipFilters={[
+            {
+              key: 'state',
+              label: 'Filtra',
+              multi: true,
+              options: [
+                { value: 'on', label: 'attivi', tone: 'on' },
+                { value: 'off', label: 'disattivi' },
+                { value: 'running', label: 'in esec.', tone: 'accent' },
+                { value: 'notify', label: 'notifica', tone: 'accent2' },
+              ],
+            },
+          ]}
+          searchPlaceholder="Cerca perk…"
+          rowKey={(a) => a.id}
+          onRowClick={(a) => nav(`/perks/${a.name}`)}
+          emptyText={t('agents.noAgents')}
+          refreshKey={items.length}
+        />
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {items.map((a) => (
           <Card
@@ -144,6 +219,7 @@ export default function Agents() {
         ))}
         {items.length === 0 && <Card><div className="text-muted text-sm">{t('agents.noAgents')}</div></Card>}
       </div>
+      )}
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Button, Card, Chip, Modal } from '../components/ui';
+import { Card, Chip, Modal } from '../components/ui';
 import { useI18n } from '../i18n';
+import DataTable, { Column, ChipFilter } from '../components/DataTable';
 
 type Row = {
   id: number; ts: string; kind: string; status: string; model: string;
@@ -30,34 +31,54 @@ function fmtUsd(v: number | null | undefined) {
 function fmtNum(n: number | null | undefined) { return n == null ? '—' : Intl.NumberFormat().format(n); }
 
 export default function Logs() {
-  const [rows, setRows] = useState<Row[]>([]);
   const [stats, setStats] = useState<any>(null);
-  const [kind, setKind] = useState<string>('');
   const [open, setOpen] = useState<any | null>(null);
-  const [loading, setLoading] = useState(false);
   const { t } = useI18n();
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [r, s] = await Promise.all([api.logs(kind || undefined, 200), api.logStats()]);
-      setRows(r); setStats(s);
-    } finally { setLoading(false); }
-  }
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [kind]);
+  useEffect(() => { api.logStats().then(setStats).catch(() => {}); }, []);
 
-  async function openDetail(id: number) {
-    setOpen(await api.log(id));
-  }
+  const columns: Column<Row>[] = [
+    { key: 'ts', header: t('logs.time'), width: 'w-44', render: (r) => <span className="font-mono text-xs text-muted whitespace-nowrap">{new Date(r.ts).toLocaleString()}</span> },
+    { key: 'kind', header: t('logs.kind'), render: (r) => <Chip tone={KIND_TONE[r.kind] ?? 'default'}>{r.kind}</Chip> },
+    { key: 'status', header: t('logs.status'), render: (r) => r.status === 'ok' ? <Chip tone="on">ok</Chip> : <Chip tone="err">{r.status}</Chip> },
+    { key: 'input_tokens', header: 'In', align: 'right', render: (r) => <span className="font-mono">{fmtNum(r.input_tokens)}</span> },
+    { key: 'output_tokens', header: 'Out', align: 'right', render: (r) => <span className="font-mono">{fmtNum(r.output_tokens)}</span> },
+    { key: 'cache', header: 'Cache', align: 'right', render: (r) => <span className="font-mono text-muted">{fmtNum((r.cache_read_tokens ?? 0) + (r.cache_creation_tokens ?? 0))}</span> },
+    { key: 'cost_usd', header: t('logs.cost'), align: 'right', render: (r) => <span className="font-mono">{fmtUsd(r.cost_usd ?? null)}</span> },
+    { key: 'num_turns', header: t('logs.turns'), align: 'right', render: (r) => <span className="font-mono">{r.num_turns ?? '—'}</span> },
+    { key: 'duration_ms', header: 'ms', align: 'right', render: (r) => <span className="font-mono text-muted">{r.duration_ms}</span> },
+    { key: 'preview', header: t('logs.preview'), render: (r) => <span className="text-muted truncate block max-w-[280px]">{r.preview?.slice(0, 90) || '(empty)'}</span> },
+  ];
 
-  const kinds = ['', 'chat_turn', 'reflection', 'proactive', 'voice_transcribe'];
+  const chipFilters: ChipFilter[] = [
+    {
+      key: 'kind',
+      label: 'Kind',
+      multi: true,
+      options: [
+        { value: 'chat_turn', label: 'chat_turn', tone: 'on' },
+        { value: 'reflection', label: 'reflection', tone: 'warn' },
+        { value: 'proactive', label: 'proactive' },
+        { value: 'voice_transcribe', label: 'voice' },
+      ],
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      multi: true,
+      options: [
+        { value: 'ok', label: 'ok', tone: 'on' },
+        { value: 'error', label: 'error', tone: 'err' },
+        { value: 'timeout', label: 'timeout', tone: 'warn' },
+      ],
+    },
+  ];
+
+  async function openDetail(id: number) { setOpen(await api.log(id)); }
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gradient">{t('logs.title')}</h1>
-        <Button variant="ghost" size="sm" onClick={load} disabled={loading}>{loading ? '…' : t('logs.refresh')}</Button>
-      </div>
+    <div className="space-y-5 h-full flex flex-col">
+      <h1 className="text-2xl font-semibold text-gradient">{t('logs.title')}</h1>
 
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -68,51 +89,21 @@ export default function Logs() {
         </div>
       )}
 
-      <div className="flex items-center gap-2">
-        {kinds.map((k) => (
-          <Button key={k || 'all'} variant={kind === k ? 'primary' : 'ghost'} size="sm" onClick={() => setKind(k)}>
-            {k || 'all'}
-          </Button>
-        ))}
-      </div>
-
-      <Card className="p-0 overflow-hidden">
-        <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[760px]">
-          <thead className="text-xs uppercase text-muted bg-surface2/50">
-            <tr>
-              <th className="text-left px-4 py-2.5">{t('logs.time')}</th>
-              <th className="text-left px-4 py-2.5">{t('logs.kind')}</th>
-              <th className="text-left px-4 py-2.5">{t('logs.status')}</th>
-              <th className="text-right px-4 py-2.5">In</th>
-              <th className="text-right px-4 py-2.5">Out</th>
-              <th className="text-right px-4 py-2.5">Cache</th>
-              <th className="text-right px-4 py-2.5">{t('logs.cost')}</th>
-              <th className="text-right px-4 py-2.5">{t('logs.turns')}</th>
-              <th className="text-right px-4 py-2.5">ms</th>
-              <th className="text-left px-4 py-2.5">{t('logs.preview')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-border/40 hover:bg-surface2/40 cursor-pointer" onClick={() => openDetail(r.id)}>
-                <td className="px-4 py-2 font-mono text-xs text-muted whitespace-nowrap">{new Date(r.ts).toLocaleString()}</td>
-                <td className="px-4 py-2"><Chip tone={KIND_TONE[r.kind] ?? 'default'}>{r.kind}</Chip></td>
-                <td className="px-4 py-2">{r.status === 'ok' ? <Chip tone="on">ok</Chip> : <Chip tone="err">{r.status}</Chip>}</td>
-                <td className="px-4 py-2 text-right font-mono">{fmtNum(r.input_tokens)}</td>
-                <td className="px-4 py-2 text-right font-mono">{fmtNum(r.output_tokens)}</td>
-                <td className="px-4 py-2 text-right font-mono text-muted">{fmtNum((r.cache_read_tokens ?? 0) + (r.cache_creation_tokens ?? 0))}</td>
-                <td className="px-4 py-2 text-right font-mono">{fmtUsd(r.cost_usd ?? null)}</td>
-                <td className="px-4 py-2 text-right font-mono">{r.num_turns ?? '—'}</td>
-                <td className="px-4 py-2 text-right font-mono text-muted">{r.duration_ms}</td>
-                <td className="px-4 py-2 text-muted truncate max-w-[280px]">{r.preview?.slice(0, 90) || '(empty)'}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={10} className="text-center text-muted py-8">empty</td></tr>}
-          </tbody>
-        </table>
-        </div>
-      </Card>
+      <DataTable<Row>
+        fetcher={async ({ q, page, pageSize, filters }) => {
+          const r = await api.logs({
+            kinds: filters.kind, statuses: filters.status, q,
+            limit: pageSize, offset: page * pageSize,
+          });
+          return r;
+        }}
+        columns={columns}
+        chipFilters={chipFilters}
+        searchPlaceholder="Cerca in prompt/result/error…"
+        rowKey={(r) => r.id}
+        onRowClick={(r) => openDetail(r.id)}
+        emptyText="Nessun run."
+      />
 
       <Modal open={!!open} title={open ? `Run #${open.id} · ${open.kind}` : ''} onClose={() => setOpen(null)}>
         {open && (
