@@ -194,12 +194,45 @@ export async function runTick(userId: number, name: string) {
   }
 }
 
+// Dedup: skip events whose stable key was already processed in the recent
+// past. Without this, a duplicate IMAP poller (e.g. two backend instances
+// fighting over the same session, or rapid restarts that re-fetch the same
+// UID) would fire onConnectorEvent N times → N Telegram pings for one email.
+const recentEventKeys = new Map<string, number>();
+const EVENT_DEDUP_MS = 10 * 60_000;
+// Per-user mutex so two near-simultaneous events (email + WS push) can't
+// spawn two Claude runs in parallel that both reply.
+const proactiveInFlight = new Set<number>();
+
+function eventKey(ev: { userId: number; connector: string; kind: string; payload: any }): string {
+  const p = ev.payload ?? {};
+  // Best-effort stable id: account+uid for emails, otherwise channel+msg_id.
+  const id = p.uid ?? p.id ?? p.msg_id ?? p.subj ?? JSON.stringify(p).slice(0, 80);
+  return `${ev.userId}:${ev.connector}:${ev.kind}:${p.account ?? ''}:${id}`;
+}
+
 async function onConnectorEvent(ev: { userId: number; connector: string; kind: string; payload: any }) {
-  const vault = await getVaultRoot(ev.userId);
-  const prompt = await buildProactivePrompt(ev.userId, `${ev.connector}:${ev.kind}`, ev.payload);
-  const res = await runClaude(ev.userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 60_000, kind: 'proactive', meta: { trigger: `${ev.connector}:${ev.kind}` } });
-  if (!res.ok) return;
-  const out = res.text.trim();
-  if (!out || out === 'SKIP') return;
-  try { await sendTelegram(ev.userId, out); } catch (e) { console.error('[scheduler] sendTelegram', e); }
+  const now = Date.now();
+  // Sweep expired
+  for (const [k, ts] of recentEventKeys) if (now - ts > EVENT_DEDUP_MS) recentEventKeys.delete(k);
+  const key = eventKey(ev);
+  if (recentEventKeys.has(key)) {
+    console.log(`[scheduler] skip dup event ${key}`);
+    return;
+  }
+  recentEventKeys.set(key, now);
+  if (proactiveInFlight.has(ev.userId)) {
+    console.log(`[scheduler:u${ev.userId}] proactive turn in-flight — skipping ${ev.connector}:${ev.kind}`);
+    return;
+  }
+  proactiveInFlight.add(ev.userId);
+  try {
+    const vault = await getVaultRoot(ev.userId);
+    const prompt = await buildProactivePrompt(ev.userId, `${ev.connector}:${ev.kind}`, ev.payload);
+    const res = await runClaude(ev.userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 60_000, kind: 'proactive', meta: { trigger: `${ev.connector}:${ev.kind}` } });
+    if (!res.ok) return;
+    const out = res.text.trim();
+    if (!out || out === 'SKIP') return;
+    try { await sendTelegram(ev.userId, out); } catch (e) { console.error('[scheduler] sendTelegram', e); }
+  } finally { proactiveInFlight.delete(ev.userId); }
 }
