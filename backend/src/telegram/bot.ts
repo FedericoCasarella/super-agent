@@ -370,6 +370,14 @@ export async function stopBotForUser(userId: number) {
   bots.delete(userId);
 }
 
+// Stop ALL Telegraf instances in parallel. Used by dev shutdown so each bot
+// gets a chance to ack its current update batch before the process exits,
+// preventing Telegram replay loops on respawn.
+export async function stopAllTelegramBots(): Promise<void> {
+  const ids = Array.from(bots.keys());
+  await Promise.all(ids.map((id) => stopBotForUser(id)));
+}
+
 export async function startAllTelegramBots() {
   const rows = await query<{ user_id: number }>(
     `SELECT DISTINCT user_id FROM settings WHERE key='telegram' AND user_id IS NOT NULL`
@@ -398,7 +406,32 @@ export async function sendTelegram(userId: number, text: string, origin: string 
     await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: text, origin, error: 'telegram bot init failed' });
     throw new Error(`telegram bot init failed for user ${userId}`);
   }
-  const parts = text.split('<<MSG>>').map((p) => p.trim()).filter(Boolean);
+  // Hard split by 4000 chars (Telegram limit 4096, leave headroom for HTML
+  // entity expansion). Long Claude outputs (SOPs, dossiers) hit 5–10k chars
+  // and Telegram rejected the call silently — orchestrator logged "sent" but
+  // user got nothing. Now split FIRST, then split by explicit <<MSG>> markers.
+  const MAX = 4000;
+  function chunkByLen(s: string): string[] {
+    if (s.length <= MAX) return [s];
+    const out: string[] = [];
+    let i = 0;
+    while (i < s.length) {
+      let end = Math.min(i + MAX, s.length);
+      if (end < s.length) {
+        const nl = s.lastIndexOf('\n', end);
+        if (nl > i + MAX / 2) end = nl;
+      }
+      out.push(s.slice(i, end));
+      i = end;
+    }
+    return out;
+  }
+  const parts = text
+    .split('<<MSG>>')
+    .flatMap((p) => chunkByLen(p))
+    .map((p) => p.trim())
+    .filter(Boolean);
+  console.log(`[telegram:${userId}] sending ${parts.length} parts (total ${text.length} chars)`);
   for (const p of parts) {
     let sentOk = true;
     let err: string | null = null;

@@ -328,10 +328,16 @@ const TRIGGER_MATCHERS: Record<string, TriggerMatch> = {
 // has explicitly wired a flow to handle the channel — otherwise both fire and
 // the user gets two answers.
 export async function hasFlowForTrigger(userId: number, triggerType: string): Promise<boolean> {
+  // Only count flows that ACTUALLY have steps wired up. An empty flow with
+  // just a trigger and zero steps would silently swallow the message — the
+  // orchestrator skipped its default reply and the flow had nothing to run.
+  // Result: user sent message, got nothing back.
   const rows = await query<{ n: number }>(
     `SELECT count(*)::int AS n
-     FROM flow_triggers t JOIN flows f ON f.id=t.flow_id
-     WHERE t.type=$1 AND f.user_id=$2 AND f.enabled=true AND f.archived=false`,
+     FROM flow_triggers t
+     JOIN flows f ON f.id=t.flow_id
+     WHERE t.type=$1 AND f.user_id=$2 AND f.enabled=true AND f.archived=false
+       AND EXISTS(SELECT 1 FROM flow_steps s WHERE s.flow_id=f.id)`,
     [triggerType, userId],
   );
   return (rows[0]?.n ?? 0) > 0;

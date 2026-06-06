@@ -280,6 +280,33 @@ router.get('/brain/stats', async (req, res) => {
   });
 });
 
+// Full vault tree (every .md path relative to vault root). Used by the
+// Brain file-explorer sidebar. Walks the filesystem so it doesn't depend on
+// brain_index staleness. Skips dot-folders + node_modules + .git.
+router.get('/brain/tree', async (req, res) => {
+  try {
+    // Reuse buildGraph which already walks every configured vault correctly.
+    // The 3D graph reads from it, so if the graph has nodes, so will the tree.
+    // Node id format: `<vaultName>::<relPath>` — split to get the rel path.
+    const g = await buildGraph(req.user!.id, {});
+    // Keep the `<vault>::<rel>` id format. /brain/note knows how to resolve it
+    // against multi-vault. Stripping the vault prefix made clicks 404 because
+    // readNote() only looks in the primary vault root.
+    const files = Array.from(
+      new Set(
+        (g.nodes as any[])
+          .map((n) => String(n.id ?? ''))
+          .filter((id) => id.endsWith('.md')),
+      ),
+    ).sort();
+    console.log(`[brain/tree] u${req.user!.id} from buildGraph: ${files.length} files`);
+    res.json({ root: null, files });
+  } catch (e: any) {
+    console.error('[brain/tree] error', e);
+    res.status(400).json({ error: String(e?.message ?? e) });
+  }
+});
+
 router.get('/brain/index', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
   const where = filter === 'all' ? '' : ' AND visibility=$2';

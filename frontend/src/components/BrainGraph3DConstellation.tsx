@@ -87,6 +87,9 @@ export default function BrainGraph3DConstellation({
   vaultFilter = 'all',
   onOriginsChange,
   onVaultsChange,
+  explorerOpen,
+  onToggleExplorer,
+  focusId,
 }: {
   onSelect: (id: string) => void;
   onDeselect?: () => void;
@@ -95,12 +98,42 @@ export default function BrainGraph3DConstellation({
   vaultFilter?: string;
   onOriginsChange?: (origins: string[]) => void;
   onVaultsChange?: (vaults: string[]) => void;
+  explorerOpen?: boolean;
+  onToggleExplorer?: () => void;
+  focusId?: string | null;
 }) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
   // degree map kept in a ref so nodeVisibility callback doesn't allocate.
   const degreeRef = useRef<Map<string, number>>(new Map());
   const [hover, setHover] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+
+  // External focus (file-explorer click). When focusId changes, locate the
+  // matching node and run the same camera zoom-to-node animation used by
+  // intra-graph clicks. Wrapped in setTimeout so we wait for the simulation
+  // to assign x/y/z if the user clicked before forces settled.
+  useEffect(() => {
+    if (!focusId) return;
+    const fg: any = fgRef.current;
+    if (!fg) return;
+    let cancelled = false;
+    function tryFocus(attempt: number) {
+      if (cancelled) return;
+      const n: any = (data.nodes as any[]).find((x) => x.id === focusId);
+      if (!n || n.x == null) {
+        if (attempt < 30) setTimeout(() => tryFocus(attempt + 1), 100);
+        return;
+      }
+      setSelected(n.id);
+      const dist = 130;
+      const len = Math.hypot(n.x, n.y, n.z) || 1;
+      const ratio = 1 + dist / len;
+      fg.cameraPosition({ x: n.x * ratio, y: n.y * ratio, z: n.z * ratio }, n, 1000);
+    }
+    tryFocus(0);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, data.nodes]);
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -967,6 +1000,19 @@ export default function BrainGraph3DConstellation({
           className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/60 text-emerald-300 hover:bg-emerald-500/30 backdrop-blur transition flex items-center justify-center text-xs font-semibold"
           title="Demo MRI animation"
         >MRI</button>
+        {onToggleExplorer && (
+          <button
+            onClick={onToggleExplorer}
+            className={`w-10 h-10 rounded-xl border backdrop-blur transition flex items-center justify-center ${
+              explorerOpen
+                ? 'bg-accent/20 border-accent/60 text-accent'
+                : 'bg-surface2/70 border-border text-muted hover:border-accent/50'
+            }`}
+            title={explorerOpen ? 'Nascondi file explorer' : 'Mostra file explorer'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7h6l2 2h10v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z"/><path d="M3 11h18"/></svg>
+          </button>
+        )}
       </div>
       {size && (
         <ForceGraph3D

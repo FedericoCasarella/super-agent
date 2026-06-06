@@ -34,6 +34,7 @@ export const api = {
   testImapAccount: (acc: any) => req<any>('/connectors/imap/test', { method: 'POST', body: JSON.stringify(acc) }),
   brainSearch: (q: string) => req<any[]>(`/brain/search?q=${encodeURIComponent(q)}`),
   brainIndex: () => req<any[]>('/brain/index'),
+  brainTree: () => req<{ root: string | null; files: string[] }>('/brain/tree'),
   brainGraph: () => req<{ nodes: any[]; links: any[] }>('/brain/graph'),
   brainNote: (path: string) => req<any>(`/brain/note?path=${encodeURIComponent(path)}`),
   callTool: (name: string, args: any = {}) => req<any>(`/tools/${name}`, { method: 'POST', body: JSON.stringify(args) }),

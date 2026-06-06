@@ -9,7 +9,7 @@
 //
 // Plain crash → respawn with exponential backoff (500ms → 8s). Resets after
 // the child has been up for >5s.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
@@ -131,6 +131,49 @@ function shutdown(sig) {
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// Kill any pre-existing process bound to our port. Stale tsx-watch from
+// before dev-loop landed, or a previous dev-loop that crashed, can leave
+// zombies polling WA/Telegram → "stream:error conflict replaced" loops and
+// 3 backends fighting at once. Fail-loud if we can't.
+function killExistingOnPort() {
+  try {
+    const r = spawnSync('lsof', ['-ti', `tcp:${HEALTH_PORT}`], { encoding: 'utf8' });
+    const pids = (r.stdout ?? '').split('\n').map((s) => s.trim()).filter(Boolean).map(Number);
+    const ours = process.pid;
+    const others = pids.filter((p) => p !== ours);
+    if (!others.length) return;
+    console.warn(`[dev-loop] killing stale processes on port ${HEALTH_PORT}: ${others.join(', ')}`);
+    spawnSync('kill', ['-9', ...others.map(String)]);
+  } catch {}
+}
+// Also nuke any orphan tsx/dev-loop processes from prior `npm run dev`
+// sessions. Match on cwd substring to avoid touching unrelated tsx procs.
+function killOrphanDevProcs() {
+  try {
+    const ps = spawnSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8' });
+    const ours = process.pid;
+    const ppid = process.ppid;
+    const cwd = process.cwd();
+    const lines = (ps.stdout ?? '').split('\n');
+    const victims = [];
+    for (const line of lines) {
+      const m = line.trim().match(/^(\d+)\s+(.+)$/);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      const cmd = m[2];
+      if (pid === ours || pid === ppid) continue;
+      if (!cmd.includes(cwd)) continue;
+      if (!/tsx|dev-loop\.mjs|src\/index\.ts/.test(cmd)) continue;
+      victims.push(pid);
+    }
+    if (!victims.length) return;
+    console.warn(`[dev-loop] killing orphan dev procs: ${victims.join(', ')}`);
+    spawnSync('kill', ['-9', ...victims.map(String)]);
+  } catch {}
+}
+killOrphanDevProcs();
+killExistingOnPort();
 
 spawnChild();
 healthTimer = setInterval(pingHealth, HEALTH_INTERVAL_MS);

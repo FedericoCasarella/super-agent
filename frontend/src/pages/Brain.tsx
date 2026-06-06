@@ -6,6 +6,8 @@ import BrainGraph3D from '../components/BrainGraph3D';
 import BrainGraph3DConstellation from '../components/BrainGraph3DConstellation';
 import MarkdownView from '../components/MarkdownView';
 import BrainOverview from '../components/BrainOverview';
+import BrainFileExplorer from '../components/BrainFileExplorer';
+import { FolderTree } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { api as apiX } from '../api';
 
@@ -53,6 +55,8 @@ export default function Brain() {
   const [q, setQ] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [note, setNote] = useState<any | null>(null);
+  const [explorerOpen, setExplorerOpen] = useState<boolean>(() => lsGet('brain_explorer_open', '0') === '1');
+  useEffect(() => { lsSet('brain_explorer_open', explorerOpen ? '1' : '0'); }, [explorerOpen]);
 
   async function reloadList() {
     if (q) setItems(await api.brainSearch(q));
@@ -134,8 +138,18 @@ export default function Brain() {
       )}
 
       {tab === 'graph' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
-          <Card className="lg:col-span-2 p-0 overflow-hidden h-[78vh] relative">
+        <div className="flex gap-0 flex-1 min-h-0">
+          {explorerOpen && (
+            <Card className="h-[78vh] shrink-0 p-0 overflow-hidden rounded-r-none border-r-0">
+              <BrainFileExplorer
+                selectedPath={note?.path ?? null}
+                onSelect={(p) => open(p)}
+                onClose={() => setExplorerOpen(false)}
+              />
+            </Card>
+          )}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-w-0">
+          <Card className={`lg:col-span-2 !p-0 overflow-hidden h-[78vh] relative ${explorerOpen ? 'rounded-l-none' : ''}`}>
             {view === '3d' ? (
               <BrainGraph3DConstellation
                 key={`3d-${graphKey}`}
@@ -146,6 +160,9 @@ export default function Brain() {
                 vaultFilter={vaultFilter}
                 onOriginsChange={setOrigins}
                 onVaultsChange={setVaults}
+                explorerOpen={explorerOpen}
+                onToggleExplorer={() => setExplorerOpen((v) => !v)}
+                focusId={note?.path ?? null}
               />
             ) : (
               <BrainGraph3D
@@ -157,6 +174,8 @@ export default function Brain() {
                 vaultFilter={vaultFilter}
                 onOriginsChange={setOrigins}
                 onVaultsChange={setVaults}
+                explorerOpen={explorerOpen}
+                onToggleExplorer={() => setExplorerOpen((v) => !v)}
               />
             )}
           </Card>
@@ -178,6 +197,7 @@ export default function Brain() {
               </div>
             )}
           </Card>
+          </div>
         </div>
       ) : (
         <>

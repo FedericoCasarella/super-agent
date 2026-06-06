@@ -143,10 +143,20 @@ async function main() {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => {
     if (isDev) {
-      console.log('[shutdown] SIGTERM (dev) — fast exit');
-      try { server.closeAllConnections?.(); } catch {}
-      try { server.close(); } catch {}
-      process.exit(0);
+      console.log('[shutdown] SIGTERM (dev) — stopping Telegram polling then exit');
+      // Stop Telegraf polling so outstanding getUpdates is cancelled WITH ack
+      // of the last delivered batch. Without this, dev-loop restarts mid-turn
+      // leave updates un-acked → Telegram re-delivers → user gets N replies.
+      // Hard deadline 1.5s so port doesn't linger.
+      const hardKill = setTimeout(() => { console.warn('[shutdown] hard exit after 1.5s'); process.exit(0); }, 1500);
+      (async () => {
+        try { const tg = await import('./telegram/bot.js'); await tg.stopAllTelegramBots?.(); } catch {}
+        try { server.closeAllConnections?.(); } catch {}
+        try { server.close(); } catch {}
+        clearTimeout(hardKill);
+        process.exit(0);
+      })();
+      return;
     }
     void shutdown('SIGTERM');
   });

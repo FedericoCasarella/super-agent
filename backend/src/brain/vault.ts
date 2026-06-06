@@ -108,11 +108,17 @@ export async function searchNotes(userId: number, q: string, limit = 20): Promis
       const full = path.join(dir, e.name);
       if (e.isDirectory()) { await walk(full); continue; }
       if (!e.name.endsWith('.md')) continue;
+      const rel = path.relative(vaultRoot, full);
+      // Match by filename / relative path BEFORE reading content. User often
+      // searches by filename (e.g. "sop-delivery-ai-coach.md") and the term
+      // isn't inside the body — previous code missed every such hit.
+      const nameHit = e.name.toLowerCase().includes(term) || rel.toLowerCase().includes(term);
       const raw = await fs.readFile(full, 'utf8');
-      if (!raw.toLowerCase().includes(term)) continue;
+      const bodyHit = raw.toLowerCase().includes(term);
+      if (!nameHit && !bodyHit) continue;
       const parsed = matter(raw);
       out.push({
-        path: path.relative(vaultRoot, full),
+        path: rel,
         title: parsed.data.title,
         tags: parsed.data.tags ?? [],
         data: parsed.data,

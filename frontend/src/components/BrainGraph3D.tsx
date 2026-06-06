@@ -72,6 +72,8 @@ export default function BrainGraph3D({
   vaultFilter = 'all',
   onOriginsChange,
   onVaultsChange,
+  explorerOpen,
+  onToggleExplorer,
 }: {
   onSelect: (id: string) => void;
   onDeselect?: () => void;
@@ -80,6 +82,8 @@ export default function BrainGraph3D({
   vaultFilter?: string;
   onOriginsChange?: (origins: string[]) => void;
   onVaultsChange?: (vaults: string[]) => void;
+  explorerOpen?: boolean;
+  onToggleExplorer?: () => void;
 }) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
   const dataRef = useRef<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });

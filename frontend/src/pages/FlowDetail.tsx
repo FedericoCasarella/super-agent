@@ -528,7 +528,7 @@ export default function FlowDetail() {
         title="Configura trigger"
         footer={<>
           <Button variant="ghost" onClick={() => setEditTrigger(null)}>Annulla</Button>
-          <Button onClick={() => { setEditTrigger(null); toast.push('Trigger aggiornato', 'on'); }}>Salva</Button>
+          <Button onClick={async () => { await saveAll(); setEditTrigger(null); }}>Salva</Button>
         </>}
       >
         {editTrigger != null && flow?.triggers[editTrigger] && (
@@ -543,7 +543,7 @@ export default function FlowDetail() {
         title="Configura step"
         footer={<>
           <Button variant="ghost" onClick={() => setEditStep(null)}>Annulla</Button>
-          <Button onClick={() => { setEditStep(null); toast.push('Step aggiornato', 'on'); }}>Salva</Button>
+          <Button onClick={async () => { await saveAll(); setEditStep(null); }}>Salva</Button>
         </>}
       >
         {editStep != null && flow?.steps[editStep] && (
