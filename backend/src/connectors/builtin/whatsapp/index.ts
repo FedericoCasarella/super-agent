@@ -111,7 +111,13 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
   // Fresh pair (no creds yet) = stale wa_messages/wa_contacts from a previous
   // pair must be wiped before the new history sync lands. Otherwise Baileys
   // assigns new @lid jids for the same person and we get duplicate chats.
-  const isFreshPair = !(state.creds as any)?.registered;
+  //
+  // Detection must NOT use `creds.registered` alone — that flag is also false
+  // on a legit returning session at process start (Baileys flips it on first
+  // `connection: 'open'`). Real fresh pair: no `creds.me?.id` AND no signal
+  // keys yet (`creds.noiseKey` is set after pair). Either present = returning.
+  const credsAny = (state.creds as any) ?? {};
+  const isFreshPair = !credsAny.me?.id && !credsAny.noiseKey;
   const session: Session = { sock, status: 'starting', startedAt: Date.now(), needsHistoryWipe: isFreshPair };
   sessions.set(userId, session);
   if (isFreshPair) console.log(`[wa:u${userId}] fresh pair detected — will wipe stale rows on first history batch`);
@@ -765,19 +771,32 @@ export async function setChatDisplayOverride(
 
 // Manually cable a WA chat to a Person in the brain. Pass slug=null to unlink.
 export async function linkChatToPerson(userId: number, chatJid: string, slug: string | null): Promise<{ ok: boolean }> {
+  console.log(`[wa:link] u${userId} chat=${chatJid} → slug=${slug ?? 'NULL'}`);
   if (slug !== null && typeof slug !== 'string') throw new Error('slug must be string or null');
   if (slug) {
     const exists = await query<{ slug: string }>(`SELECT slug FROM people WHERE user_id=$1 AND slug=$2 LIMIT 1`, [userId, slug]);
     if (!exists[0]) throw new Error(`person ${slug} not found`);
   }
+  // Also CLEAR display_name override on link. A leftover display_name from a
+  // previous Pencil-dialog save was overriding people.name in listChats COALESCE
+  // and showing the wrong name on the chip after the user re-linked the chat.
   await query(
-    `INSERT INTO wa_contacts(user_id, jid, linked_person_slug, updated_at)
-     VALUES($1,$2,$3, now())
-     ON CONFLICT(user_id, jid) DO UPDATE SET linked_person_slug=EXCLUDED.linked_person_slug, updated_at=now()`,
+    `INSERT INTO wa_contacts(user_id, jid, linked_person_slug, display_name, updated_at)
+     VALUES($1,$2,$3, NULL, now())
+     ON CONFLICT(user_id, jid) DO UPDATE SET
+       linked_person_slug=EXCLUDED.linked_person_slug,
+       display_name=NULL,
+       updated_at=now()`,
     [userId, chatJid, slug],
   );
   // Backfill person_slug on existing messages so brain search picks them up.
   await query(`UPDATE wa_messages SET person_slug=$1 WHERE user_id=$2 AND chat_jid=$3`, [slug, userId, chatJid]);
+  // Verify what actually landed in DB — surfaces silent overwrites elsewhere.
+  const verify = await query<{ linked_person_slug: string | null; display_name: string | null }>(
+    `SELECT linked_person_slug, display_name FROM wa_contacts WHERE user_id=$1 AND jid=$2`,
+    [userId, chatJid],
+  );
+  console.log(`[wa:link] post-write u${userId} chat=${chatJid} db.linked=${verify[0]?.linked_person_slug ?? 'NULL'} db.display=${verify[0]?.display_name ?? 'NULL'}`);
   return { ok: true };
 }
 

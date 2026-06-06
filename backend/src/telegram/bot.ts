@@ -17,7 +17,18 @@ function toTelegramHtml(raw: string): string {
     blocks.push(html);
     return `${SENTINEL}${blocks.length - 1}${SENTINEL}`;
   };
-  let s = raw.replace(/```([\s\S]*?)```/g, (_m, code) => wrap(`<pre>${escapeHtml(code)}</pre>`));
+  // Pre-pass: merge "filename + URL on next line" into a single Markdown link
+  // so Telegram renders one clickable item. Catches Claude's verbose pattern
+  //   - 2026-06-01.md
+  //     http://localhost:5173/brain?note=dreams/2026-06-01.md
+  // Result: "- [2026-06-01.md](http://localhost:5173/brain?note=...)"
+  let pre = raw.replace(
+    /(^|\n)([ \t]*[-*•]?[ \t]*)([^\s\n][^\n]*?)\n[ \t]+(https?:\/\/\S+)/g,
+    (_m, lead, bullet, label, url) => `${lead}${bullet}[${label.trim()}](${url})`,
+  );
+  // Auto-link bare URLs that aren't already inside a [..](..) markdown link.
+  pre = pre.replace(/(^|[\s(])(https?:\/\/[^\s<>()]+)/g, (_m, lead, url) => `${lead}[${url}](${url})`);
+  let s = pre.replace(/```([\s\S]*?)```/g, (_m, code) => wrap(`<pre>${escapeHtml(code)}</pre>`));
   s = s.replace(/`([^`\n]+)`/g, (_m, code) => wrap(`<code>${escapeHtml(code)}</code>`));
   s = escapeHtml(s);
   s = s.replace(/\*\*([^\n*]+)\*\*/g, '<b>$1</b>');
@@ -40,6 +51,115 @@ async function startBotForUser(userId: number) {
   // Explicit /start handler — Telegraf treats /start as a command and may
   // bypass generic on('message') depending on update type / entities.
   // /agents command — show active sub-agents
+  // Catalog of agent-supported slash commands. Single source of truth — used
+  // both to wire handlers and to populate Telegram's native /-menu via
+  // setMyCommands at launch.
+  const COMMAND_CATALOG: Array<{ command: string; description: string }> = [
+    { command: 'start',   description: 'Collega questa chat al tuo agent' },
+    { command: 'help',    description: 'Mostra i comandi disponibili' },
+    { command: 'agents',  description: 'Lista sub-agent in esecuzione' },
+    { command: 'status',  description: 'Stato agent: quota, agent attivi, ultima riflessione' },
+    { command: 'tasks',   description: 'Task schedulati attivi' },
+    { command: 'reset',   description: 'Pulisci la cronologia conversazione (ultimi 30 msg)' },
+    { command: 'stop',    description: 'Mette in pausa le risposte automatiche' },
+    { command: 'resume',  description: 'Riprende le risposte automatiche' },
+  ];
+
+  bot.command('help', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    const body = COMMAND_CATALOG.map((c) => `/${c.command} — ${c.description}`).join('\n');
+    await ctx.reply(`🤖 Comandi disponibili:\n\n${body}`);
+  });
+
+  bot.command('status', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { isQuotaLocked } = await import('../quota.js');
+      const { listActive } = await import('../sub_agents/index.js');
+      const active = await listActive(userId);
+      const paused = (await getSetting<any>(userId, 'agent_paused'))?.value === true;
+      const lastReflection = (await getSetting<any>(userId, 'agent_next_reflection_at'))?.at;
+      const quotaIcon = isQuotaLocked() ? '🚫 lock' : '✅ ok';
+      const pauseIcon = paused ? '⏸ in pausa' : '▶️ attivo';
+      const lines = [
+        `Quota: ${quotaIcon}`,
+        `Stato: ${pauseIcon}`,
+        `Sub-agent attivi: ${active.length}`,
+        lastReflection ? `Prossima riflessione: ${new Date(lastReflection).toLocaleString('it-IT')}` : 'Riflessione: nessuna pianificata',
+      ];
+      await ctx.reply(`📊 Status\n\n${lines.join('\n')}`);
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 160)}`);
+    }
+  });
+
+  bot.command('tasks', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { query } = await import('../db/index.js');
+      const rows = await query<{ id: number; title: string; cron: string; next_run_at: string | null; enabled: boolean }>(
+        `SELECT id::int, title, cron, next_run_at, enabled
+           FROM scheduled_tasks WHERE user_id=$1 AND enabled=true
+          ORDER BY next_run_at NULLS LAST LIMIT 20`,
+        [userId],
+      );
+      if (!rows.length) { await ctx.reply('Nessun task schedulato attivo.'); return; }
+      const lines = rows.map((r, i) => {
+        const next = r.next_run_at ? new Date(r.next_run_at).toLocaleString('it-IT') : 'n/a';
+        return `${i + 1}. ${r.title}\n   ⏰ ${r.cron} · prox ${next}`;
+      });
+      await ctx.reply(`📅 Task attivi (${rows.length}):\n\n${lines.join('\n\n')}`);
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 160)}`);
+    }
+  });
+
+  bot.command('reset', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { query } = await import('../db/index.js');
+      const r = await query<{ n: number }>(
+        `WITH d AS (
+           DELETE FROM messages
+           WHERE id IN (
+             SELECT id FROM messages
+             WHERE user_id=$1 AND channel='telegram'
+             ORDER BY id DESC LIMIT 30
+           )
+           RETURNING 1
+         ) SELECT count(*)::int AS n FROM d`,
+        [userId],
+      );
+      await ctx.reply(`🧹 Cronologia cancellata (${r[0]?.n ?? 0} msg). Prossimo messaggio parte da contesto pulito.`);
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 160)}`);
+    }
+  });
+
+  bot.command('stop', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    await setSetting(userId, 'agent_paused', { value: true, at: new Date().toISOString() });
+    await ctx.reply('⏸ Risposte automatiche in pausa. Usa /resume per riprenderle.');
+  });
+
+  bot.command('resume', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    await setSetting(userId, 'agent_paused', { value: false, at: new Date().toISOString() });
+    await ctx.reply('▶️ Risposte automatiche riattivate.');
+  });
+
   bot.command('agents', async (ctx) => {
     const chatId = ctx.chat.id;
     const cur = await getSetting<any>(userId, 'telegram');
@@ -232,6 +352,14 @@ ${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a
     });
   };
   launchWithRetry();
+  // Register the slash-menu Telegram shows when user types `/`. Best-effort —
+  // failures don't block the bot from working.
+  bot.telegram.setMyCommands(COMMAND_CATALOG)
+    .then(() => console.log(`[telegram:${userId}] /-menu registered (${COMMAND_CATALOG.length} commands)`))
+    .catch((e: any) => console.warn(`[telegram:${userId}] setMyCommands failed`, e?.message ?? e));
+  // Persistent "Menu" button next to the input — opens the commands list.
+  bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } })
+    .catch((e: any) => console.warn(`[telegram:${userId}] setChatMenuButton failed`, e?.message ?? e));
   console.log(`[telegram:${userId}] started`);
 }
 

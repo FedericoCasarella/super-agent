@@ -288,13 +288,16 @@ export default function WhatsApp() {
   // Manual brain-link: user explicitly bind a WA chat to a Person.
   const [linkFor, setLinkFor] = useState<string | null>(null);
   const [linkQuery, setLinkQuery] = useState('');
-  const [linkPeople, setLinkPeople] = useState<Array<{ slug: string; name: string; avatar_url?: string | null }>>([]);
+  const [linkPeople, setLinkPeople] = useState<Array<{ slug: string; name: string; avatar_url?: string | null; emails?: string[]; phones?: string[]; aliases?: string[] }>>([]);
   const [linking, setLinking] = useState(false);
   // Per-chat display override dialog (custom name + phone).
   const [editFor, setEditFor] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editSaving, setEditSaving] = useState(false);
+  // First-load flag for the chat list — distinguishes "still loading" from
+  // "loaded but truly empty" so we don't flash "0 chat" on initial mount.
+  const [chatsLoaded, setChatsLoaded] = useState(false);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const chatMenuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -455,7 +458,11 @@ export default function WhatsApp() {
     finally { setSyncing(false); }
   }
 
-  async function loadChats() { try { setChats(await api.waChats()); } catch {} }
+  async function loadChats() {
+    try { setChats(await api.waChats()); }
+    catch {}
+    finally { setChatsLoaded(true); }
+  }
   async function loadMessages(jid: string) {
     setLoading(true);
     try { setMessages(await api.waChatMessages(jid)); } catch {}
@@ -633,10 +640,26 @@ export default function WhatsApp() {
         {/* Chats sidebar */}
         <Card className="col-span-12 md:col-span-4 lg:col-span-3 p-0 overflow-hidden flex flex-col h-full max-h-[78vh]">
           <div className="p-3 border-b border-border text-xs uppercase tracking-wider text-muted font-semibold flex items-center gap-2">
-            <MessageCircle size={14} /> {chats.length} chat
+            <MessageCircle size={14} />
+            {chatsLoaded ? `${chats.length} chat` : (
+              <span className="inline-flex items-center gap-1.5"><RefreshCw size={11} className="animate-spin" /> caricamento…</span>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto">
-            {chats.length === 0 && <div className="p-4 text-muted text-sm">Nessun messaggio ancora. Configura WhatsApp in Connettori.</div>}
+            {!chatsLoaded && (
+              <div className="divide-y divide-border/60 animate-pulse">
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <div key={i} className="px-3 py-2.5 flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-surface2" />
+                    <div className="flex-1 min-w-0 space-y-1.5">
+                      <div className="h-3 rounded bg-surface2" style={{ width: `${40 + ((i * 7) % 40)}%` }} />
+                      <div className="h-2.5 rounded bg-surface2/60" style={{ width: `${55 + ((i * 11) % 35)}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {chatsLoaded && chats.length === 0 && <div className="p-4 text-muted text-sm">Nessun messaggio ancora. Configura WhatsApp in Connettori.</div>}
             {chats.map((c) => {
               const name = c.sender_name || c.sender_phone || c.chat_jid;
               const active = selected === c.chat_jid;
@@ -652,20 +675,6 @@ export default function WhatsApp() {
                       <span className="font-medium truncate text-sm">{name}</span>
                       <span className="text-[10px] text-muted shrink-0 flex items-center gap-1">
                         {fmtTime(c.ts)}
-                        {(c.display_name_override || c.display_phone_override) && <Pencil size={9} className="text-accent" />}
-                        {c.linked_person_slug && (
-                          <span className="inline-flex items-center gap-0.5">
-                            <Brain size={10} className="text-accent2" />
-                            <Link
-                              to={`/people?slug=${encodeURIComponent(c.linked_person_slug)}`}
-                              onClick={(e) => e.stopPropagation()}
-                              title={`Apri dossier di ${c.linked_person_slug}`}
-                              className="text-accent2 hover:text-accent transition"
-                            >
-                              <ExternalLink size={9} />
-                            </Link>
-                          </span>
-                        )}
                       </span>
                     </div>
                     <div className="text-xs text-muted truncate flex items-center gap-1.5">
@@ -690,6 +699,21 @@ export default function WhatsApp() {
                           sync…
                         </span>
                       )}
+                      {(c.display_name_override || c.display_phone_override) && (
+                        <span className="shrink-0 inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/40 font-semibold" title="Nome/numero personalizzati">
+                          <Pencil size={10} /> custom
+                        </span>
+                      )}
+                      {c.linked_person_slug && (
+                        <Link
+                          to={`/people?slug=${encodeURIComponent(c.linked_person_slug)}`}
+                          onClick={(e) => e.stopPropagation()}
+                          title={`Apri dossier di ${c.linked_person_slug}`}
+                          className="shrink-0 inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-accent2/15 text-accent2 border border-accent2/40 font-semibold hover:bg-accent2/25 transition"
+                        >
+                          <Brain size={10} /> brain
+                        </Link>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -711,7 +735,15 @@ export default function WhatsApp() {
         >
           {!selected ? (
             <div className="flex-1 flex items-center justify-center text-muted text-sm">
-              Seleziona una chat per visualizzare i messaggi.
+              {chatsLoaded
+                ? (chats.length === 0
+                    ? 'Nessuna chat ancora. Configura WhatsApp in Connettori.'
+                    : 'Seleziona una chat per visualizzare i messaggi.')
+                : (
+                  <span className="inline-flex items-center gap-2">
+                    <RefreshCw size={14} className="animate-spin" /> caricamento chat…
+                  </span>
+                )}
             </div>
           ) : (
             <>
@@ -1056,17 +1088,29 @@ export default function WhatsApp() {
         async function loadPeople(q: string) {
           try {
             const r: any = await api.people({ q, limit: 30 });
-            setLinkPeople((r?.rows ?? []).map((p: any) => ({ slug: p.slug, name: p.name, avatar_url: p.avatar_url ?? null })));
+            const rows = (r?.rows ?? []).map((p: any) => ({
+              slug: p.slug, name: p.name, avatar_url: p.avatar_url ?? null,
+              emails: p.emails ?? [], phones: p.phones ?? [], aliases: p.aliases ?? [],
+            }));
+            // Sort: richer record first (emails+phones+aliases count). Avoids
+            // picking the wrong "Mattia Calastri" when 2 rows share name.
+            rows.sort((a: any, b: any) =>
+              (b.emails.length + b.phones.length + b.aliases.length) -
+              (a.emails.length + a.phones.length + a.aliases.length),
+            );
+            setLinkPeople(rows);
           } catch {}
         }
         async function doLink(slug: string | null) {
           setLinking(true);
+          console.log('[wa:link] sending slug=', slug, 'to chat=', linkFor);
           try {
             await api.waLinkChat(linkFor!, slug);
             toast.push(slug ? `Chat cablata a ${slug}` : 'Cablaggio rimosso', 'on');
             setLinkFor(null);
-            // optimistic update local chats
-            setChats((prev) => prev.map((x) => x.chat_jid === linkFor ? { ...x, linked_person_slug: slug } : x));
+            // Re-fetch chats so the resolved name (JOIN people via linked_person_slug)
+            // refreshes. Optimistic-only update kept the stale sender_name on screen.
+            await loadChats();
           } catch (e: any) { toast.push(e?.message ?? 'Errore', 'err'); }
           finally { setLinking(false); }
         }
@@ -1091,22 +1135,34 @@ export default function WhatsApp() {
                 />
                 <div className="max-h-72 overflow-y-auto space-y-1">
                   {linkPeople.length === 0 && <div className="text-xs text-muted py-2">Nessun risultato. Digita per cercare.</div>}
-                  {linkPeople.map((p) => (
-                    <button
-                      key={p.slug}
-                      onClick={() => doLink(p.slug)}
-                      disabled={linking}
-                      className="w-full text-left px-2 py-1.5 rounded hover:bg-surface flex items-center gap-2 disabled:opacity-50"
-                    >
-                      {p.avatar_url
-                        ? <img src={p.avatar_url} className="w-6 h-6 rounded-full object-cover" />
-                        : <div className="w-6 h-6 rounded-full bg-surface border border-border" />}
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm truncate">{p.name}</div>
-                        <div className="text-[10px] text-muted truncate">{p.slug}</div>
-                      </div>
-                    </button>
-                  ))}
+                  {linkPeople.map((p) => {
+                    const rich = (p.emails?.length ?? 0) + (p.phones?.length ?? 0);
+                    return (
+                      <button
+                        key={p.slug}
+                        onClick={() => doLink(p.slug)}
+                        disabled={linking}
+                        className={`w-full text-left px-2 py-1.5 rounded hover:bg-surface flex items-center gap-2 disabled:opacity-50 border ${rich > 0 ? 'border-accent2/30' : 'border-transparent'}`}
+                      >
+                        {p.avatar_url
+                          ? <img src={p.avatar_url} className="w-6 h-6 rounded-full object-cover" />
+                          : <div className="w-6 h-6 rounded-full bg-surface border border-border" />}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm truncate flex items-center gap-1.5">
+                            <span className="truncate">{p.name}</span>
+                            {rich > 0 && <span className="shrink-0 text-[8px] uppercase tracking-wider text-accent2 border border-accent2/40 rounded-full px-1 py-px">contatti</span>}
+                          </div>
+                          <div className="text-[10px] text-muted truncate font-mono">{p.slug}</div>
+                          {(p.emails?.length || p.phones?.length) ? (
+                            <div className="text-[10px] text-muted truncate flex gap-2">
+                              {p.emails?.length ? <span>✉ {p.emails[0]}{p.emails.length > 1 ? ` +${p.emails.length - 1}` : ''}</span> : null}
+                              {p.phones?.length ? <span>📞 {p.phones[0]}{p.phones.length > 1 ? ` +${p.phones.length - 1}` : ''}</span> : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   {target?.linked_person_slug

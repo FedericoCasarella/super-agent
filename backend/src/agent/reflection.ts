@@ -4,11 +4,41 @@ import { buildSystemContext } from '../claude/prompts.js';
 import { sendTelegram } from '../telegram/bot.js';
 import { getVaultRoot } from '../brain/vault.js';
 
+// In-process mutex: stops concurrent reflections in same Node instance.
+// Combined with the persisted `last_reflection_at` check below, two parallel
+// triggers (catchUp + cron, or N respawned children racing) can't both PING.
+const inFlight = new Set<number>();
+// Hard floor between reflection PINGs to the same user. Even if scheduler
+// misfires N times during a respawn loop, only one Telegram message goes out
+// per window.
+const MIN_GAP_MS = 5 * 60_000;
+
 export async function runReflectionForUser(userId: number) {
+  if (inFlight.has(userId)) {
+    console.log(`[reflection:u${userId}] skip: already running in this process`);
+    return;
+  }
   const quiet = await getSetting<any>(userId, 'agent_quiet_until');
   if (quiet?.until && new Date(quiet.until) > new Date()) return;
   const sleep = await getSetting<any>(userId, 'agent_next_reflection_at');
   if (sleep?.until && new Date(sleep.until) > new Date()) return;
+  // Persistent floor: survives across restarts. catchUpOnBoot used to fire on
+  // any elapsed >= 2min — combined with respawn loops that meant 5 morning
+  // messages stacked.
+  const last = await getSetting<string>(userId, 'last_reflection_at');
+  if (last) {
+    const ageMs = Date.now() - new Date(last).getTime();
+    if (ageMs < MIN_GAP_MS) {
+      console.log(`[reflection:u${userId}] skip: last reflection ${Math.round(ageMs/1000)}s ago (<${MIN_GAP_MS/1000}s floor)`);
+      return;
+    }
+  }
+  inFlight.add(userId);
+  try { await runReflectionForUserInner(userId); }
+  finally { inFlight.delete(userId); }
+}
+
+async function runReflectionForUserInner(userId: number) {
 
   const history = await query<{ direction: string; content: string; ts: string }>(
     `SELECT direction, content, ts FROM messages WHERE user_id=$1 AND channel='telegram' ORDER BY id DESC LIMIT 30`, [userId]

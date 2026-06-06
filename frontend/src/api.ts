@@ -59,6 +59,19 @@ export const api = {
     return req<{ rows: any[]; total: number; limit: number; offset: number }>(`/people?${p}`);
   },
   peopleDedupeAgent: () => req<{ ok: boolean; subAgentId: number }>('/people/dedupe-agent', { method: 'POST' }),
+  peopleDelete: (slug: string, opts: { keep_note?: boolean; keep_refs?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.keep_note) q.set('keep_note', '1');
+    if (opts.keep_refs) q.set('keep_refs', '1');
+    return req<{ ok: boolean; slug: string; note_removed: boolean; refs_touched: number }>(
+      `/people/${encodeURIComponent(slug)}${q.toString() ? '?' + q : ''}`,
+      { method: 'DELETE' },
+    );
+  },
+  peopleMerge: (canonical_slug: string, dup_slugs: string[]) =>
+    req<any>('/people/merge', { method: 'POST', body: JSON.stringify({ canonical_slug, dup_slugs }) }),
+  peopleResync: (prune = false) =>
+    req<{ ok: boolean; scanned: number; upserted: number; pruned: number }>('/people/resync', { method: 'POST', body: JSON.stringify({ prune }) }),
   personGraph: (slug: string, hops = 2) => req<{ nodes: any[]; links: any[]; center: string | null }>(`/people/${encodeURIComponent(slug)}/graph?hops=${hops}`),
   personPsyProfile: (slug: string) => req<any>(`/people/${encodeURIComponent(slug)}/psy-profile`),
   brainColors: () => req<any>('/brain/colors'),

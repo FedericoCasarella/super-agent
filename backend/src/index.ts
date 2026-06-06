@@ -74,9 +74,28 @@ async function main() {
     console.warn('⚠️  [auth] DEV_AUTOLOGIN attivo — login BYPASSATO, auto-auth come utente locale. NON usare in produzione/distribuzione.');
   }
 
-  server.listen(config.port, config.host, () => {
-    console.log(`[backend] http://${config.host}:${config.port}`);
-  });
+  // Listen with retry on EADDRINUSE — common during hot-reload bursts when the
+  // previous child's TIME_WAIT socket hasn't released the port yet. Without
+  // this, EADDRINUSE hits uncaughtException → exit(1) → respawn → same error
+  // → respawn loop (the "dead loop" symptom).
+  function listenWithRetry(attempt = 0): void {
+    const onErr = (err: any) => {
+      if (err?.code === 'EADDRINUSE' && attempt < 12) {
+        const delay = Math.min(3000, 250 * 2 ** attempt);
+        console.warn(`[backend] port ${config.port} busy — retry in ${delay}ms (attempt ${attempt + 1})`);
+        setTimeout(() => listenWithRetry(attempt + 1), delay);
+      } else {
+        console.error('[backend] listen failed', err);
+        process.exit(1);
+      }
+    };
+    server.once('error', onErr);
+    server.listen(config.port, config.host, () => {
+      server.off('error', onErr);
+      console.log(`[backend] http://${config.host}:${config.port}`);
+    });
+  }
+  listenWithRetry();
 
   // Graceful shutdown — tsx watch sends SIGINT/SIGTERM on reload + concurrently
   // does the same when the user hits ^C. Without explicit teardown of HTTP
@@ -87,12 +106,16 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[shutdown] ${signal} received — closing connections…`);
-    // Hard deadline: if anything hangs, exit anyway after 4s so tsx doesn't have to kill us.
+    // Hard deadline: if anything hangs, exit anyway after 2.5s. tsx watch and
+    // scripts/dev-loop.mjs only wait ~5s before SIGKILL — we MUST exit first
+    // so the parent can respawn cleanly and not leave port 8787 detached.
     const hardKill = setTimeout(() => {
-      console.warn('[shutdown] hard exit after 4s timeout');
+      console.warn('[shutdown] hard exit after 2.5s timeout');
       process.exit(0);
-    }, 4000);
-    hardKill.unref();
+    }, 2500);
+    // Don't unref — we WANT this timer to keep the event loop alive long
+    // enough to actually fire even if everything else hangs.
+    try { server.closeAllConnections?.(); } catch {} // force-drop keep-alive sockets
     try { await new Promise<void>((res) => server.close(() => res())); } catch {}
     // Stop Instagram Playwright contexts
     try {
@@ -112,8 +135,31 @@ async function main() {
     console.log('[shutdown] done');
     process.exit(0);
   }
+  // Dev mode: SIGTERM = restart from dev-loop. Skip slow graceful cleanup
+  // (server.close waiting for telegram polling, baileys sockets, playwright
+  // contexts, pg pool drain — each can hang 5+s). Just drop the listener and
+  // exit. Prod still does the graceful path.
+  const isDev = process.env.NODE_ENV !== 'production';
   process.on('SIGINT', () => void shutdown('SIGINT'));
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGTERM', () => {
+    if (isDev) {
+      console.log('[shutdown] SIGTERM (dev) — fast exit');
+      try { server.closeAllConnections?.(); } catch {}
+      try { server.close(); } catch {}
+      process.exit(0);
+    }
+    void shutdown('SIGTERM');
+  });
+
+  // Log only — do NOT exit. Baileys, IG playwright, IMAP all throw transient
+  // unhandledRejections (timeouts, socket drops) we want to absorb silently.
+  // Exiting here caused a respawn loop on every WhatsApp image / reconnect.
+  process.on('unhandledRejection', (reason: any) => {
+    console.warn('[warn] unhandledRejection', reason?.message ?? reason);
+  });
+  process.on('uncaughtException', (err: any) => {
+    console.warn('[warn] uncaughtException', err?.message ?? err);
+  });
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

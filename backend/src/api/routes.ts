@@ -637,6 +637,32 @@ router.get('/people/:slug/graph', async (req, res) => {
   res.json({ nodes, links, center: center.id });
 });
 
+router.delete('/people/:slug', async (req, res) => {
+  try {
+    const m = await import('../connectors/builtin/people/index.js');
+    const keepNote = req.query.keep_note === '1' || req.query.keep_note === 'true';
+    const keepRefs = req.query.keep_refs === '1' || req.query.keep_refs === 'true';
+    res.json(await m.deletePerson(req.user!.id, req.params.slug, { keep_note: keepNote, keep_refs: keepRefs }));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+router.post('/people/merge', async (req, res) => {
+  try {
+    const m = await import('../connectors/builtin/people/index.js');
+    const canonical_slug = String(req.body?.canonical_slug ?? '');
+    const dup_slugs = Array.isArray(req.body?.dup_slugs) ? req.body.dup_slugs.map(String) : [];
+    res.json(await m.mergePeople(req.user!.id, canonical_slug, dup_slugs));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+router.post('/people/resync', async (req, res) => {
+  try {
+    const m = await import('../connectors/builtin/people/index.js');
+    const prune = req.body?.prune === true || req.query.prune === '1';
+    res.json(await m.resyncPeopleFromVault(req.user!.id, { prune }));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
 router.post('/people/dedupe-agent', async (req, res) => {
   const { spawnSubAgent } = await import('../sub_agents/index.js');
   const userId = req.user!.id;
@@ -644,30 +670,33 @@ router.post('/people/dedupe-agent', async (req, res) => {
 
 Compito: trova e unifica i duplicati nella tabella People del DB e nelle note del second brain.
 
+TOOL ATOMICI (USA QUESTI, non re-implementare a mano):
+- \`mcp__super_agent__people_list\` — paginato, restituisce name/slug/aliases/emails/phones/note_path.
+- \`mcp__super_agent__people_merge\` — input: \`{canonical_slug, dup_slugs: [...]}\`. UNICA call necessaria per fondere un gruppo. Esegue TUTTO: union arrays, append note bodies sotto "## merged from <slug>", repoint wa_contacts.linked_person_slug, DELETE righe DB dup, DELETE file .md dup, riscrive [[dup-slug]] refs nel vault → [[people/canonical|name]].
+- \`mcp__super_agent__people_delete\` — input: \`{slug}\`. Per record spuri da rimuovere senza merge.
+
 PROCEDURA:
-1. Leggi tutti i record People via tool \`mcp__super_agent__people_search\` (o query equivalente). Ottieni name, slug, aliases, emails, phones, note_path.
-2. Identifica gruppi di duplicati usando:
+1. Chiama \`people_list({limit: 200})\` (e pagina se total > 200).
+2. Identifica gruppi di duplicati (per ogni gruppo, ≥ 2 record):
    - Stesso normalized name (lowercase, trim, no accenti)
    - Email in comune (case-insensitive)
    - Telefono in comune (solo digits)
-   - Slug simili (Levenshtein ≤ 2)
-3. Per ogni gruppo di duplicati:
-   a. Scegli canonical = record con più dati popolati (più aliases/emails/phones/note size).
-   b. Merge: unisci aliases/emails/phones distinct nel canonical via \`mcp__super_agent__people_upsert\`.
-   c. Per le note brain dei NON-canonical (\`people/<slug>.md\`):
-      - Leggi contenuto via Read tool
-      - Append nel canonical (\`people/<canonical_slug>.md\`) sotto sezione "## Merged from <old_slug>" + data
-      - Elimina file vecchio
-   d. Update riferimenti in altre note del brain (Grep su [[old_slug]] o "people/old_slug.md" → sostituire con canonical).
-4. Aggiorna brain_index per riallineare i path (se necessario via tool dedicato).
-5. Log finale: quanti gruppi trovati, quanti merge fatti, file rimossi.
+   - Slug simili (Levenshtein ≤ 3)
+3. Per ogni gruppo: scegli canonical con questa PRIORITÀ STRICT (in ordine, prima che vince):
+   a. Record con ≥1 email O ≥1 phone → vince sempre su record senza contatti.
+   b. Se pari su (a): record con più aliases.
+   c. Se pari su (a)+(b): record con slug più corto / più "pulito" (es. \`mattia-calastri\` > \`mattia-calastri-autonomous-ai-business-governance\`).
+   d. Se ancora pari: il primo per updated_at DESC.
+   ESEMPIO: tra \`mattia-calastri\` (emails+phones) e \`mattia-calastri-autonomous-ai-business-governance\` (vuoto), canonical = \`mattia-calastri\`. SEMPRE.
+   Chiama UNA volta \`people_merge({canonical_slug, dup_slugs})\` con tutti i dup. NON usare upsert.
+4. Se sicuro che un record è 100% spurio (no merge utile, dati orfani), chiama \`people_delete({slug})\`.
 
 REGOLE:
 - NESSUNA conferma utente: agire deterministico.
-- Se gruppo ambiguo (es. 2 omonimi senza email/phone overlap) → NON unire, log come "ambiguous, skipped".
+- Se gruppo ambiguo (omonimi senza email/phone overlap) → skip, log "ambiguous".
 - Mai inviare msg Telegram.
-- VIETATO chiamare \`mcp__super_agent__people_dedupe_run\`: TU SEI già il dedupe runner. Chiamarlo = ricorsione infinita.
-- Output finale: 1 paragrafo riepilogo (gruppi, merge, skip, errori).`;
+- VIETATO chiamare \`people_dedupe_run\`: TU SEI già il dedupe runner.
+- Output finale: 1 paragrafo riepilogo (gruppi, merged, deleted, skipped).`;
 
   const sa = await spawnSubAgent(userId, {
     title: 'Bonifica duplicati People',
@@ -1107,7 +1136,18 @@ router.post('/whatsapp/bonify', quotaGuard, async (req, res) => {
 });
 router.get('/whatsapp/chats', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
-  res.json(await m.listChats(req.user!.id));
+  const r = await m.listChats(req.user!.id);
+  // DEBUG: when ?debug_jid=X is passed, dump exactly what listChats resolved
+  // for that chat — name + linked_slug + display_name override.
+  const dbg = String(req.query.debug_jid ?? '');
+  if (dbg) {
+    const row = (r as any[]).find((x) => x.chat_jid === dbg);
+    console.log(`[wa:listChats] DEBUG jid=${dbg}`, row ? {
+      sender_name: row.sender_name, linked_person_slug: row.linked_person_slug,
+      display_name_override: row.display_name_override,
+    } : 'NOT FOUND');
+  }
+  res.json(r);
 });
 router.get('/whatsapp/chats/:jid/messages', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');

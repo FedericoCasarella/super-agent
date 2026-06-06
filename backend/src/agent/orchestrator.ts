@@ -25,6 +25,11 @@ async function handleIncoming({ userId, text }: { userId: number; chatId: number
       return;
     }
   } catch (e) { console.error('[orchestrator] hasFlowForTrigger check failed', e); }
+  // /stop puts the agent in pause — incoming msgs are logged but no auto reply.
+  try {
+    const paused = (await (await import('../db/index.js')).getSetting<any>(userId, 'agent_paused'))?.value === true;
+    if (paused) { console.log(`[orchestrator:u${userId}] agent paused — skipping reply`); return; }
+  } catch {}
   // Quota lock: if Claude session usage is >= 95%, refuse to call the API
   // (which would burn the last few % on a partial reply) and surface the
   // freeze message to the user instead.
