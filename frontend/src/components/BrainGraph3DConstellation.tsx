@@ -968,7 +968,10 @@ export default function BrainGraph3DConstellation({
   }
 
   return (
-    <div ref={wrapRef} className="w-full h-full relative" style={{ background: '#02030a' }}>
+    <div ref={wrapRef} className="brain-graph-wrap absolute inset-0 overflow-hidden" style={{ background: '#02030a', borderRadius: 'inherit' }}>
+      <style>{`
+        .scene-container { overflow: hidden !important; border-radius: inherit !important; }
+      `}</style>
       {!loaded && (
         <div className="absolute inset-0 flex items-center justify-center z-10"><BrainLoading size={140} label="Caricamento cervello…" /></div>
       )}

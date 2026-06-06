@@ -113,11 +113,14 @@ export default function Brain() {
   return (
     <div className="space-y-5 h-full flex flex-col">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold text-gradient">{t('brain.title2')}</h1>
-          <Button size="sm" variant="ghost" onClick={() => setCreateOpen(true)}>+ Cervello</Button>
-        </div>
+        <h1 className="text-2xl font-semibold text-gradient">{t('brain.title2')}</h1>
+        <Button size="sm" variant="ghost" onClick={() => setCreateOpen(true)}>+ Cervello</Button>
+      </div>
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2 flex-wrap">
+          {VaultBar}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap ml-auto">
           {FilterBar}
           <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
             <Button variant={tab === 'graph' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('graph')}>{t('brain.viewGraph')}</Button>
@@ -131,11 +134,6 @@ export default function Brain() {
           )}
         </div>
       </div>
-      {tab === 'graph' && (
-        <div className="flex gap-2 flex-wrap">
-          {VaultBar}
-        </div>
-      )}
 
       {tab === 'graph' ? (
         <div className="flex gap-0 flex-1 min-h-0">
@@ -149,7 +147,7 @@ export default function Brain() {
             </Card>
           )}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-w-0">
-          <Card className={`lg:col-span-2 !p-0 overflow-hidden h-[78vh] relative ${explorerOpen ? 'rounded-l-none' : ''}`}>
+          <Card className={`lg:col-span-2 !p-0 !overflow-hidden h-[78vh] relative isolate min-w-0 ${explorerOpen ? 'rounded-l-none' : ''}`}>
             {view === '3d' ? (
               <BrainGraph3DConstellation
                 key={`3d-${graphKey}`}

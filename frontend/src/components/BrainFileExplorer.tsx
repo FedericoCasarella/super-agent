@@ -173,7 +173,20 @@ export default function BrainFileExplorer({
         </button>
       </div>
       <div className="flex-1 overflow-y-auto py-1">
-        {loading && <div className="px-3 py-2 text-xs text-muted">Caricamento…</div>}
+        {loading && (
+          <div className="animate-pulse space-y-1 px-2 py-1">
+            {Array.from({ length: 14 }).map((_, i) => {
+              const depth = i % 4;
+              const w = 30 + ((i * 13) % 50);
+              return (
+                <div key={i} className="flex items-center gap-1.5 py-1" style={{ paddingLeft: `${depth * 12 + 6}px` }}>
+                  <div className="w-2.5 h-2.5 rounded bg-surface2 shrink-0" />
+                  <div className="h-2.5 rounded bg-surface2" style={{ width: `${w}%` }} />
+                </div>
+              );
+            })}
+          </div>
+        )}
         {!loading && tree.length === 0 && <div className="px-3 py-2 text-xs text-muted">Nessun file.</div>}
         {!loading && tree.map((n) => renderNode(n, 0))}
       </div>
