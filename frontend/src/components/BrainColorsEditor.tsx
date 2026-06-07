@@ -12,31 +12,31 @@ const VIS_LABELS: Record<string, string> = { protected: 'Protetto', public: 'Pub
 function ColorRow({ label, hint, value, onChange }: { label: string; hint?: string; value: string; onChange: (v: string) => void }) {
   return (
     <label
-      className="flex items-center gap-3 p-2.5 rounded-xl border border-border/60 bg-surface2/30 hover:border-accent/40 hover:bg-surface2/60 transition cursor-pointer"
+      className="flex flex-col gap-1.5 p-2.5 rounded-xl border border-border/60 bg-surface2/30 hover:border-accent/40 hover:bg-surface2/60 transition cursor-pointer"
       title="Clicca per cambiare colore"
     >
-      {/* Visible swatch — wraps the native color picker so the whole circle
-          opens it. Native input itself hidden via opacity:0. */}
-      <span className="relative shrink-0 inline-block w-8 h-8 rounded-lg ring-1 ring-white/10" style={{ background: value }}>
-        <input
-          type="color"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          aria-label={label}
-        />
-      </span>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">{label}</div>
-        {hint && <div className="text-[10px] text-muted truncate">{hint}</div>}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium truncate">{label}</span>
+        {hint && <span className="text-[10px] text-muted truncate">{hint}</span>}
       </div>
-      <Input
-        className="w-24 font-mono text-xs text-center shrink-0"
-        value={value}
-        onChange={(e) => { const v = e.target.value; if (/^#[0-9a-f]{0,6}$/i.test(v)) onChange(v); }}
-        onClick={(e) => e.preventDefault()}
-        placeholder="#c084fc"
-      />
+      <div className="flex items-center gap-2">
+        <span className="relative shrink-0 inline-block w-7 h-7 rounded-md ring-1 ring-white/10" style={{ background: value }}>
+          <input
+            type="color"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            aria-label={label}
+          />
+        </span>
+        <Input
+          className="flex-1 font-mono text-xs"
+          value={value}
+          onChange={(e) => { const v = e.target.value; if (/^#[0-9a-f]{0,6}$/i.test(v)) onChange(v); }}
+          onClick={(e) => e.preventDefault()}
+          placeholder="#c084fc"
+        />
+      </div>
     </label>
   );
 }

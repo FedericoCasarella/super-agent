@@ -298,6 +298,7 @@ export default function WhatsApp() {
   // First-load flag for the chat list — distinguishes "still loading" from
   // "loaded but truly empty" so we don't flash "0 chat" on initial mount.
   const [chatsLoaded, setChatsLoaded] = useState(false);
+  const [selectedChats, setSelectedChats] = useState<Set<string>>(new Set());
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const chatMenuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -361,11 +362,33 @@ export default function WhatsApp() {
     if (!selected || !composeText.trim()) return;
     setSending(true);
     const source: 'user' | 'ai' = composeFromAi ? 'ai' : 'user';
+    const text = composeText.trim();
+    const optimisticId = `optim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Optimistic append: msg shows instantly on the right side, replaced by
+    // the WS echo (matched by chat_jid + text + from_me). Without this the UI
+    // froze for ~1-2s per send while Baileys ACK'd, and rapid sends stacked
+    // in the wrong order.
+    const optim: Msg = {
+      id: optimisticId as any, msg_id: optimisticId, chat_jid: selected,
+      sender_jid: '', sender_phone: null, sender_name: 'TU', person_slug: null,
+      is_group: false, group_jid: null, from_me: true, text,
+      ts: new Date().toISOString(), source,
+    };
+    setMessages((prev) => [...prev, optim]);
+    setComposeText(''); setComposeFromAi(false);
     try {
-      const r = await api.waSendMessage(selected, composeText.trim(), source);
-      if (r.ok) { setComposeText(''); setComposeFromAi(false); }
-      else toast.push(`Errore: ${String(r.error ?? '').slice(0, 200)}`, 'err');
-    } catch (e: any) { toast.push(e.message, 'err'); }
+      const r = await api.waSendMessage(selected, text, source);
+      if (!r.ok) {
+        // Roll back optimistic + restore text so user can retry.
+        setMessages((prev) => prev.filter((m) => m.msg_id !== optimisticId));
+        setComposeText(text);
+        toast.push(`Errore: ${String(r.error ?? '').slice(0, 200)}`, 'err');
+      }
+    } catch (e: any) {
+      setMessages((prev) => prev.filter((m) => m.msg_id !== optimisticId));
+      setComposeText(text);
+      toast.push(e.message, 'err');
+    }
     finally { setSending(false); }
   }
   function acceptSuggestion() {
@@ -545,6 +568,16 @@ export default function WhatsApp() {
     if (selectedRef.current === m.chat_jid) {
       setMessages((prev) => {
         if (prev.some((x) => x.msg_id === m.msg_id)) return prev;
+        // Replace optimistic clone if present (match text + from_me + recent ts).
+        const idx = prev.findIndex((x) =>
+          x.msg_id?.startsWith('optim-') && x.from_me === m.from_me &&
+          x.text === m.text && Math.abs(new Date(x.ts).getTime() - new Date(m.ts).getTime()) < 60_000,
+        );
+        if (idx >= 0) {
+          const next = prev.slice();
+          next[idx] = m;
+          return next;
+        }
         return [...prev, m];
       });
     }
@@ -641,7 +674,29 @@ export default function WhatsApp() {
         <Card className="col-span-12 md:col-span-4 lg:col-span-3 p-0 overflow-hidden flex flex-col h-full max-h-[78vh]">
           <div className="p-3 border-b border-border text-xs uppercase tracking-wider text-muted font-semibold flex items-center gap-2">
             <MessageCircle size={14} />
-            {chatsLoaded ? `${chats.length} chat` : (
+            {chatsLoaded ? (
+              selectedChats.size > 0 ? (
+                <span className="flex items-center gap-2 flex-1">
+                  <span className="text-accent">{selectedChats.size} selezionate</span>
+                  <Button
+                    size="sm" variant="ghost"
+                    onClick={async () => {
+                      const ok = await dlg.confirm(`Elimina ${selectedChats.size} chat dal DB locale?\n\nVerranno rimossi messaggi + contatti. La sessione WA resta attiva, prossima Sync re-importa.`, { tone: 'danger', confirmLabel: 'Elimina' });
+                      if (!ok) return;
+                      try {
+                        const r = await api.waDeleteChats(Array.from(selectedChats));
+                        toast.push(`Eliminate ${selectedChats.size} chat (${r.deleted_messages} msg)`, 'on');
+                        setSelectedChats(new Set());
+                        if (selected && selectedChats.has(selected)) setSelected(null);
+                        loadChats();
+                      } catch (e: any) { toast.push(e.message, 'err'); }
+                    }}
+                    className="text-red-400 hover:text-red-300"
+                  ><Trash2 size={12} className="inline mr-1 -mt-0.5" />Elimina</Button>
+                  <button onClick={() => setSelectedChats(new Set())} className="ml-auto text-muted hover:text-text"><X size={12} /></button>
+                </span>
+              ) : `${chats.length} chat`
+            ) : (
               <span className="inline-flex items-center gap-1.5"><RefreshCw size={11} className="animate-spin" /> caricamento…</span>
             )}
           </div>
@@ -660,19 +715,70 @@ export default function WhatsApp() {
               </div>
             )}
             {chatsLoaded && chats.length === 0 && <div className="p-4 text-muted text-sm">Nessun messaggio ancora. Configura WhatsApp in Connettori.</div>}
-            {chats.map((c) => {
+            {(() => {
+              // Visual dedupe: if multiple rows share the SAME displayed
+              // identity (phone OR resolved name OR linked person), collapse
+              // them into one row and merge selection. Click selects all.
+              const groups = new Map<string, Chat[]>();
+              for (const c of chats) {
+                const key = c.linked_person_slug
+                  ? `link:${c.linked_person_slug}`
+                  : (c.sender_phone ? `ph:${c.sender_phone.replace(/\D/g, '')}`
+                    : (c.sender_name ? `nm:${c.sender_name.toLowerCase().trim()}` : `jid:${c.chat_jid}`));
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key)!.push(c);
+              }
+              return Array.from(groups.values())
+                .map((group) => group.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()))
+                .sort((a, b) => new Date(b[0].ts).getTime() - new Date(a[0].ts).getTime())
+                .map((group) => ({ rep: group[0], group }));
+            })().map(({ rep: c, group }) => {
               const name = c.sender_name || c.sender_phone || c.chat_jid;
-              const active = selected === c.chat_jid;
+              const groupJids = group.map((g) => g.chat_jid);
+              const active = groupJids.includes(selected ?? '');
+              const isChecked = groupJids.some((j) => selectedChats.has(j));
+              const multiMode = selectedChats.size > 0;
+              const toggleGroupSelection = () => {
+                setSelectedChats((prev) => {
+                  const next = new Set(prev);
+                  if (isChecked) groupJids.forEach((j) => next.delete(j));
+                  else groupJids.forEach((j) => next.add(j));
+                  return next;
+                });
+              };
               return (
                 <button
                   key={c.chat_jid}
-                  onClick={() => setSelected(c.chat_jid)}
-                  className={`group w-full text-left px-3 py-2.5 flex items-center gap-3 border-b border-border/60 transition ${active ? 'bg-accent/10' : 'hover:bg-surface2/40'}`}
+                  onClick={(e) => {
+                    if (multiMode || e.shiftKey || (e as any).metaKey || (e as any).ctrlKey) {
+                      toggleGroupSelection();
+                    } else {
+                      setSelected(c.chat_jid);
+                    }
+                  }}
+                  className={`group w-full text-left px-3 py-2.5 flex items-center gap-3 border-b border-border/60 transition ${isChecked ? 'bg-accent/15 border-accent/30' : active ? 'bg-accent/10' : 'hover:bg-surface2/40'}`}
                 >
+                  <div
+                    onClick={(e) => { e.stopPropagation(); toggleGroupSelection(); }}
+                    className={`shrink-0 w-4 h-4 rounded border transition flex items-center justify-center cursor-pointer ${isChecked ? 'bg-accent border-accent' : 'border-border opacity-0 group-hover:opacity-100'}`}
+                    title="Seleziona"
+                  >
+                    {isChecked && <span className="text-white text-[10px] leading-none">✓</span>}
+                  </div>
                   <Avatar name={name} url={c.profile_pic_url} size={40} isGroup={c.is_group} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium truncate text-sm">{name}</span>
+                      <span className="font-medium truncate text-sm flex items-center gap-1.5">
+                        {name}
+                        {group.length > 1 && (
+                          <span
+                            className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent2/15 text-accent2 border border-accent2/40 uppercase tracking-wider font-semibold"
+                            title={`${group.length} chat unite visivamente:\n${group.map((g) => g.chat_jid).join('\n')}`}
+                          >
+                            ×{group.length}
+                          </span>
+                        )}
+                      </span>
                       <span className="text-[10px] text-muted shrink-0 flex items-center gap-1">
                         {fmtTime(c.ts)}
                       </span>
@@ -857,6 +963,29 @@ export default function WhatsApp() {
                           >
                             <GitMerge size={13} className="text-muted" />
                             <div className="flex-1">Unisci con altra chat</div>
+                          </button>
+                          <div className="border-t border-border" />
+                          <button
+                            onClick={async () => {
+                              setChatMenuOpen(false);
+                              const target = chats.find((x) => x.chat_jid === selected);
+                              const name = target?.sender_name || target?.sender_phone || selected;
+                              const ok = await dlg.confirm(
+                                `Eliminare la chat "${name}" dal DB locale?\n\nVerranno rimossi tutti i messaggi e il contatto. La sessione WA resta attiva, prossima Sync re-importa eventuali nuovi messaggi.`,
+                                { tone: 'danger', confirmLabel: 'Elimina' },
+                              );
+                              if (!ok) return;
+                              try {
+                                const r = await api.waDeleteChats([selected!]);
+                                toast.push(`Eliminata chat (${r.deleted_messages} msg)`, 'on');
+                                setSelected(null);
+                                loadChats();
+                              } catch (e: any) { toast.push(e?.message ?? 'Errore', 'err'); }
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-red-500/10 text-red-400 flex items-center gap-2"
+                          >
+                            <Trash2 size={13} />
+                            <div className="flex-1">Elimina questa chat</div>
                           </button>
                         </div>
                       )}

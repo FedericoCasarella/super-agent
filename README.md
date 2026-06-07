@@ -1,6 +1,16 @@
-# super-agent
+<p align="center">
+  <img src="frontend/public/rounded-image.png" alt="super-agent logo" width="140" />
+</p>
 
-> A personal AI agent that lives in your Telegram, thinks with Claude Code, and grows a second brain that maintains itself.
+<h1 align="center">super-agent</h1>
+
+<p align="center">
+  <em>A personal AI agent that lives in your Telegram, thinks with Claude Code, and grows a second brain that maintains itself.</em>
+</p>
+
+<p align="center">
+  <img src="frontend/public/super-agent.png" alt="super-agent demo" width="100%" />
+</p>
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)

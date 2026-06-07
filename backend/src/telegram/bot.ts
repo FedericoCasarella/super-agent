@@ -17,24 +17,30 @@ function toTelegramHtml(raw: string): string {
     blocks.push(html);
     return `${SENTINEL}${blocks.length - 1}${SENTINEL}`;
   };
-  // Pre-pass: merge "filename + URL on next line" into a single Markdown link
-  // so Telegram renders one clickable item. Catches Claude's verbose pattern
-  //   - 2026-06-01.md
-  //     http://localhost:5173/brain?note=dreams/2026-06-01.md
-  // Result: "- [2026-06-01.md](http://localhost:5173/brain?note=...)"
-  let pre = raw.replace(
+  // Pre-pass: mask existing markdown links FIRST so the bare-URL autolinker
+  // doesn't double-wrap them. Without this, `[name](http://x)` becomes
+  // `[name]([http://x](http://x))` → garbage href + trailing `)` leaks.
+  let pre = raw.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url) => wrap(`<a href="${url}">${escapeHtml(label)}</a>`));
+  // Merge "filename + URL on next line" into a single markdown link.
+  pre = pre.replace(
     /(^|\n)([ \t]*[-*•]?[ \t]*)([^\s\n][^\n]*?)\n[ \t]+(https?:\/\/\S+)/g,
-    (_m, lead, bullet, label, url) => `${lead}${bullet}[${label.trim()}](${url})`,
+    (_m, lead, bullet, label, url) => `${lead}${bullet}` + wrap(`<a href="${url}">${escapeHtml(label.trim())}</a>`),
   );
-  // Auto-link bare URLs that aren't already inside a [..](..) markdown link.
-  pre = pre.replace(/(^|[\s(])(https?:\/\/[^\s<>()]+)/g, (_m, lead, url) => `${lead}[${url}](${url})`);
+  // Auto-link bare URLs (not inside an already-masked link block).
+  pre = pre.replace(/(^|[\s])(https?:\/\/[^\s<>]+)/g, (_m, lead, url) => `${lead}` + wrap(`<a href="${url}">${escapeHtml(url)}</a>`));
+  // Telegram aggressively autodetects bare `.md` strings as `.md` (Moldova
+  // TLD) domains. Wrap any leftover `*.md` filename in <code> so it stays
+  // inert. Skip ones already inside a sentinel block (already linked).
+  pre = pre.replace(/\b([A-Za-z0-9_-][A-Za-z0-9_./-]{2,})\.md\b/g, (m, _name) => {
+    if (m.includes(SENTINEL)) return m;
+    return wrap(`<code>${escapeHtml(m)}</code>`);
+  });
   let s = pre.replace(/```([\s\S]*?)```/g, (_m, code) => wrap(`<pre>${escapeHtml(code)}</pre>`));
   s = s.replace(/`([^`\n]+)`/g, (_m, code) => wrap(`<code>${escapeHtml(code)}</code>`));
   s = escapeHtml(s);
   s = s.replace(/\*\*([^\n*]+)\*\*/g, '<b>$1</b>');
   s = s.replace(/(^|[\s(])\*([^\n*]+)\*/g, '$1<i>$2</i>');
   s = s.replace(/(^|[\s(])_([^\n_]+)_/g, '$1<i>$2</i>');
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
   const re = new RegExp(`${SENTINEL}(\\d+)${SENTINEL}`, 'g');
   s = s.replace(re, (_m, i) => blocks[Number(i)]);
   return s;

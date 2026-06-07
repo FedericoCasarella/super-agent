@@ -376,7 +376,7 @@ async function ingestMessage(userId: number, msg: proto.IWebMessageInfo) {
   bus.emit('wa:message', {
     userId,
     msg: {
-      id, chat_jid: fromJid, sender_jid: senderJid, sender_phone: phone,
+      id, msg_id: id, chat_jid: fromJid, sender_jid: senderJid, sender_phone: phone,
       sender_name: person?.name ?? pushName ?? phone,
       person_slug: person?.slug ?? null,
       is_group: isGroup, group_jid: isGroup ? fromJid : null,
@@ -555,7 +555,7 @@ export async function sendWaMessage(userId: number, chatJid: string, text: strin
     } catch {}
     bus.emit('wa:message', {
       userId,
-      msg: { id, chat_jid: chatJid, sender_jid: s.me?.jid ?? '', sender_phone: null, sender_name: 'TU', person_slug: null, is_group: chatJid.endsWith('@g.us'), group_jid: chatJid.endsWith('@g.us') ? chatJid : null, from_me: true, text, ts: new Date().toISOString(), source },
+      msg: { id, msg_id: id, chat_jid: chatJid, sender_jid: s.me?.jid ?? '', sender_phone: null, sender_name: 'TU', person_slug: null, is_group: chatJid.endsWith('@g.us'), group_jid: chatJid.endsWith('@g.us') ? chatJid : null, from_me: true, text, ts: new Date().toISOString(), source },
     });
     await logOutbound({
       userId, channel: 'whatsapp', status: 'sent',
@@ -814,6 +814,21 @@ export async function linkChatToPerson(userId: number, chatJid: string, slug: st
 // Nuke everything WhatsApp-side for this user. Next sync rebuilds from scratch.
 // Keeps the Baileys session intact (still paired); just resets the local
 // message/contact cache so duplicates and stale identities go away.
+// Delete one or many chats from the local DB. Doesn't touch the WhatsApp
+// session — just clears the UI representation. WA still has the chat upstream.
+export async function deleteChats(userId: number, chatJids: string[]): Promise<{ ok: boolean; deleted_messages: number; deleted_contacts: number }> {
+  if (!chatJids?.length) return { ok: true, deleted_messages: 0, deleted_contacts: 0 };
+  const dm = await query<{ c: number }>(
+    `WITH d AS (DELETE FROM wa_messages WHERE user_id=$1 AND chat_jid = ANY($2::text[]) RETURNING 1) SELECT count(*)::int AS c FROM d`,
+    [userId, chatJids],
+  );
+  const dc = await query<{ c: number }>(
+    `WITH d AS (DELETE FROM wa_contacts WHERE user_id=$1 AND jid = ANY($2::text[]) RETURNING 1) SELECT count(*)::int AS c FROM d`,
+    [userId, chatJids],
+  );
+  return { ok: true, deleted_messages: dm[0]?.c ?? 0, deleted_contacts: dc[0]?.c ?? 0 };
+}
+
 export async function wipeAllChats(userId: number): Promise<{ ok: boolean; deleted_messages: number; deleted_contacts: number; deleted_threads: number }> {
   const m = await query<{ n: number }>(`WITH d AS (DELETE FROM wa_messages WHERE user_id=$1 RETURNING 1) SELECT count(*)::int AS n FROM d`, [userId]);
   const c = await query<{ n: number }>(`WITH d AS (DELETE FROM wa_contacts WHERE user_id=$1 RETURNING 1) SELECT count(*)::int AS n FROM d`, [userId]);

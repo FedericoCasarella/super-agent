@@ -136,6 +136,7 @@ export const api = {
   waDedupe: () => req<any>('/whatsapp/chats/dedupe', { method: 'POST' }),
   waAiDedupe: () => req<any>('/whatsapp/chats/ai-dedupe', { method: 'POST' }),
   waWipe: () => req<any>('/whatsapp/chats/wipe', { method: 'POST' }),
+  waDeleteChats: (chat_jids: string[]) => req<{ ok: boolean; deleted_messages: number; deleted_contacts: number }>('/whatsapp/chats/delete', { method: 'POST', body: JSON.stringify({ chat_jids }) }),
   waLinkChat: (jid: string, slug: string | null) => req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/link`, { method: 'POST', body: JSON.stringify({ slug }) }),
   waSetChatDisplay: (jid: string, payload: { display_name?: string | null; display_phone?: string | null }) =>
     req<any>(`/whatsapp/chats/${encodeURIComponent(jid)}/display`, { method: 'POST', body: JSON.stringify(payload) }),

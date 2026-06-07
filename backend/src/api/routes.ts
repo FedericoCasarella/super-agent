@@ -1182,6 +1182,12 @@ router.post('/whatsapp/chats/wipe', async (req, res) => {
   try { res.json(await m.wipeAllChats(req.user!.id)); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
+router.post('/whatsapp/chats/delete', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const jids = Array.isArray(req.body?.chat_jids) ? req.body.chat_jids.map(String) : [];
+  try { res.json(await m.deleteChats(req.user!.id, jids)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/chats/:jid/display', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   try {
