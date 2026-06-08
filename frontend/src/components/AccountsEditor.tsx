@@ -81,8 +81,8 @@ export default function AccountsEditor({ value, onChange }: Props) {
         <div key={i} className="border border-border rounded-xl bg-surface2/40">
           <div className="flex items-center justify-between px-4 py-3">
             <button className="text-left flex-1" onClick={() => setOpen(open === i ? null : i)}>
-              <div className="font-medium">{a.label || '(no label)'} <span className="text-muted text-xs ml-2">{a.user}</span></div>
-              <div className="text-xs text-muted">{a.host}:{a.port ?? 993} · {a.mailbox || 'INBOX'}</div>
+              <div className="font-medium">{a.label || '(no label)'} <span className="text-muted-foreground text-xs ml-2">{a.user}</span></div>
+              <div className="text-xs text-muted-foreground">{a.host}:{a.port ?? 993} · {a.mailbox || 'INBOX'}</div>
             </button>
             <Button variant="danger" size="sm" onClick={() => remove(i)}>Remove</Button>
           </div>
@@ -105,7 +105,7 @@ export default function AccountsEditor({ value, onChange }: Props) {
                 <input type="checkbox" checked={!!a.smtpSecure} onChange={(e) => update(i, { smtpSecure: e.target.checked })} className="w-4 h-4 rounded border-border bg-surface2 accent-accent" />
               </Field>
               <Field label="From name (opz.)"><Input value={a.smtpFromName ?? ''} onChange={(e) => update(i, { smtpFromName: e.target.value })} placeholder="Federico Casarella" /></Field>
-              <div className="col-span-2 text-[11px] text-muted">SMTP user/pass = IMAP user/pass. Lascia vuoti se uguali.</div>
+              <div className="col-span-2 text-[11px] text-muted-foreground">SMTP user/pass = IMAP user/pass. Lascia vuoti se uguali.</div>
               <Field label="SMTP user (override)"><Input value={a.smtpUser ?? ''} onChange={(e) => update(i, { smtpUser: e.target.value })} placeholder="(usa IMAP user)" /></Field>
               <Field label="SMTP pass (override)"><Input type="password" value={a.smtpPass ?? ''} onChange={(e) => update(i, { smtpPass: e.target.value })} placeholder="(usa IMAP pass)" /></Field>
 

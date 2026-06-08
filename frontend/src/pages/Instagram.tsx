@@ -48,7 +48,7 @@ function MediaPreview({ text, itemType }: { text: string; itemType: string }) {
     return (
       <span className="flex flex-col gap-1">
         <MediaChip icon={ImageIcon} label="Post condiviso" color="#f0abfc" />
-        {cap && <span className="text-xs text-muted italic line-clamp-2">"{cap}"</span>}
+        {cap && <span className="text-xs text-muted-foreground italic line-clamp-2">"{cap}"</span>}
       </span>
     );
   }
@@ -57,7 +57,7 @@ function MediaPreview({ text, itemType }: { text: string; itemType: string }) {
     return (
       <span className="flex flex-col gap-1">
         <MediaChip icon={Film} label="Storia" color="#fbbf24" />
-        {cap && <span className="text-xs text-muted italic line-clamp-2">"{cap}"</span>}
+        {cap && <span className="text-xs text-muted-foreground italic line-clamp-2">"{cap}"</span>}
       </span>
     );
   }
@@ -66,7 +66,7 @@ function MediaPreview({ text, itemType }: { text: string; itemType: string }) {
     return (
       <span className="flex flex-col gap-1">
         <MediaChip icon={Film} label="Reel" color="#a78bfa" />
-        {cap && <span className="text-xs text-muted italic line-clamp-2">"{cap}"</span>}
+        {cap && <span className="text-xs text-muted-foreground italic line-clamp-2">"{cap}"</span>}
       </span>
     );
   }
@@ -82,7 +82,7 @@ function MediaPreview({ text, itemType }: { text: string; itemType: string }) {
   }
   if (itemType === 'animated_media' || /^\[gif\]/i.test(t)) return <MediaChip icon={Sticker} label="GIF" color="#f472b6" />;
   if (itemType === 'action_log' || /^\[action_log\]/i.test(t)) {
-    return <span className="text-xs text-muted italic">— evento di sistema —</span>;
+    return <span className="text-xs text-muted-foreground italic">— evento di sistema —</span>;
   }
   if (/^\[/.test(t) && /\]/.test(t)) {
     // Unknown placeholder, show generic
@@ -219,7 +219,7 @@ function SetupPanel({ status, onChange, loading, setLoading }: { status: Status;
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-gradient">Instagram DM</h1>
-          <div className="text-xs text-muted">Connetti il tuo account per leggere e rispondere ai DM</div>
+          <div className="text-xs text-muted-foreground">Connetti il tuo account per leggere e rispondere ai DM</div>
         </div>
       </div>
 
@@ -229,9 +229,9 @@ function SetupPanel({ status, onChange, loading, setLoading }: { status: Status;
           {stepMeta.map((s, i) => (
             <div key={s.n} className="flex items-center gap-1.5 flex-1">
               <div className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center transition ${
-                step === s.n ? 'bg-accent text-bg' : step > s.n ? 'bg-emerald-500/30 text-emerald-300' : 'bg-surface2 text-muted'
+                step === s.n ? 'bg-accent text-bg' : step > s.n ? 'bg-emerald-500/30 text-emerald-300' : 'bg-surface2 text-muted-foreground'
               }`}>{step > s.n ? '✓' : s.n}</div>
-              <div className={`text-[10px] uppercase tracking-wider font-semibold ${step === s.n ? 'text-text' : 'text-muted'}`}>{s.label}</div>
+              <div className={`text-[10px] uppercase tracking-wider font-semibold ${step === s.n ? 'text-text' : 'text-muted-foreground'}`}>{s.label}</div>
               {i < stepMeta.length - 1 && <div className={`flex-1 h-px ${step > s.n ? 'bg-emerald-500/30' : 'bg-border'}`} />}
             </div>
           ))}
@@ -239,7 +239,7 @@ function SetupPanel({ status, onChange, loading, setLoading }: { status: Status;
 
         {step === 1 && (
           <form onSubmit={doLogin} className="space-y-3">
-            <div className="text-xs text-muted mb-2">
+            <div className="text-xs text-muted-foreground mb-2">
               Credenziali usate solo per autenticare. Salvate localmente come session token.
             </div>
             <Field label="Username">
@@ -259,7 +259,7 @@ function SetupPanel({ status, onChange, loading, setLoading }: { status: Status;
               <Lock size={14} className="text-accent" />
               <span className="font-medium">Codice 2FA</span>
             </div>
-            <div className="text-xs text-muted">Codice inviato da Instagram via SMS o app authenticator.</div>
+            <div className="text-xs text-muted-foreground">Codice inviato da Instagram via SMS o app authenticator.</div>
             <Field label="Codice"><Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" autoFocus inputMode="numeric" maxLength={8} /></Field>
             <div className="flex gap-2">
               <Button type="button" variant="ghost" size="sm" onClick={async () => { setCode(''); await api.igLogout(); onChange(); }}>Annulla</Button>
@@ -274,7 +274,7 @@ function SetupPanel({ status, onChange, loading, setLoading }: { status: Status;
               <ShieldAlert size={14} className="text-amber-300" />
               <span className="font-medium text-amber-300">Verifica sicurezza Instagram</span>
             </div>
-            <div className="text-xs text-muted">
+            <div className="text-xs text-muted-foreground">
               {status.error || 'Instagram ti ha inviato un codice via email o SMS. Inseriscilo per sbloccare.'}
             </div>
             <Field label="Codice (6 cifre)"><Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" autoFocus inputMode="numeric" maxLength={8} /></Field>
@@ -503,7 +503,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
           </div>
           <div>
             <div className="text-lg font-semibold">Instagram DM</div>
-            <div className="text-xs text-muted">@{me.username}{me.full_name ? ` · ${me.full_name}` : ''}</div>
+            <div className="text-xs text-muted-foreground">@{me.username}{me.full_name ? ` · ${me.full_name}` : ''}</div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -526,7 +526,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
           </div>
           <div className="flex-1 overflow-y-auto">
             {filteredThreads.length === 0 && (
-              <div className="text-xs text-muted text-center py-6 px-3">
+              <div className="text-xs text-muted-foreground text-center py-6 px-3">
                 {threads.length === 0 ? <>Nessuna conversazione ancora. Il polling parte ogni 30s.<br/>Apri qualcosa o aspetta…</> : 'Nessun risultato'}
               </div>
             )}
@@ -548,9 +548,9 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <div className="font-medium text-sm truncate">{t.title}</div>
-                      {t.last_ts && <div className="text-[10px] text-muted shrink-0 font-mono">{fmtTime(t.last_ts)}</div>}
+                      {t.last_ts && <div className="text-[10px] text-muted-foreground shrink-0 font-mono">{fmtTime(t.last_ts)}</div>}
                     </div>
-                    <div className="text-xs text-muted truncate flex items-center gap-1">
+                    <div className="text-xs text-muted-foreground truncate flex items-center gap-1">
                       {subPrefix && <span>{subPrefix}</span>}
                       {summary ? (
                         <span className="inline-flex items-center gap-1">
@@ -576,7 +576,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
         {/* Conversation */}
         <Card className="flex flex-col !p-0 overflow-hidden relative">
           {!selected || !selectedThread ? (
-            <div className="flex-1 flex items-center justify-center text-muted text-sm">
+            <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
               <div className="text-center">
                 <MessageCircle size={32} className="mx-auto mb-2 opacity-40" />
                 Seleziona una conversazione
@@ -593,16 +593,16 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                   )}
                   <div className="min-w-0">
                     <div className="font-semibold text-sm truncate">{selectedThread.title}</div>
-                    <div className="text-[10px] text-muted truncate">{selectedThread.participants.map(p => '@' + p.username).join(' · ')}</div>
+                    <div className="text-[10px] text-muted-foreground truncate">{selectedThread.participants.map(p => '@' + p.username).join(' · ')}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] uppercase tracking-wider text-muted">auto-sync</span>
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">auto-sync</span>
                     <Toggle checked={selectedThread.auto_bonify} onChange={() => toggleAuto(selectedThread)} />
                   </div>
                   <div className="flex items-center gap-1.5" title={selectedThread.auto_responder_goal ? `Goal: ${selectedThread.auto_responder_goal}` : undefined}>
-                    <span className="text-[10px] uppercase tracking-wider text-muted">auto-responder</span>
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">auto-responder</span>
                     <Toggle checked={!!selectedThread.auto_responder} onChange={() => toggleAutoResponder(selectedThread)} />
                   </div>
                   <Button size="sm" variant="ghost" onClick={syncThread} disabled={syncingThread} title="Scarica messaggi storici">
@@ -615,7 +615,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
               </div>
 
               <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-1.5">
-                {messages.length === 0 && <div className="text-xs text-muted text-center py-6">Nessun messaggio.</div>}
+                {messages.length === 0 && <div className="text-xs text-muted-foreground text-center py-6">Nessun messaggio.</div>}
                 {messages.map((m) => (
                   <div key={m.id} className={`flex ${m.from_me ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[75%] rounded-2xl px-3 py-1.5 text-sm ${
@@ -623,7 +623,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                         ? (m.source === 'ai' ? 'bg-purple-500/30 border border-purple-400/40' : 'bg-accent/40 border border-accent/50')
                         : 'bg-surface2/70 border border-border'
                     }`}>
-                      {!m.from_me && selectedThread.is_group && <div className="text-[10px] text-muted mb-0.5">@{m.sender_username}</div>}
+                      {!m.from_me && selectedThread.is_group && <div className="text-[10px] text-muted-foreground mb-0.5">@{m.sender_username}</div>}
                       <div className="break-words"><MediaPreview text={m.text} itemType={m.item_type} /></div>
                       <div className="text-[9px] mt-1 opacity-60 font-mono flex items-center gap-1 justify-end">
                         {m.source === 'ai' && <span className="text-purple-200">AI</span>}
@@ -644,8 +644,8 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                     }`}>
                       <div className="break-words whitespace-pre-wrap">{p.text}</div>
                       <div className="text-[9px] mt-1 font-mono flex items-center gap-1.5 justify-end">
-                        {p.status === 'queued' && <><span className="w-1 h-1 rounded-full bg-muted animate-pulse" /><span className="text-muted uppercase tracking-wider">in coda</span></>}
-                        {p.status === 'sending' && <><RefreshCw size={9} className="animate-spin" /><span className="text-muted uppercase tracking-wider">invio…</span></>}
+                        {p.status === 'queued' && <><span className="w-1 h-1 rounded-full bg-muted animate-pulse" /><span className="text-muted-foreground uppercase tracking-wider">in coda</span></>}
+                        {p.status === 'sending' && <><RefreshCw size={9} className="animate-spin" /><span className="text-muted-foreground uppercase tracking-wider">invio…</span></>}
                         {p.status === 'error' && (
                           <>
                             <span className="text-red-300 uppercase tracking-wider">errore</span>
@@ -665,7 +665,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                   {aiDraft && (
                     <div className="absolute -top-5 left-1 inline-flex items-center gap-1 text-[9px] uppercase tracking-wider text-purple-300 font-semibold">
                       <Sparkles size={9} /> bozza AI
-                      <button onClick={() => { setText(''); setAiDraft(null); }} className="text-muted hover:text-text ml-1" title="Scarta">×</button>
+                      <button onClick={() => { setText(''); setAiDraft(null); }} className="text-muted-foreground hover:text-text ml-1" title="Scarta">×</button>
                     </div>
                   )}
                   <button
@@ -708,7 +708,7 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                       <Wand2 size={11} />
                       {activity ? 'Auto-responder' : suggesting ? 'Formulando…' : 'Bozza pronta'}
                     </div>
-                    <button onClick={() => { setDraftReply(''); setSuggesting(false); setActivity(null); }} className="text-muted hover:text-text">
+                    <button onClick={() => { setDraftReply(''); setSuggesting(false); setActivity(null); }} className="text-muted-foreground hover:text-text">
                       <X size={13} />
                     </button>
                   </div>
@@ -726,13 +726,13 @@ function InboxView({ me, onLogout }: { me: { pk: string; username: string; full_
                         )}
                         <div className="flex-1 min-w-0">
                           <div className={`text-sm ${['sending', 'thinking', 'reading'].includes(activity.kind) ? 'animate-pulse' : ''}`}>{activity.label || activity.kind}</div>
-                          <div className="text-[10px] text-muted uppercase tracking-wider mt-0.5">{activity.kind}</div>
+                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">{activity.kind}</div>
                         </div>
                       </div>
                     ) : suggesting && !draftReply ? (
                       <div className="flex items-center gap-3 py-2">
                         <BrainLoading size={48} inline />
-                        <span className="text-sm text-muted animate-pulse">Formulando risposta…</span>
+                        <span className="text-sm text-muted-foreground animate-pulse">Formulando risposta…</span>
                       </div>
                     ) : (
                       <>

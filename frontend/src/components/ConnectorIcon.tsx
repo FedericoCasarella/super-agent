@@ -71,7 +71,7 @@ const RULES: Array<{ match: RegExp; icon: IconDefinition; color: string; label: 
   { match: /webhook|trigger|event/i, icon: faBolt, color: 'text-accent', label: 'Event' },
 ];
 
-const FALLBACK = { icon: faPlug, color: 'text-muted', label: 'Connector' };
+const FALLBACK = { icon: faPlug, color: 'text-muted-foreground', label: 'Connector' };
 
 export function resolveBrand(name: string, title?: string): { icon: IconDefinition; color: string; label: string } {
   const hay = `${name ?? ''} ${title ?? ''}`;

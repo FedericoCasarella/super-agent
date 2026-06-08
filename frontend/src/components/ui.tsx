@@ -1,66 +1,83 @@
+// Legacy `ui.tsx` — now re-exports shadcn components with back-compat wrappers
+// so old pages keep working while we migrate. Source of truth lives in
+// `src/components/ui/*.tsx`. Once a page is migrated, import directly from
+// `@/components/ui/button` etc.
 import { ButtonHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes, ReactNode, createContext, useCallback, useContext, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Button as SButton } from './ui/button';
+import { Input as SInput } from './ui/input';
+import { Textarea as STextarea } from './ui/textarea';
+import { Card as SCard } from './ui/card';
+import { Badge } from './ui/badge';
+import { Switch as SSwitch } from './ui/switch';
+import { Label as SLabel } from './ui/label';
+import {
+  Dialog as SDialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from './ui/dialog';
 
-type Variant = 'primary' | 'ghost' | 'danger';
-type Size = 'sm' | 'md';
+type LegacyVariant = 'primary' | 'ghost' | 'danger';
+type LegacySize = 'sm' | 'md';
+const VARIANT_MAP: Record<LegacyVariant, 'default' | 'ghost' | 'destructive'> = {
+  primary: 'default', ghost: 'ghost', danger: 'destructive',
+};
+const SIZE_MAP: Record<LegacySize, 'sm' | 'default'> = { sm: 'sm', md: 'default' };
 
 export function Button({
   variant = 'primary',
   size = 'md',
   className = '',
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
-  const base = 'inline-flex items-center justify-center gap-2 rounded-full font-medium transition-all duration-200 ease-out-expo active:scale-[0.96] hover:-translate-y-[1px] disabled:opacity-40 disabled:pointer-events-none disabled:hover:translate-y-0 ring-soft';
-  const sizes: Record<Size, string> = { sm: 'px-3.5 py-1.5 text-xs', md: 'px-5 py-2.5 text-sm' };
-  const variants: Record<Variant, string> = {
-    primary: 'bg-gradient-to-r from-accent to-accent2 text-bg hover:shadow-lg hover:shadow-accent/30',
-    ghost:   'bg-surface2/70 text-text border border-border hover:border-accent/50 hover:bg-surface2',
-    danger:  'bg-err/15 text-err border border-err/30 hover:bg-err/25 hover:shadow-lg hover:shadow-err/20',
-  };
-  return <button {...rest} className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} />;
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: LegacyVariant; size?: LegacySize }) {
+  return <SButton variant={VARIANT_MAP[variant]} size={SIZE_MAP[size]} className={className} {...rest} />;
 }
 
 export function Input({ className = '', ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...rest} className={`w-full bg-surface2/70 border border-border rounded-2xl px-4 py-2.5 text-text placeholder:text-muted/70 focus:outline-none focus:border-accent/60 focus:bg-surface2 focus:shadow-[0_0_0_4px_rgba(192,132,252,0.08)] ${className}`} />;
+  return <SInput className={className} {...rest} />;
 }
 
 export function Textarea({ className = '', ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea {...rest} className={`w-full bg-surface2/70 border border-border rounded-2xl px-4 py-3 text-text placeholder:text-muted/70 focus:outline-none focus:border-accent/60 focus:bg-surface2 focus:shadow-[0_0_0_4px_rgba(192,132,252,0.08)] min-h-[88px] ${className}`} />;
+  return <STextarea className={className} {...rest} />;
 }
 
 export function Label({ children }: { children: ReactNode }) {
-  return <label className="text-xs uppercase tracking-wider text-muted mb-1.5 block">{children}</label>;
+  return <SLabel className="mb-1.5 block text-xs uppercase tracking-wider text-muted-foreground">{children}</SLabel>;
 }
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return <div><Label>{label}</Label>{children}</div>;
 }
 
-export function Card({ className = '', children }: { className?: string; children: ReactNode }) {
-  return <div className={`glass border border-border rounded-xl3 p-5 ring-soft gradient-border hover:border-accent/30 ${className}`}>{children}</div>;
+export function Card({ className = '', children, ...rest }: { className?: string; children: ReactNode } & React.HTMLAttributes<HTMLDivElement>) {
+  return <SCard className={`p-5 ${className}`} {...rest}>{children}</SCard>;
 }
 
-export function Chip({ tone = 'default', children }: { tone?: 'default' | 'on' | 'warn' | 'err' | 'accent' | 'accent2'; children: ReactNode }) {
-  const tones: Record<string, string> = {
-    default: 'bg-surface2/70 border-border text-muted',
-    on: 'bg-ok/10 border-ok/30 text-ok shadow-[0_0_18px_-4px_rgba(52,211,153,0.45)]',
-    warn: 'bg-warn/10 border-warn/30 text-warn',
-    err: 'bg-err/10 border-err/30 text-err',
-    accent: 'bg-gradient-to-r from-accent/15 to-fuchsia-400/10 border-accent/40 text-accent shadow-[0_0_18px_-4px_rgba(192,132,252,0.5)]',
-    accent2: 'bg-gradient-to-r from-accent2/15 to-sky-300/10 border-accent2/40 text-accent2 shadow-[0_0_18px_-4px_rgba(34,211,238,0.5)]',
+// Map legacy tones to shadcn Badge variants. `accent`/`accent2` lean on the
+// gradient primary; success/warn/err use semantic tokens.
+export function Chip({
+  tone = 'default',
+  children,
+}: {
+  tone?: 'default' | 'on' | 'warn' | 'err' | 'accent' | 'accent2';
+  children: ReactNode;
+}) {
+  const map: Record<string, { variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning'; cls?: string }> = {
+    default: { variant: 'secondary' },
+    on: { variant: 'success' },
+    warn: { variant: 'warning' },
+    err: { variant: 'destructive' },
+    accent: { variant: 'default', cls: 'bg-gradient-primary text-primary-foreground border-transparent' },
+    accent2: { variant: 'default', cls: 'bg-[hsl(var(--accent-2))]/15 border-[hsl(var(--accent-2))]/40 text-[hsl(var(--accent-2))]' },
   };
-  return <span className={`inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border backdrop-blur-md ${tones[tone]}`}>{children}</span>;
+  const { variant, cls } = map[tone];
+  return (
+    <Badge variant={variant} className={`rounded-full px-2.5 py-0.5 ${cls ?? ''}`}>
+      {children}
+    </Badge>
+  );
 }
 
 export function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label className="inline-flex items-center cursor-pointer">
-      <input type="checkbox" className="sr-only peer" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <div className="w-12 h-6 bg-surface2 border border-border peer-checked:bg-gradient-to-r peer-checked:from-accent peer-checked:to-accent2 peer-checked:border-transparent peer-checked:shadow-[0_0_18px_-4px_rgba(192,132,252,0.6)] rounded-full relative transition-all duration-300 ease-out-expo overflow-hidden">
-        <div className={`absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-text shadow-md transition-all duration-300 ease-out-expo ${checked ? 'left-[calc(100%-1.375rem)]' : 'left-[0.125rem]'}`} />
-      </div>
-    </label>
-  );
+  return <SSwitch checked={checked} onCheckedChange={onChange} />;
 }
 
 export function Modal({
@@ -68,16 +85,14 @@ export function Modal({
 }: {
   open: boolean; title: string; children: ReactNode; onClose: () => void; footer?: ReactNode;
 }) {
-  if (!open) return null;
-  return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md animate-fade-in" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="glass border border-border rounded-xl3 p-6 w-full max-w-lg mx-4 ring-soft gradient-border animate-slide-up max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="text-lg font-semibold mb-3 text-gradient">{title}</div>
-        <div className="text-sm text-text/90">{children}</div>
-        {footer && <div className="flex gap-2 justify-end mt-6">{footer}</div>}
-      </div>
-    </div>,
-    document.body,
+  return (
+    <SDialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
+        <div className="text-sm">{children}</div>
+        {footer && <DialogFooter>{footer}</DialogFooter>}
+      </DialogContent>
+    </SDialog>
   );
 }
 
@@ -100,30 +115,33 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setTimeout(() => setItems((p) => p.filter((t) => t.id !== id)), 4000);
   }, []);
   const tones: Record<Tone, string> = {
-    info: 'bg-accent/15 border-accent/40 text-text',
-    on: 'bg-ok/15 border-ok/40 text-text',
-    warn: 'bg-warn/15 border-warn/40 text-text',
-    err: 'bg-err/15 border-err/40 text-text',
+    info: 'border-primary/40 bg-primary/10 text-foreground',
+    on: 'border-[hsl(var(--success))]/40 bg-[hsl(var(--success))]/10 text-foreground',
+    warn: 'border-[hsl(var(--warning))]/40 bg-[hsl(var(--warning))]/10 text-foreground',
+    err: 'border-destructive/40 bg-destructive/10 text-foreground',
   };
   return (
     <ToastContext.Provider value={{ push }}>
       {children}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-sm">
-        {items.map((t) => (
-          <div key={t.id} className={`rounded-2xl border px-4 py-3 text-sm shadow-2xl backdrop-blur-md animate-slide-up ${tones[t.tone]}`}>
-            {t.message}
-          </div>
-        ))}
-      </div>
+      {createPortal(
+        <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 max-w-sm">
+          {items.map((t) => (
+            <div key={t.id} className={`rounded-lg border px-4 py-3 text-sm shadow-lg backdrop-blur-sm ${tones[t.tone]}`}>
+              {t.message}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
     </ToastContext.Provider>
   );
 }
 
 export function Banner({ tone = 'warn', children }: { tone?: 'warn' | 'err' | 'info'; children: ReactNode }) {
   const tones: Record<string, string> = {
-    warn: 'bg-warn/10 border-warn/30 text-warn',
-    err: 'bg-err/10 border-err/30 text-err',
-    info: 'bg-accent/10 border-accent/30 text-accent',
+    warn: 'border-[hsl(var(--warning))]/40 bg-[hsl(var(--warning))]/10 text-foreground',
+    err: 'border-destructive/40 bg-destructive/10 text-foreground',
+    info: 'border-primary/40 bg-primary/10 text-foreground',
   };
-  return <div className={`rounded-xl border px-4 py-3 text-sm ${tones[tone]}`}>{children}</div>;
+  return <div className={`rounded-lg border px-4 py-3 text-sm ${tones[tone]}`}>{children}</div>;
 }

@@ -52,7 +52,7 @@ function ConfigDrawer({ open, onClose, title, children, footer }: { open: boolea
       <div onClick={(e) => e.stopPropagation()} className="bg-surface border-l border-border h-full w-full max-w-md shadow-2xl flex flex-col">
         <div className="flex items-center justify-between px-5 py-3 border-b border-border">
           <div className="font-semibold">{title}</div>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface2 text-muted hover:text-text"><X size={16} /></button>
+          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface2 text-muted-foreground hover:text-text"><X size={16} /></button>
         </div>
         <div className="overflow-y-auto p-5 flex-1 space-y-3">{children}</div>
         {footer && <div className="px-5 py-3 border-t border-border bg-surface2/30 flex justify-end gap-2">{footer}</div>}
@@ -91,7 +91,7 @@ function TriggerConfigForm({ trigger, onChange }: { trigger: Trigger; onChange: 
     case 'team.fired':
       return <Field label="Team (opzionale)"><SearchSelect value={c.team_id} initialLabel={c._team_id_label ?? undefined} onChange={(v, opt) => setRef('team_id', v ? Number(v) : null, opt)} fetchOptions={fetchTeams} placeholder="Qualsiasi team" /></Field>;
     default:
-      return <div className="text-xs text-muted">Nessuna configurazione richiesta.</div>;
+      return <div className="text-xs text-muted-foreground">Nessuna configurazione richiesta.</div>;
   }
 }
 
@@ -270,9 +270,9 @@ function FlowDiagram({
               <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60">
                 <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{ background: M.color + '22', border: `1px solid ${M.color}55` }}><I size={14} style={{ color: M.color }} /></div>
                 <div className="font-medium text-sm truncate flex-1">{M.label}</div>
-                <button onClick={() => onDelTrigger(i)} className="text-muted hover:text-red-300 p-1"><Trash2 size={12} /></button>
+                <button onClick={() => onDelTrigger(i)} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={12} /></button>
               </div>
-              <div className="px-3 py-2 text-xs text-muted">
+              <div className="px-3 py-2 text-xs text-muted-foreground">
                 {Object.keys(t.config ?? {}).filter((k) => !k.startsWith('_')).map((k) => {
                   const label = t.config[`_${k}_label`];
                   const val = String(t.config[k]).slice(0, 24);
@@ -313,14 +313,14 @@ function FlowDiagram({
                     <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{ background: M.color + '22', border: `1px solid ${M.color}55` }}><I size={14} style={{ color: M.color }} /></div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm truncate">{s.name || M.label}</div>
-                      <div className="text-[10px] text-muted font-mono truncate">{s.type}</div>
+                      <div className="text-[10px] text-muted-foreground font-mono truncate">{s.type}</div>
                     </div>
-                    <button onClick={() => onMoveStep(i, -1)} className="text-muted hover:text-text p-0.5 text-xs">↑</button>
-                    <button onClick={() => onMoveStep(i, 1)} className="text-muted hover:text-text p-0.5 text-xs">↓</button>
-                    <button onClick={() => onDelStep(i)} className="text-muted hover:text-red-300 p-1"><Trash2 size={12} /></button>
+                    <button onClick={() => onMoveStep(i, -1)} className="text-muted-foreground hover:text-text p-0.5 text-xs">↑</button>
+                    <button onClick={() => onMoveStep(i, 1)} className="text-muted-foreground hover:text-text p-0.5 text-xs">↓</button>
+                    <button onClick={() => onDelStep(i)} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={12} /></button>
                   </div>
                   {(() => { const p = stepConfigPreview(s); return p ? (
-                    <div className="px-3 py-2 text-xs text-muted whitespace-pre-wrap break-words">{p}</div>
+                    <div className="px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap break-words">{p}</div>
                   ) : null; })()}
                   <button onClick={() => onEditStep(i)} className="w-full text-[10px] text-accent2 border-t border-border/60 py-1.5 hover:bg-surface2 transition uppercase tracking-wider font-semibold">configura</button>
                 </div>
@@ -430,17 +430,17 @@ export default function FlowDetail() {
     setZoom((z) => Math.max(0.4, Math.min(2, z + delta)));
   }
 
-  if (!flow) return <div className="text-muted p-6">Caricamento…</div>;
+  if (!flow) return <div className="text-muted-foreground p-6">Caricamento…</div>;
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={() => nav('/flows')} className="text-muted hover:text-text"><ArrowLeft size={16} /></button>
+        <button onClick={() => nav('/flows')} className="text-muted-foreground hover:text-text"><ArrowLeft size={16} /></button>
         <Input value={flow.name} onChange={(e) => setFlow({ ...flow, name: e.target.value })} className="text-lg font-semibold !bg-transparent !border-transparent hover:!border-border focus:!border-accent max-w-xs" />
         <Chip tone={flow.enabled ? 'on' : 'warn'}>{flow.enabled ? 'attivo' : 'spento'}</Chip>
         <Toggle checked={flow.enabled} onChange={(v) => setFlow({ ...flow, enabled: v })} />
         <div className="ml-auto flex gap-2">
-          <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
+          <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1">
             <Button size="sm" variant={tab === 'builder' ? 'primary' : 'ghost'} onClick={() => setTab('builder')}><Workflow size={13} className="inline mr-1 -mt-0.5" />Builder</Button>
             <Button size="sm" variant={tab === 'runs' ? 'primary' : 'ghost'} onClick={() => setTab('runs')}><ClipboardList size={13} className="inline mr-1 -mt-0.5" />Execution logs</Button>
           </div>
@@ -490,13 +490,13 @@ export default function FlowDetail() {
 
       {tab === 'runs' && (
         <Card className="space-y-2">
-          {runs.length === 0 && <div className="text-muted text-sm">Nessuna esecuzione ancora.</div>}
+          {runs.length === 0 && <div className="text-muted-foreground text-sm">Nessuna esecuzione ancora.</div>}
           {runs.map((r) => (
             <button key={r.id} onClick={async () => setOpenRun(await api.flowRunGet(r.id))} className="w-full text-left p-3 rounded-xl border border-border/60 hover:border-accent/40 hover:bg-surface2/40 transition flex items-center gap-3">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${r.status === 'done' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/30' : r.status === 'error' ? 'bg-red-500/15 text-red-300 border border-red-400/30' : r.status === 'running' ? 'bg-accent/15 text-accent border border-accent/30 animate-pulse' : 'bg-surface2 text-muted border border-border'}`}>{r.status}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${r.status === 'done' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/30' : r.status === 'error' ? 'bg-red-500/15 text-red-300 border border-red-400/30' : r.status === 'running' ? 'bg-accent/15 text-accent border border-accent/30 animate-pulse' : 'bg-surface2 text-muted-foreground border border-border'}`}>{r.status}</span>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{r.trigger_type ?? '—'} · #{r.id}</div>
-                <div className="text-[10px] text-muted font-mono">{new Date(r.created_at).toLocaleString('it-IT')}{r.duration_ms ? ` · ${r.duration_ms}ms` : ''}</div>
+                <div className="text-[10px] text-muted-foreground font-mono">{new Date(r.created_at).toLocaleString('it-IT')}{r.duration_ms ? ` · ${r.duration_ms}ms` : ''}</div>
               </div>
             </button>
           ))}
@@ -513,7 +513,7 @@ export default function FlowDetail() {
                 <div className="w-8 h-8 rounded-md flex items-center justify-center" style={{ background: m.color + '22', border: `1px solid ${m.color}55` }}><I size={15} style={{ color: m.color }} /></div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium">{m.label}</div>
-                  <div className="text-[10px] text-muted font-mono">{m.type}</div>
+                  <div className="text-[10px] text-muted-foreground font-mono">{m.type}</div>
                 </div>
               </button>
             );
@@ -560,18 +560,18 @@ export default function FlowDetail() {
             <div className="px-5 py-3 border-b border-border flex items-center justify-between">
               <div>
                 <div className="font-semibold text-sm">Run #{openRun.id}</div>
-                <div className="text-[10px] text-muted">{openRun.trigger_type} · {openRun.status}</div>
+                <div className="text-[10px] text-muted-foreground">{openRun.trigger_type} · {openRun.status}</div>
               </div>
-              <button onClick={() => setOpenRun(null)} className="p-1.5 rounded-md hover:bg-surface2 text-muted"><X size={16} /></button>
+              <button onClick={() => setOpenRun(null)} className="p-1.5 rounded-md hover:bg-surface2 text-muted-foreground"><X size={16} /></button>
             </div>
             <div className="overflow-y-auto p-5 flex-1 space-y-2">
               {openRun.events?.map((e: any) => (
                 <div key={e.id} className="text-xs border border-border/60 rounded-lg p-2 bg-surface2/30">
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-mono text-[10px] uppercase text-accent">{e.kind}</span>
-                    <span className="text-[10px] text-muted font-mono">{new Date(e.ts).toLocaleTimeString('it-IT')}</span>
+                    <span className="text-[10px] text-muted-foreground font-mono">{new Date(e.ts).toLocaleTimeString('it-IT')}</span>
                   </div>
-                  {e.content && <pre className="whitespace-pre-wrap break-all text-[11px] text-muted font-mono">{e.content.slice(0, 800)}</pre>}
+                  {e.content && <pre className="whitespace-pre-wrap break-all text-[11px] text-muted-foreground font-mono">{e.content.slice(0, 800)}</pre>}
                 </div>
               ))}
             </div>

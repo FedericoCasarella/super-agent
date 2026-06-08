@@ -118,7 +118,7 @@ export default function Tasks() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold text-gradient">Tasks</h1>
-          <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
+          <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1">
             <Button size="sm" variant={tab === 'scheduled' ? 'primary' : 'ghost'} onClick={() => setTab('scheduled')}>
               <Calendar size={13} className="inline mr-1 -mt-0.5" />Scheduled
             </Button>
@@ -134,7 +134,7 @@ export default function Tasks() {
 
       {tab === 'scheduled' && <>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {items.length === 0 && <Card><div className="text-muted text-sm">{t('tasks.none')}</div></Card>}
+        {items.length === 0 && <Card><div className="text-muted-foreground text-sm">{t('tasks.none')}</div></Card>}
         {items.map((task) => (
           <Card key={task.id}>
             <div className="flex items-start justify-between gap-3">
@@ -143,14 +143,14 @@ export default function Tasks() {
                   <div className="font-semibold truncate">{task.name}</div>
                   <Chip>{task.action_type}</Chip>
                 </div>
-                <div className="text-xs text-muted font-mono mt-1">{task.cron}</div>
+                <div className="text-xs text-muted-foreground font-mono mt-1">{task.cron}</div>
                 {task.last_run_at && (
-                  <div className="text-xs text-muted mt-2">
+                  <div className="text-xs text-muted-foreground mt-2">
                     {t('tasks.last')}: {new Date(task.last_run_at).toLocaleString()} ·{' '}
                     <span className={task.last_status === 'ok' ? 'text-ok' : 'text-err'}>{task.last_status}</span>
                   </div>
                 )}
-                {task.last_result && <div className="text-xs text-muted mt-1 line-clamp-2">{task.last_result}</div>}
+                {task.last_result && <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{task.last_result}</div>}
               </div>
               <Toggle checked={task.enabled} onChange={() => toggle(task)} />
             </div>

@@ -69,19 +69,19 @@ export function CustomAgentsPanel() {
                 </div>
                 <div className="min-w-0">
                   <div className="font-semibold truncate">{a.name}</div>
-                  {a.role && <div className="text-xs text-muted truncate">{a.role}</div>}
+                  {a.role && <div className="text-xs text-muted-foreground truncate">{a.role}</div>}
                 </div>
               </div>
-              <button onClick={(e) => { e.stopPropagation(); del(a); }} className="text-muted hover:text-red-300 p-1"><Trash2 size={13} /></button>
+              <button onClick={(e) => { e.stopPropagation(); del(a); }} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
             </div>
-            {a.description && <p className="text-xs text-muted mt-2 line-clamp-2">{a.description}</p>}
+            {a.description && <p className="text-xs text-muted-foreground mt-2 line-clamp-2">{a.description}</p>}
             <div className="mt-2 flex flex-wrap gap-1">
-              {(a.skills ?? []).slice(0, 4).map((s) => <span key={s} className="text-[9px] px-1.5 py-0.5 rounded-full bg-surface2 border border-border text-muted font-mono">{s.replace(/^mcp__super_agent__/, '')}</span>)}
-              {(a.skills?.length ?? 0) > 4 && <span className="text-[9px] text-muted">+{a.skills.length - 4}</span>}
+              {(a.skills ?? []).slice(0, 4).map((s) => <span key={s} className="text-[9px] px-1.5 py-0.5 rounded-full bg-surface2 border border-border text-muted-foreground font-mono">{s.replace(/^mcp__super_agent__/, '')}</span>)}
+              {(a.skills?.length ?? 0) > 4 && <span className="text-[9px] text-muted-foreground">+{a.skills.length - 4}</span>}
             </div>
           </Card></div>
         ))}
-        {items.length === 0 && <Card><div className="text-muted text-sm">Nessun agente. Crea il primo.</div></Card>}
+        {items.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessun agente. Crea il primo.</div></Card>}
       </div>
 
       {open && createPortal(
@@ -110,7 +110,7 @@ export function CustomAgentsPanel() {
                   {COMMON_SKILLS.map((s) => {
                     const active = (open.skills ?? []).includes(s);
                     return (
-                      <button key={s} onClick={() => setOpen({ ...open, skills: active ? open.skills.filter((x) => x !== s) : [...(open.skills ?? []), s] })} className={`text-[10px] px-2 py-1 rounded-full font-mono ${active ? 'bg-accent/20 text-accent border border-accent/40' : 'bg-surface border border-border text-muted'}`}>
+                      <button key={s} onClick={() => setOpen({ ...open, skills: active ? open.skills.filter((x) => x !== s) : [...(open.skills ?? []), s] })} className={`text-[10px] px-2 py-1 rounded-full font-mono ${active ? 'bg-accent/20 text-accent border border-accent/40' : 'bg-surface border border-border text-muted-foreground'}`}>
                         {s.replace(/^mcp__super_agent__/, '')}
                       </button>
                     );

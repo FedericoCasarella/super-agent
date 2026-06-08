@@ -74,9 +74,9 @@ export default function PersonGraphModal({ slug, name, onClose }: Props) {
           <div className="min-w-0">
             <div className="text-xs uppercase tracking-wider text-accent font-semibold">Connessioni cervello</div>
             <h3 className="text-lg font-semibold truncate">{name}</h3>
-            {data && <div className="text-[10px] text-muted font-mono">{data.nodes.length} nodi · {data.links.length} link</div>}
+            {data && <div className="text-[10px] text-muted-foreground font-mono">{data.nodes.length} nodi · {data.links.length} link</div>}
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-surface2 hover:bg-surface2/60 border border-border flex items-center justify-center text-muted hover:text-text transition">
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-surface2 hover:bg-surface2/60 border border-border flex items-center justify-center text-muted-foreground hover:text-text transition">
             <X size={16} />
           </button>
         </div>
@@ -86,7 +86,7 @@ export default function PersonGraphModal({ slug, name, onClose }: Props) {
             <div className="absolute inset-0 flex items-center justify-center"><BrainLoading size={100} label="Calcolo grafo…" /></div>
           )}
           {!loading && data && data.nodes.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">
+            <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">
               Nessuna connessione trovata per <span className="font-mono ml-1">{slug}</span>
             </div>
           )}
@@ -150,10 +150,10 @@ export default function PersonGraphModal({ slug, name, onClose }: Props) {
             />
           )}
           {centerNode && (
-            <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center gap-2 text-[10px] text-muted bg-bg/80 backdrop-blur rounded-xl border border-border px-3 py-1.5">
+            <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center gap-2 text-[10px] text-muted-foreground bg-bg/80 backdrop-blur rounded-xl border border-border px-3 py-1.5">
               <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
               <span>verde = nodo persona</span>
-              <span className="text-muted/50">·</span>
+              <span className="text-muted-foreground/50">·</span>
               <span>click nodo per leggere nota</span>
             </div>
           )}
@@ -163,7 +163,7 @@ export default function PersonGraphModal({ slug, name, onClose }: Props) {
           <div className="w-96 shrink-0 border-l border-border bg-surface/60 overflow-y-auto animate-fade-in">
             <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-border bg-surface/95 backdrop-blur">
               <div className="text-xs uppercase tracking-wider text-accent font-semibold">Nota</div>
-              <button onClick={() => setNote(null)} className="text-muted hover:text-text"><X size={14} /></button>
+              <button onClick={() => setNote(null)} className="text-muted-foreground hover:text-text"><X size={14} /></button>
             </div>
             <div className="p-4">
               {noteLoading && <BrainLoading size={60} label="Carico nota…" />}
@@ -172,7 +172,7 @@ export default function PersonGraphModal({ slug, name, onClose }: Props) {
               )}
               {!noteLoading && note && !note.error && (
                 <>
-                  <div className="text-[10px] text-muted font-mono mb-2 break-all">{note.path}</div>
+                  <div className="text-[10px] text-muted-foreground font-mono mb-2 break-all">{note.path}</div>
                   <h4 className="font-semibold mb-2 text-base">{note.title || note.path}</h4>
                   {(note.tags ?? []).length > 0 && (
                     <div className="flex flex-wrap gap-1 mb-3">

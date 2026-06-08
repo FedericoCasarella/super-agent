@@ -39,7 +39,7 @@ export default function ActiveAgentsBadge({ collapsed = false }: { collapsed?: b
 
   return (
     <div className="px-1 py-1.5">
-      <div className="flex items-center gap-1.5 mb-1.5 text-[10px] uppercase tracking-wider text-muted">
+      <div className="flex items-center gap-1.5 mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
         <Activity size={10} className="text-accent" />
         <span>In esecuzione</span>
         <span className="ml-auto font-mono text-accent">{items.length}</span>
@@ -53,10 +53,10 @@ export default function ActiveAgentsBadge({ collapsed = false }: { collapsed?: b
           >
             <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse shrink-0" />
             <span className="text-[11px] truncate flex-1">{i.title}</span>
-            <span className="text-[9px] text-muted font-mono uppercase">{i.kind === 'perk' ? 'perk' : 'sub'}</span>
+            <span className="text-[9px] text-muted-foreground font-mono uppercase">{i.kind === 'perk' ? 'perk' : 'sub'}</span>
           </div>
         ))}
-        {items.length > 5 && <div className="text-[10px] text-muted pl-1">+{items.length - 5} altri</div>}
+        {items.length > 5 && <div className="text-[10px] text-muted-foreground pl-1">+{items.length - 5} altri</div>}
       </div>
     </div>
   );

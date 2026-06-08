@@ -89,12 +89,12 @@ export function TeamTasksPanel() {
           <button key={t.id} onClick={() => nav(`/team-tasks/${t.id}`)} className="w-full text-left p-3 rounded-xl border border-border/60 hover:border-accent/40 hover:bg-surface2/40 transition flex items-center gap-3">
             <div className="flex-1 min-w-0">
               <div className="font-medium truncate">{t.title}</div>
-              <div className="text-[10px] text-muted font-mono">#{t.id} · {new Date(t.created_at).toLocaleString('it-IT')}</div>
+              <div className="text-[10px] text-muted-foreground font-mono">#{t.id} · {new Date(t.created_at).toLocaleString('it-IT')}</div>
             </div>
             {statusChip(t.status)}
           </button>
         ))}
-        {tasks.length === 0 && <Card><div className="text-muted text-sm">Nessun task ancora.</div></Card>}
+        {tasks.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessun task ancora.</div></Card>}
       </div>
     </div>
   );

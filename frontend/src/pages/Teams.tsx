@@ -93,16 +93,16 @@ export default function Teams() {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="font-semibold truncate">{t.name}</div>
-                  {t.description && <div className="text-xs text-muted line-clamp-2 mt-1">{t.description}</div>}
+                  {t.description && <div className="text-xs text-muted-foreground line-clamp-2 mt-1">{t.description}</div>}
                 </div>
                 <div className="flex gap-1">
-                  <button onClick={(e) => { e.stopPropagation(); openTeam(t); }} className="text-muted hover:text-accent p-1"><Edit3 size={13} /></button>
-                  <button onClick={(e) => { e.stopPropagation(); deleteTeam(t); }} className="text-muted hover:text-red-300 p-1"><Trash2 size={13} /></button>
+                  <button onClick={(e) => { e.stopPropagation(); openTeam(t); }} className="text-muted-foreground hover:text-accent p-1"><Edit3 size={13} /></button>
+                  <button onClick={(e) => { e.stopPropagation(); deleteTeam(t); }} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
                 </div>
               </div>
             </Card></div>
           ))}
-          {teams.length === 0 && <Card><div className="text-muted text-sm">Nessun team. Crea il primo.</div></Card>}
+          {teams.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessun team. Crea il primo.</div></Card>}
         </div>
       )}
 
@@ -120,7 +120,7 @@ export default function Teams() {
             <Field label="Descrizione"><Input value={editing.description ?? ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></Field>
           </div>
           <div>
-            <div className="text-xs uppercase text-muted tracking-wider mb-2">Membri del team</div>
+            <div className="text-xs uppercase text-muted-foreground tracking-wider mb-2">Membri del team</div>
             <div className="space-y-2">
               {editing.members.map((m) => {
                 const ag = agents.find((a) => a.id === m.agent_id);
@@ -131,7 +131,7 @@ export default function Teams() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm truncate">{ag?.name ?? `#${m.agent_id}`}</div>
-                      {ag?.role && <div className="text-xs text-muted truncate">{ag.role}</div>}
+                      {ag?.role && <div className="text-xs text-muted-foreground truncate">{ag.role}</div>}
                     </div>
                     <select value={m.role} onChange={(e) => patchMember(m.agent_id, { role: e.target.value as any })} className="bg-surface2 border border-border rounded-md px-2 py-1 text-xs">
                       <option value="lead">Lead</option>
@@ -143,22 +143,22 @@ export default function Teams() {
                         <option key={x.agent_id} value={x.agent_id}>↑ {agents.find((a) => a.id === x.agent_id)?.name ?? `#${x.agent_id}`}</option>
                       ))}
                     </select>
-                    <button onClick={() => removeMember(m.agent_id)} className="text-muted hover:text-red-300 p-1"><Trash2 size={13} /></button>
+                    <button onClick={() => removeMember(m.agent_id)} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
                   </div>
                 );
               })}
-              {editing.members.length === 0 && <div className="text-xs text-muted">Nessun membro. Aggiungi dal selettore qui sotto.</div>}
+              {editing.members.length === 0 && <div className="text-xs text-muted-foreground">Nessun membro. Aggiungi dal selettore qui sotto.</div>}
             </div>
           </div>
           <div>
-            <div className="text-xs uppercase text-muted tracking-wider mb-2">Aggiungi membro</div>
+            <div className="text-xs uppercase text-muted-foreground tracking-wider mb-2">Aggiungi membro</div>
             <div className="flex flex-wrap gap-2">
               {agents.filter((a) => !editing.members.some((m) => m.agent_id === a.id)).map((a) => (
                 <button key={a.id} onClick={() => addMember(a.id)} className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-border bg-surface2/60 hover:border-accent/40 text-xs">
                   <span>{a.icon || '🤖'}</span><span>{a.name}</span>
                 </button>
               ))}
-              {agents.filter((a) => !editing.members.some((m) => m.agent_id === a.id)).length === 0 && <div className="text-xs text-muted">Tutti gli agenti sono già nel team.</div>}
+              {agents.filter((a) => !editing.members.some((m) => m.agent_id === a.id)).length === 0 && <div className="text-xs text-muted-foreground">Tutti gli agenti sono già nel team.</div>}
             </div>
           </div>
         </Card>

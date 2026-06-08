@@ -394,7 +394,7 @@ export default function BrainGraph3D({
         <div className="absolute inset-0 flex items-center justify-center z-10"><BrainLoading size={140} label="Caricamento cervello…" /></div>
       )}
       {loaded && data.nodes.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">empty vault</div>
+        <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">empty vault</div>
       )}
       <ForceGraph2D
         ref={fgRef as any}

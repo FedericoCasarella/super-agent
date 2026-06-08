@@ -22,7 +22,7 @@ type Msg = { id?: number; ts: string; direction: 'in'|'out'|'system'; channel: s
 function Kpi({ icon, label, value, mono, highlight }: { icon: React.ReactNode; label: string; value: string; mono?: boolean; highlight?: boolean }) {
   return (
     <div className={`rounded-xl border px-3 py-2 transition ${highlight ? 'border-accent/50 bg-accent/10' : 'border-border bg-surface2/40'}`}>
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
         {icon}<span className="truncate">{label}</span>
       </div>
       <div className={`text-base font-semibold mt-0.5 truncate ${mono ? 'font-mono' : ''}`}>{value}</div>
@@ -150,9 +150,9 @@ export default function Dashboard() {
                   {isWorking && <span className="inline-block w-1.5 h-1.5 rounded-full bg-ok animate-pulse" />}
                 </div>
                 <div className="text-lg font-semibold text-text">{cfg.desc}</div>
-                <div className="text-sm text-muted mt-1">{cfg.sub}</div>
+                <div className="text-sm text-muted-foreground mt-1">{cfg.sub}</div>
                 {agentState?.sleep?.reason && isSleeping && (
-                  <div className="text-xs text-muted mt-2 italic">Motivo: {agentState.sleep.reason}</div>
+                  <div className="text-xs text-muted-foreground mt-2 italic">Motivo: {agentState.sleep.reason}</div>
                 )}
               </div>
               {(isSleeping || isQuiet || isIdle) && (
@@ -164,7 +164,7 @@ export default function Dashboard() {
 
             {isWorking && activeAgents.length > 0 && (
               <div className="relative mt-4 pt-4 border-t border-accent/20 space-y-2">
-                <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1">Cosa sta facendo ora</div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1">Cosa sta facendo ora</div>
                 {activeAgents.map((a: any) => {
                   const isRunning = a.status === 'running';
                   const startTs = a.started_at ?? a.created_at;
@@ -182,8 +182,8 @@ export default function Dashboard() {
                             {isRunning ? `⚡ in corso · ${elapsed}` : '⏳ in coda'}
                           </span>
                         </div>
-                        {a.brief && <div className="text-xs text-muted mt-0.5 line-clamp-2">{a.brief}</div>}
-                        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted font-mono">
+                        {a.brief && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{a.brief}</div>}
+                        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground font-mono">
                           {a.input_tokens != null && <span>↓ {a.input_tokens.toLocaleString()} tok</span>}
                           {a.output_tokens != null && <span>↑ {a.output_tokens.toLocaleString()} tok</span>}
                           {a.cost_usd != null && <span>${Number(a.cost_usd).toFixed(4)}</span>}
@@ -192,7 +192,7 @@ export default function Dashboard() {
                     </div>
                   );
                 })}
-                <div className="text-[10px] text-muted text-center pt-1">
+                <div className="text-[10px] text-muted-foreground text-center pt-1">
                   Dettagli completi nella pagina <a href="/agents" className="text-accent hover:underline">Agents</a>
                 </div>
               </div>
@@ -204,7 +204,7 @@ export default function Dashboard() {
         <Card className="lg:col-span-2 flex flex-col h-[80vh]">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">{t('dash.liveStream')}</h2>
-            <Chip tone="on"><span className="inline-block w-1.5 h-1.5 rounded-full bg-ok mr-1.5 animate-pulse" />{t('dash.realtime')}</Chip>
+            <Chip tone="on">{t('dash.realtime')}</Chip>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
             <Kpi icon={<Clock size={14} />} label="Sessione" value={fmtUptime} />
@@ -217,33 +217,20 @@ export default function Dashboard() {
           <div
             ref={streamRef}
             onScroll={onStreamScroll}
-            className="flex-1 overflow-y-auto space-y-2 pr-2 rounded-2xl"
-            style={{
-              backgroundColor: '#0a0a0c',
-              backgroundImage: `linear-gradient(rgba(10,10,12,0.75), rgba(10,10,12,0.75)), url('/pattern-15-themed.svg')`,
-              backgroundSize: 'auto, 33.33% auto',
-              backgroundPosition: 'center, top left',
-              backgroundRepeat: 'no-repeat, repeat',
-              backgroundAttachment: 'local',
-              padding: '0.75rem',
-            }}
+            className="flex-1 overflow-y-auto space-y-2 pr-2 rounded-md border p-3 chat-pattern"
           >
-            {msgs.length === 0 && <div className="text-muted text-sm">{t('dash.noMessages')}</div>}
+            {msgs.length === 0 && <div className="text-muted-foreground text-sm">{t('dash.noMessages')}</div>}
             {msgs.map((m, i) => (
               <div key={m.id ?? i} className={`flex ${m.direction === 'in' ? 'justify-start' : 'justify-end'}`}>
-                <div className={`max-w-[78%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap shadow-md ${
+                <div className={`max-w-[78%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap shadow-sm border ${
                   m.direction === 'in'
-                    ? 'bg-surface2 border border-border text-text'
+                    ? 'bg-card text-card-foreground'
                     : m.direction === 'out'
-                    ? 'border border-accent/40 text-text'
-                    : 'border border-warn/40 text-warn'
-                }`} style={
-                  m.direction === 'out' ? { backgroundColor: '#2a1f3d' }
-                  : m.direction === 'system' ? { backgroundColor: '#2a2210' }
-                  : undefined
-                }>
+                    ? 'bg-primary/15 border-primary/40 text-foreground'
+                    : 'bg-[hsl(var(--warning))]/10 border-[hsl(var(--warning))]/40 text-foreground'
+                }`}>
                   {m.content}
-                  <div className="text-[10px] text-muted mt-1">{new Date(m.ts).toLocaleTimeString()}</div>
+                  <div className="text-[10px] text-muted-foreground mt-1">{new Date(m.ts).toLocaleTimeString()}</div>
                 </div>
               </div>
             ))}
@@ -252,22 +239,22 @@ export default function Dashboard() {
         <Card className="h-[80vh] flex flex-col">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">Attività agente</h2>
-            <Chip tone="on"><span className="inline-block w-1.5 h-1.5 rounded-full bg-ok mr-1.5 animate-pulse" />live</Chip>
+            <Chip tone="on">live</Chip>
           </div>
-          <div className="flex items-center gap-1 mb-3 bg-surface2/40 border border-border rounded-full p-1 w-fit">
+          <div className="flex items-center gap-1 mb-3 bg-surface2/40 border border-border rounded-md p-1 w-fit">
             {(['all', 'mcp', 'native'] as const).map((f) => (
               <button
                 key={f}
                 onClick={() => setToolFilter(f)}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition ${toolFilter === f ? 'bg-accent text-bg' : 'text-muted hover:text-text'}`}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition ${toolFilter === f ? 'bg-accent text-bg' : 'text-muted-foreground hover:text-text'}`}
               >
                 {f === 'all' ? 'Tutto' : f === 'mcp' ? 'MCP' : 'Native'}
               </button>
             ))}
-            <button onClick={() => loadEvents(true)} className="ml-1 px-2 py-1 rounded-full text-xs text-muted hover:text-text" title="Ricarica">↻</button>
+            <button onClick={() => loadEvents(true)} className="ml-1 px-2 py-1 rounded-full text-xs text-muted-foreground hover:text-text" title="Ricarica">↻</button>
           </div>
           <div className="flex-1 overflow-y-auto -mr-2 pr-2">
-            {toolUses.length === 0 && events.length === 0 && <div className="text-muted text-sm">Nessuna attività ancora.</div>}
+            {toolUses.length === 0 && events.length === 0 && <div className="text-muted-foreground text-sm">Nessuna attività ancora.</div>}
             {toolUses.length > 0 && (
               <ul className="space-y-1.5">
                 {toolUses.map((u, i) => {
@@ -281,8 +268,8 @@ export default function Dashboard() {
                           <Tooltip content={
                             <div>
                               <div className="font-semibold mb-1">{meta.label}</div>
-                              <div className="text-muted text-[11px]">{meta.desc}</div>
-                              <div className="text-[10px] text-muted/70 mt-1 font-mono">{u.name}</div>
+                              <div className="text-muted-foreground text-[11px]">{meta.desc}</div>
+                              <div className="text-[10px] text-muted-foreground/70 mt-1 font-mono">{u.name}</div>
                             </div>
                           }>
                             <span className={`shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-md ${isMcp ? 'bg-accent2/15 text-accent2' : 'bg-accent/15 text-accent'}`}>
@@ -293,16 +280,16 @@ export default function Dashboard() {
                             <span className="font-semibold truncate">{meta.label}</span>
                           </Tooltip>
                         </div>
-                        <span className="text-[9px] text-muted font-mono shrink-0">{new Date(tsMs).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                        <span className="text-[9px] text-muted-foreground font-mono shrink-0">{new Date(tsMs).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
                       {u.kind && (
-                        <span className={`inline-block mt-1 mr-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-wider ${u.kind.startsWith('subagent:') ? 'bg-accent2/15 text-accent2 border border-accent2/30' : (u.kind.includes('-') || /^(vault|people|brain|link)_/.test(u.kind) || /^(vault|people|brain|link)-/.test(u.kind)) ? 'bg-accent/15 text-accent border border-accent/30' : 'bg-surface2 text-muted border border-border'}`}>
+                        <span className={`inline-block mt-1 mr-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-wider ${u.kind.startsWith('subagent:') ? 'bg-accent2/15 text-accent2 border border-accent2/30' : (u.kind.includes('-') || /^(vault|people|brain|link)_/.test(u.kind) || /^(vault|people|brain|link)-/.test(u.kind)) ? 'bg-accent/15 text-accent border border-accent/30' : 'bg-surface2 text-muted-foreground border border-border'}`}>
                           {u.kind.startsWith('subagent:') ? `🤖 ${u.kind.slice(9).trim().slice(0, 24)}` : `🧩 ${u.kind}`}
                         </span>
                       )}
                       {u.brief && (
                         <Tooltip content={u.brief}>
-                          <span className="block text-muted mt-1 whitespace-pre-wrap break-all font-mono text-[10px]">{u.brief}</span>
+                          <span className="block text-muted-foreground mt-1 whitespace-pre-wrap break-all font-mono text-[10px]">{u.brief}</span>
                         </Tooltip>
                       )}
                     </li>
@@ -314,19 +301,19 @@ export default function Dashboard() {
               <button
                 onClick={() => loadEvents(false)}
                 disabled={loadingMoreEvents}
-                className="w-full mt-3 py-2 rounded-xl border border-border bg-surface2/40 text-xs text-muted hover:text-text hover:border-accent/40 transition"
+                className="w-full mt-3 py-2 rounded-xl border border-border bg-surface2/40 text-xs text-muted-foreground hover:text-text hover:border-accent/40 transition"
               >
                 {loadingMoreEvents ? 'Carico…' : 'Carica più vecchie'}
               </button>
             )}
             {events.length > 0 && (
               <div className="mt-5">
-                <div className="text-[10px] uppercase tracking-wider text-muted mb-2 font-semibold">{t('dash.connectorEvents')}</div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2 font-semibold">{t('dash.connectorEvents')}</div>
                 <ul className="space-y-2">
                   {events.map((e, i) => (
                     <li key={i} className="text-sm border border-border rounded-xl p-3 bg-surface2/40">
                       <div className="text-xs text-accent2 uppercase">{e.connector} · {e.kind}</div>
-                      <pre className="text-xs text-muted whitespace-pre-wrap mt-1">{JSON.stringify(e.payload, null, 2).slice(0, 400)}</pre>
+                      <pre className="text-xs text-muted-foreground whitespace-pre-wrap mt-1">{JSON.stringify(e.payload, null, 2).slice(0, 400)}</pre>
                     </li>
                   ))}
                 </ul>

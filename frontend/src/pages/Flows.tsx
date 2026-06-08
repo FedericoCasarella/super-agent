@@ -57,18 +57,18 @@ export default function FlowsPage() {
                     <div className="font-semibold truncate">{f.name}</div>
                     <Chip tone={f.enabled ? 'on' : 'warn'}>{f.enabled ? 'attivo' : 'spento'}</Chip>
                   </div>
-                  {f.description && <div className="text-xs text-muted line-clamp-2 mt-1">{f.description}</div>}
-                  <div className="text-[10px] text-muted font-mono mt-2">creato {new Date(f.created_at).toLocaleString('it-IT')}</div>
+                  {f.description && <div className="text-xs text-muted-foreground line-clamp-2 mt-1">{f.description}</div>}
+                  <div className="text-[10px] text-muted-foreground font-mono mt-2">creato {new Date(f.created_at).toLocaleString('it-IT')}</div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
                   <Toggle checked={f.enabled} onChange={() => toggle(f)} />
-                  <button onClick={() => del(f)} className="text-muted hover:text-red-300 p-1"><Trash2 size={13} /></button>
+                  <button onClick={() => del(f)} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
                 </div>
               </div>
             </Card>
           </div>
         ))}
-        {items.length === 0 && <Card><div className="text-muted text-sm">Nessun flow. Crea il primo.</div></Card>}
+        {items.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessun flow. Crea il primo.</div></Card>}
       </div>
     </div>
   );

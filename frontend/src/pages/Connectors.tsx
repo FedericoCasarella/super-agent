@@ -77,8 +77,8 @@ export default function Connectors() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold text-gradient">{t('connectors.title')}</h1>
-      <p className="text-muted text-sm">{t('connectors.intro')} <code className="font-mono text-text">backend/src/connectors/builtin/</code> {t('connectors.intro2')}</p>
-      <h2 className="text-sm uppercase text-muted tracking-wider mt-2">{t('connectors.native')}</h2>
+      <p className="text-muted-foreground text-sm">{t('connectors.intro')} <code className="font-mono text-text">backend/src/connectors/builtin/</code> {t('connectors.intro2')}</p>
+      <h2 className="text-sm uppercase text-muted-foreground tracking-wider mt-2">{t('connectors.native')}</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {items.map((c) => (
           <Card key={c.manifest.name}>
@@ -97,8 +97,8 @@ export default function Connectors() {
                     <Chip>{c.manifest.name}</Chip>
                   )}
                 </div>
-                <p className="text-sm text-muted mt-1">{c.manifest.description}</p>
-                {c.manifest.schedule && <div className="text-xs text-muted mt-2">{t('connectors.schedule')}: <span className="font-mono">{c.manifest.schedule}</span></div>}
+                <p className="text-sm text-muted-foreground mt-1">{c.manifest.description}</p>
+                {c.manifest.schedule && <div className="text-xs text-muted-foreground mt-2">{t('connectors.schedule')}: <span className="font-mono">{c.manifest.schedule}</span></div>}
                 </div>
               </div>
               <Toggle checked={c.enabled} onChange={(v) => toggle(c.manifest.name, v)} />
@@ -152,13 +152,13 @@ export default function Connectors() {
 
       <div className="flex items-center justify-between mt-8">
         <div>
-          <h2 className="text-sm uppercase text-muted tracking-wider">{t('connectors.externalTitle')}</h2>
-          <p className="text-xs text-muted">{t('connectors.externalDesc')}</p>
+          <h2 className="text-sm uppercase text-muted-foreground tracking-wider">{t('connectors.externalTitle')}</h2>
+          <p className="text-xs text-muted-foreground">{t('connectors.externalDesc')}</p>
         </div>
         <Button variant="ghost" size="sm" onClick={refreshExt}>{t('connectors.refresh')}</Button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {externals.length === 0 && <Card><div className="text-muted text-sm">{t('connectors.noneDetected')}</div></Card>}
+        {externals.length === 0 && <Card><div className="text-muted-foreground text-sm">{t('connectors.noneDetected')}</div></Card>}
         {externals.map((e) => (
           <Card key={e.serverName}>
             <div className="flex items-center justify-between">
@@ -166,14 +166,14 @@ export default function Connectors() {
                 <ConnectorIcon name={e.rawName} title={e.serverName} size={24} className="shrink-0" />
                 <div className="min-w-0">
                   <div className="font-semibold">{e.rawName}</div>
-                  <div className="text-xs text-muted font-mono truncate max-w-[26rem]">{e.url}</div>
+                  <div className="text-xs text-muted-foreground font-mono truncate max-w-[26rem]">{e.url}</div>
                 </div>
               </div>
               <Chip tone={e.status === 'connected' ? 'on' : e.status === 'needs_auth' ? 'warn' : 'err'}>
                 {e.status === 'connected' ? t('connectors.connected') : e.status === 'needs_auth' ? t('connectors.needsAuth') : t('connectors.error')}
               </Chip>
             </div>
-            <div className="text-xs text-muted mt-2 font-mono">mcp__{e.serverName}__*</div>
+            <div className="text-xs text-muted-foreground mt-2 font-mono">mcp__{e.serverName}__*</div>
           </Card>
         ))}
       </div>
@@ -182,13 +182,13 @@ export default function Connectors() {
         <div className="text-center space-y-4">
           {waState.status === 'idle' && (
             <>
-              <p className="text-muted text-sm">Avvia la sessione per ricevere messaggi WhatsApp. Verrà mostrato un QR code da scansionare con il tuo telefono.</p>
+              <p className="text-muted-foreground text-sm">Avvia la sessione per ricevere messaggi WhatsApp. Verrà mostrato un QR code da scansionare con il tuo telefono.</p>
               <Button onClick={startWa}>Avvia sessione</Button>
             </>
           )}
           {waState.status === 'starting' && !waState.qr && (
             <>
-              <p className="text-muted text-sm">Avvio in corso… in attesa del QR (15-30s).</p>
+              <p className="text-muted-foreground text-sm">Avvio in corso… in attesa del QR (15-30s).</p>
               <Button variant="ghost" onClick={startWa}>Forza ricarica</Button>
             </>
           )}
@@ -196,15 +196,15 @@ export default function Connectors() {
             <>
               <p className="text-sm">Apri WhatsApp → ⚙ Impostazioni → Dispositivi collegati → Collega un dispositivo. Scansiona:</p>
               <img src={waState.qr} alt="QR" className="mx-auto rounded-2xl border border-border bg-white p-2" />
-              <p className="text-xs text-muted">QR aggiornato live. Se scade, attendi: ne arriva uno nuovo automaticamente.</p>
+              <p className="text-xs text-muted-foreground">QR aggiornato live. Se scade, attendi: ne arriva uno nuovo automaticamente.</p>
               <Button variant="ghost" size="sm" onClick={startWa}>Rigenera QR</Button>
             </>
           )}
           {waState.status === 'connected' && (
             <>
               <Chip tone="on">✅ Connesso</Chip>
-              {waState.me && <p className="text-xs text-muted font-mono">{waState.me.jid}</p>}
-              <p className="text-sm text-muted">Ricevi messaggi automaticamente. Li trovi nel brain in <code className="font-mono text-accent2">inbox/whatsapp/&lt;persona&gt;/</code> e nello stream live.</p>
+              {waState.me && <p className="text-xs text-muted-foreground font-mono">{waState.me.jid}</p>}
+              <p className="text-sm text-muted-foreground">Ricevi messaggi automaticamente. Li trovi nel brain in <code className="font-mono text-accent2">inbox/whatsapp/&lt;persona&gt;/</code> e nello stream live.</p>
               <Button variant="danger" onClick={logoutWa}>Disconnetti / resetta sessione</Button>
             </>
           )}

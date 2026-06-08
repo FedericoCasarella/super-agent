@@ -73,7 +73,7 @@ export default function RoadmapPage() {
     try { await api.roadmapMoveTodo(t.id, h, to); load(); } catch (e: any) { toast.push(e.message, 'err'); }
   }
 
-  if (!data) return <div className="p-6 text-muted">Caricamento…</div>;
+  if (!data) return <div className="p-6 text-muted-foreground">Caricamento…</div>;
 
   return (
     <div className="space-y-5">
@@ -96,23 +96,23 @@ export default function RoadmapPage() {
               <Card key={h.horizon}>
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-2 h-2 rounded-full" style={{ background: M.color }} />
-                  <div className="text-xs uppercase tracking-wider text-muted font-semibold">{M.label}</div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">{M.label}</div>
                 </div>
-                <div className="text-2xl font-semibold">{h.done}<span className="text-muted text-base">/{h.total}</span></div>
+                <div className="text-2xl font-semibold">{h.done}<span className="text-muted-foreground text-base">/{h.total}</span></div>
                 <div className="mt-2 h-1.5 rounded-full bg-surface2/80 overflow-hidden">
                   <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: M.color }} />
                 </div>
-                <div className="text-[10px] text-muted mt-1 font-mono">{pct}% completato</div>
+                <div className="text-[10px] text-muted-foreground mt-1 font-mono">{pct}% completato</div>
               </Card>
             );
           })}
           <Card>
             <div className="flex items-center gap-2 mb-2">
               <BarChart3 size={14} className="text-emerald-300" />
-              <div className="text-xs uppercase tracking-wider text-muted font-semibold">Burn-down 30g</div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Burn-down 30g</div>
             </div>
             <Sparkline points={(stats.burndown as any[]).map((b) => b.count)} color="#34d399" />
-            <div className="text-[10px] text-muted mt-1 font-mono">{(stats.burndown as any[]).reduce((s, b) => s + b.count, 0)} chiusi ultimi 30 gg</div>
+            <div className="text-[10px] text-muted-foreground mt-1 font-mono">{(stats.burndown as any[]).reduce((s, b) => s + b.count, 0)} chiusi ultimi 30 gg</div>
           </Card>
         </div>
       )}
@@ -125,17 +125,17 @@ export default function RoadmapPage() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
           <div className="p-3 rounded-xl bg-surface2/40 border border-border">
-            <div className="text-[10px] uppercase tracking-wider text-muted mb-1 font-semibold">Vision</div>
-            <div className="whitespace-pre-wrap">{data.strategy.vision || <span className="text-muted">—</span>}</div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 font-semibold">Vision</div>
+            <div className="whitespace-pre-wrap">{data.strategy.vision || <span className="text-muted-foreground">—</span>}</div>
           </div>
           <div className="p-3 rounded-xl bg-surface2/40 border border-border">
-            <div className="text-[10px] uppercase tracking-wider text-muted mb-1 font-semibold">Mission</div>
-            <div className="whitespace-pre-wrap">{data.strategy.mission || <span className="text-muted">—</span>}</div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 font-semibold">Mission</div>
+            <div className="whitespace-pre-wrap">{data.strategy.mission || <span className="text-muted-foreground">—</span>}</div>
           </div>
         </div>
         {(data.strategy.pillars?.length ?? 0) > 0 && (
           <div className="mt-3">
-            <div className="text-[10px] uppercase tracking-wider text-muted mb-1.5 font-semibold">Pilastri</div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 font-semibold">Pilastri</div>
             <div className="flex flex-wrap gap-1.5">
               {data.strategy.pillars!.map((p, i) => <Chip key={i} tone="accent">{p}</Chip>)}
             </div>
@@ -156,12 +156,12 @@ export default function RoadmapPage() {
                     <div className="w-2 h-2 rounded-full" style={{ background: M.color }} />
                     <div className="font-semibold">{M.label}</div>
                   </div>
-                  <div className="text-[10px] text-muted mt-0.5">{M.sub} · {list.length} todo</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">{M.sub} · {list.length} todo</div>
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setCreating(h)}><Plus size={13} /></Button>
               </div>
               <div className="space-y-1.5 max-h-[55vh] overflow-y-auto pr-1">
-                {list.length === 0 && <div className="text-xs text-muted py-3 text-center">Nessun todo.</div>}
+                {list.length === 0 && <div className="text-xs text-muted-foreground py-3 text-center">Nessun todo.</div>}
                 {list.map((t) => {
                   const S = STATUS_META[t.status] ?? STATUS_META.pending;
                   const I = S.Icon;
@@ -171,17 +171,17 @@ export default function RoadmapPage() {
                         <I size={16} />
                       </button>
                       <div className="flex-1 min-w-0">
-                        <div className={`text-sm ${t.status === 'done' ? 'line-through text-muted' : ''}`}>{t.title}</div>
+                        <div className={`text-sm ${t.status === 'done' ? 'line-through text-muted-foreground' : ''}`}>{t.title}</div>
                         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                           <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold" style={{ background: S.color + '22', color: S.color, border: `1px solid ${S.color}55` }}>{S.label}</span>
                           {t.priority && t.priority !== 'low' && <span className={`text-[9px] uppercase px-1.5 py-0.5 rounded-full ${t.priority === 'high' ? 'bg-red-500/15 text-red-300 border border-red-400/30' : 'bg-amber-500/15 text-amber-300 border border-amber-400/30'}`}>{t.priority}</span>}
-                          {t.due && <span className="text-[9px] text-muted font-mono">📅 {t.due}</span>}
+                          {t.due && <span className="text-[9px] text-muted-foreground font-mono">📅 {t.due}</span>}
                         </div>
-                        {t.description && <div className="text-xs text-muted mt-1 line-clamp-2">{t.description}</div>}
+                        {t.description && <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{t.description}</div>}
                       </div>
                       <div className="opacity-0 group-hover:opacity-100 transition flex flex-col gap-0.5">
-                        <button onClick={() => setEditing({ horizon: h, todo: t })} className="text-muted hover:text-accent p-0.5"><Edit3 size={11} /></button>
-                        <button onClick={() => del(h, t)} className="text-muted hover:text-red-300 p-0.5"><Trash2 size={11} /></button>
+                        <button onClick={() => setEditing({ horizon: h, todo: t })} className="text-muted-foreground hover:text-accent p-0.5"><Edit3 size={11} /></button>
+                        <button onClick={() => del(h, t)} className="text-muted-foreground hover:text-red-300 p-0.5"><Trash2 size={11} /></button>
                       </div>
                     </div>
                   );
@@ -199,7 +199,7 @@ export default function RoadmapPage() {
           <Button size="sm" variant="ghost" onClick={() => setKpiOpen({ id: '', name: '', current: 0, target: 0 })}><Plus size={13} className="inline mr-1 -mt-0.5" />KPI</Button>
         </div>
         {data.kpis.length === 0 ? (
-          <div className="text-xs text-muted py-3 text-center">Nessun KPI ancora. Aggiungine uno per tracciare metriche.</div>
+          <div className="text-xs text-muted-foreground py-3 text-center">Nessun KPI ancora. Aggiungine uno per tracciare metriche.</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {data.kpis.map((k) => {
@@ -207,8 +207,8 @@ export default function RoadmapPage() {
               const tone = pct >= 90 ? '#34d399' : pct >= 50 ? '#fbbf24' : '#f87171';
               return (
                 <div key={k.id} className="p-3 rounded-xl bg-surface2/40 border border-border cursor-pointer hover:border-accent/30" onClick={() => setKpiOpen(k)}>
-                  <div className="text-xs text-muted uppercase tracking-wider font-semibold">{k.name || 'kpi'}</div>
-                  <div className="text-xl font-semibold mt-1">{k.current}<span className="text-muted text-sm">/{k.target}{k.unit ? ` ${k.unit}` : ''}</span></div>
+                  <div className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">{k.name || 'kpi'}</div>
+                  <div className="text-xl font-semibold mt-1">{k.current}<span className="text-muted-foreground text-sm">/{k.target}{k.unit ? ` ${k.unit}` : ''}</span></div>
                   <div className="mt-2 h-1.5 rounded-full bg-surface/80 overflow-hidden">
                     <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: tone }} />
                   </div>
@@ -227,11 +227,11 @@ export default function RoadmapPage() {
         <Card>
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-base font-semibold">Activity log</h2>
-            <span className="text-[10px] text-muted font-mono">{data.log.length}</span>
+            <span className="text-[10px] text-muted-foreground font-mono">{data.log.length}</span>
           </div>
           <div className="space-y-1 max-h-48 overflow-y-auto text-xs">
             {data.log.slice(-50).reverse().map((e, i) => (
-              <div key={i} className="flex items-start gap-2 text-muted">
+              <div key={i} className="flex items-start gap-2 text-muted-foreground">
                 <span className="font-mono shrink-0">{new Date(e.ts).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                 <span className="flex-1">{e.text}</span>
               </div>
@@ -249,7 +249,7 @@ export default function RoadmapPage() {
 }
 
 function Sparkline({ points, color, small }: { points: number[]; color: string; small?: boolean }) {
-  if (points.length < 2) return <div className="text-[10px] text-muted">—</div>;
+  if (points.length < 2) return <div className="text-[10px] text-muted-foreground">—</div>;
   const w = small ? 120 : 180, h = small ? 24 : 36;
   const max = Math.max(...points, 1);
   const min = Math.min(...points, 0);
@@ -270,7 +270,7 @@ function Modal({ title, onClose, children, footer }: { title: string; onClose: (
       <div onClick={(e) => e.stopPropagation()} className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-3 border-b border-border">
           <div className="font-semibold text-sm">{title}</div>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface2 text-muted hover:text-text"><X size={16} /></button>
+          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface2 text-muted-foreground hover:text-text"><X size={16} /></button>
         </div>
         <div className="overflow-y-auto p-5 flex-1 space-y-3">{children}</div>
         {footer && <div className="px-5 py-3 border-t border-border bg-surface2/30 flex justify-end gap-2">{footer}</div>}

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'node:path';
 
 // Throttle proxy-error logs so a backend restart doesn't spam the dev console.
 // Browser-side WS auto-reconnects with backoff (see frontend/src/ws.ts) — the
@@ -10,6 +11,7 @@ const LOG_EVERY_MS = 15_000;
 
 export default defineConfig({
   plugins: [react()],
+  resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   server: {
     port: 5173,
     proxy: {

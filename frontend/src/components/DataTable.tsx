@@ -1,6 +1,11 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, ChevronLeft, ChevronRight, RefreshCw, X, ArrowUpDown } from 'lucide-react';
-import { Button, Card, Input } from './ui';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 
 // Generic server-paginated table with chip filters. One source of truth for
 // recent-agents / perks / people / outbound / logs pages so they look + feel
@@ -135,22 +140,12 @@ export default function DataTable<T>({
     });
   }
 
-  const toneClasses = (tone?: ChipOption['tone']) => {
-    switch (tone) {
-      case 'accent': return 'bg-accent/15 border-accent/40 text-accent';
-      case 'accent2': return 'bg-accent2/15 border-accent2/40 text-accent2';
-      case 'on': return 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300';
-      case 'warn': return 'bg-amber-500/15 border-amber-400/40 text-amber-300';
-      case 'err': return 'bg-red-500/15 border-red-400/40 text-red-300';
-      default: return 'bg-surface2 border-border text-muted hover:text-text';
-    }
-  };
 
   return (
     <div className="space-y-3 flex-1 min-h-0 flex flex-col">
       <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={qInput}
             onChange={(e) => setQInput(e.target.value)}
@@ -173,18 +168,19 @@ export default function DataTable<T>({
         const cur = filters[f.key] ?? [];
         return (
           <div key={f.key} className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] uppercase tracking-wider text-muted font-semibold mr-1">{f.label}</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mr-1">{f.label}</span>
             {f.options.map((opt) => {
               const active = cur.includes(opt.value);
               return (
-                <button
+                <Badge
                   key={opt.value}
+                  variant={active ? 'default' : 'outline'}
                   onClick={() => toggleFilter(f.key, opt.value, !!f.multi)}
-                  className={`text-[11px] px-2 py-0.5 rounded-full border transition ${active ? toneClasses(opt.tone ?? 'accent') : 'bg-surface2/40 border-border text-muted hover:text-text'}`}
+                  className="cursor-pointer select-none"
                 >
                   {opt.label}
                   {opt.count !== undefined && <span className="ml-1 opacity-60">{opt.count}</span>}
-                </button>
+                </Badge>
               );
             })}
           </div>
@@ -193,71 +189,70 @@ export default function DataTable<T>({
 
       <Card className="!p-0 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="overflow-auto flex-1">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-surface/95 backdrop-blur z-10">
-              <tr className="border-b border-border">
+          <Table>
+            <TableHeader className="sticky top-0 bg-card/95 backdrop-blur z-10">
+              <TableRow>
                 {columns.map((c) => {
                   const isSorted = sort?.key === c.key;
                   return (
-                    <th
+                    <TableHead
                       key={c.key}
                       onClick={() => sortBy(c)}
-                      className={`px-3 py-2 text-[10px] uppercase tracking-wider text-muted font-semibold ${c.width ?? ''} ${c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left'} ${c.sortable ? 'cursor-pointer hover:text-text' : ''}`}
+                      className={`${c.width ?? ''} ${c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left'} ${c.sortable ? 'cursor-pointer hover:text-foreground' : ''}`}
                     >
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider">
                         {c.header}
-                        {c.sortable && <ArrowUpDown size={9} className={isSorted ? 'text-accent' : 'opacity-40'} />}
-                        {isSorted && <span className="text-[8px] text-accent">{sort!.dir === 'asc' ? '↑' : '↓'}</span>}
+                        {c.sortable && <ArrowUpDown size={9} className={isSorted ? 'text-primary' : 'opacity-40'} />}
+                        {isSorted && <span className="text-[8px] text-primary">{sort!.dir === 'asc' ? '↑' : '↓'}</span>}
                       </span>
-                    </th>
+                    </TableHead>
                   );
                 })}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {loading && rows.length === 0 && Array.from({ length: 8 }).map((_, i) => (
-                <tr key={`sk-${i}`} className="border-b border-border/40">
+                <TableRow key={`sk-${i}`}>
                   {columns.map((c) => (
-                    <td key={c.key} className="px-3 py-2">
-                      <div className="h-3 rounded bg-surface2 animate-pulse" style={{ width: `${30 + ((i * c.key.length) % 50)}%` }} />
-                    </td>
+                    <TableCell key={c.key}>
+                      <div className="h-3 rounded bg-muted animate-pulse" style={{ width: `${30 + ((i * c.key.length) % 50)}%` }} />
+                    </TableCell>
                   ))}
-                </tr>
+                </TableRow>
               ))}
               {!loading && err && (
-                <tr><td colSpan={columns.length} className="px-3 py-6 text-center text-red-400 text-xs">{err}</td></tr>
+                <TableRow><TableCell colSpan={columns.length} className="text-center text-destructive text-xs py-6">{err}</TableCell></TableRow>
               )}
               {!loading && !err && rows.length === 0 && (
-                <tr><td colSpan={columns.length} className="px-3 py-8 text-center text-muted text-xs">{emptyText}</td></tr>
+                <TableRow><TableCell colSpan={columns.length} className="text-center text-muted-foreground text-xs py-8">{emptyText}</TableCell></TableRow>
               )}
               {rows.map((r) => (
-                <tr
+                <TableRow
                   key={rowKey(r)}
                   onClick={onRowClick ? () => onRowClick(r) : undefined}
-                  className={`border-b border-border/40 ${onRowClick ? 'cursor-pointer hover:bg-surface2/50' : ''} transition`}
+                  className={onRowClick ? 'cursor-pointer' : ''}
                 >
                   {columns.map((c) => (
-                    <td key={c.key} className={`px-3 py-2 ${c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : ''}`}>
+                    <TableCell key={c.key} className={c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : ''}>
                       {c.render(r)}
-                    </td>
+                    </TableCell>
                   ))}
-                </tr>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
-        <div className="border-t border-border px-3 py-2 flex items-center justify-between text-xs text-muted">
+        <div className="border-t px-3 py-2 flex items-center justify-between text-xs text-muted-foreground">
           <div>
             {total > 0 ? `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, total)} di ${total}` : '0'}
           </div>
           <div className="flex items-center gap-2">
-            <select
-              value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(0); }}
-              className="bg-bg border border-border rounded px-2 py-0.5 text-xs"
-            >
-              {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}/pag</option>)}
-            </select>
+            <Select value={String(pageSize)} onValueChange={(v) => { setPageSize(Number(v)); setPage(0); }}>
+              <SelectTrigger className="h-7 w-[88px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {[10, 25, 50, 100].map((n) => <SelectItem key={n} value={String(n)}>{n}/pag</SelectItem>)}
+              </SelectContent>
+            </Select>
             <Button size="sm" variant="ghost" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading}>
               <ChevronLeft size={14} />
             </Button>

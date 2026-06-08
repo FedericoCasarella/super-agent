@@ -123,16 +123,16 @@ export default function UsageGauge({ collapsed = false }: { collapsed?: boolean 
     <>
       <div className="px-1 py-2">
         <div className="text-[11px] font-semibold mb-1">
-          Limiti piano <span className="text-muted font-normal">· {u.plan.name}</span>
+          Limiti piano <span className="text-muted-foreground font-normal">· {u.plan.name}</span>
         </div>
-        <div className="text-[10px] text-muted mb-1.5">Sessione corrente</div>
+        <div className="text-[10px] text-muted-foreground mb-1.5">Sessione corrente</div>
         <div className="flex items-center gap-2">
           <div className="flex-1 h-1.5 rounded-full bg-surface2/80 overflow-hidden">
             <div className="h-full bg-accent rounded-full transition-all duration-700" style={{ width: `${pct * 100}%` }} />
           </div>
-          <span className="text-[10px] text-muted font-mono shrink-0">{Math.round(pct * 100)}%</span>
+          <span className="text-[10px] text-muted-foreground font-mono shrink-0">{Math.round(pct * 100)}%</span>
         </div>
-        <div className="text-[9px] text-muted mt-1 flex items-center justify-between">
+        <div className="text-[9px] text-muted-foreground mt-1 flex items-center justify-between">
           <span>Reset tra {fmtReset(u.resetAt)}</span>
           {(u.plan as any).manuallyCalibrated && <span className="text-emerald-300/70" title="Calibrato manualmente">✓ cal</span>}
         </div>

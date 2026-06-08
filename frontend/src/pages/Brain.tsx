@@ -81,7 +81,7 @@ export default function Brain() {
   }, []);
 
   const FilterBar = (
-    <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
+    <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1">
       {(['all', 'public', 'protected'] as Filter[]).map((f) => (
         <Button key={f} size="sm" variant={filter === f ? 'primary' : 'ghost'} onClick={() => setFilter(f)}>
           {f === 'all' ? t('brain.all') : f === 'public' ? `◇ ${t('brain.publicLbl')}` : `◆ ${t('brain.protectedLbl')}`}
@@ -90,7 +90,7 @@ export default function Brain() {
     </div>
   );
   const OriginBar = (
-    <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1 flex-wrap">
+    <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1 flex-wrap">
       <Button size="sm" variant={originFilter === 'all' ? 'primary' : 'ghost'} onClick={() => setOriginFilter('all')}>{t('brain.originsAll')}</Button>
       <Button size="sm" variant={originFilter === 'native' ? 'primary' : 'ghost'} onClick={() => setOriginFilter('native')}>{t('brain.originsMine')}</Button>
       {origins.map((e) => (
@@ -102,7 +102,7 @@ export default function Brain() {
     </div>
   );
   const VaultBar = vaults.length >= 1 ? (
-    <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1 flex-wrap">
+    <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1 flex-wrap">
       <Button size="sm" variant={vaultFilter === 'all' ? 'primary' : 'ghost'} onClick={() => setVaultFilter('all')}>🧠 {t('brain.vaultAll')}</Button>
       {vaults.map((v) => (
         <Button key={v} size="sm" variant={vaultFilter === v ? 'primary' : 'ghost'} onClick={() => setVaultFilter(v)}>{v}</Button>
@@ -122,12 +122,12 @@ export default function Brain() {
         </div>
         <div className="flex items-center gap-2 flex-wrap ml-auto">
           {FilterBar}
-          <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
+          <div className="flex gap-1 bg-surface2/70 border border-border rounded-md p-1">
             <Button variant={tab === 'graph' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('graph')}>{t('brain.viewGraph')}</Button>
             <Button variant={tab === 'list' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('list')}>{t('brain.viewList')}</Button>
           </div>
           {tab === 'graph' && (
-            <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1">
+            <div className="flex gap-1 bg-surface2/70 border border-border rounded-md p-1">
               <Button size="sm" variant={view === '2d' ? 'primary' : 'ghost'} onClick={() => setView('2d')}>{t('brain.view2d')}</Button>
               <Button size="sm" variant={view === '3d' ? 'primary' : 'ghost'} onClick={() => setView('3d')}>{t('brain.view3d')}</Button>
             </div>
@@ -182,7 +182,7 @@ export default function Brain() {
               <BrainOverview />
             ) : (
               <div>
-                <div className="text-xs text-muted font-mono mb-2 flex items-center gap-2">
+                <div className="text-xs text-muted-foreground font-mono mb-2 flex items-center gap-2">
                   {note.data?.visibility === 'protected' && <Chip tone="accent">◆ {t('brain.protectedLabel')}</Chip>}
                   {note.data?.visibility === 'public' && <Chip tone="accent2">◇ {t('brain.publicLabel')}</Chip>}
                   <span>{note.path}</span>
@@ -205,7 +205,7 @@ export default function Brain() {
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card className="max-h-[70vh] overflow-y-auto">
-              {items.length === 0 && <div className="text-muted text-sm">Empty.</div>}
+              {items.length === 0 && <div className="text-muted-foreground text-sm">Empty.</div>}
               <ul className="space-y-2">
                 {items.map((n) => (
                   <li key={n.path}>
@@ -227,17 +227,17 @@ export default function Brain() {
                           <Chip>{n.kind}</Chip>
                         </div>
                       </div>
-                      <div className="text-xs text-muted mt-1 font-mono truncate">{n.path}</div>
-                      {n.summary && <div className="text-sm text-muted mt-1 line-clamp-2">{n.summary}</div>}
+                      <div className="text-xs text-muted-foreground mt-1 font-mono truncate">{n.path}</div>
+                      {n.summary && <div className="text-sm text-muted-foreground mt-1 line-clamp-2">{n.summary}</div>}
                     </button>
                   </li>
                 ))}
               </ul>
             </Card>
             <Card className="max-h-[70vh] overflow-y-auto">
-              {!note ? <div className="text-muted text-sm">Select a note.</div> : (
+              {!note ? <div className="text-muted-foreground text-sm">Select a note.</div> : (
                 <div>
-                  <div className="text-xs text-muted font-mono mb-2">{note.path}</div>
+                  <div className="text-xs text-muted-foreground font-mono mb-2">{note.path}</div>
                   <h2 className="text-lg font-semibold mb-3">{note.title || note.path}</h2>
                   <MarkdownView content={note.content} onWikilinkClick={(t) => open(t.endsWith('.md') ? t : `${t}.md`)} />
                 </div>

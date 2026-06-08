@@ -4,16 +4,17 @@ import { api } from './api';
 import { useAuth } from './auth';
 import { QuotaBanner } from './quota';
 import { usePageVisibility, type PageKey } from './pageVisibility';
+import AppSidebar from './components/Sidebar';
+import { SidebarProvider, SidebarTrigger, SidebarInset } from '@/components/ui/sidebar';
+import { ThemeSwitcher } from '@/components/theme-switcher';
+import { Separator } from '@/components/ui/separator';
 
-// Gate route content behind a page-visibility flag. Hidden pages redirect to
-// the dashboard instead of rendering — keeps gated routes from being reachable
-// via bookmarks until the user opts them in from Settings.
 function Gated({ page, children }: { page: PageKey; children: ReactNode }) {
   const { isVisible } = usePageVisibility();
   if (!isVisible(page)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
-import Sidebar from './components/Sidebar';
+
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Connectors from './pages/Connectors';
@@ -32,31 +33,15 @@ import FlowsPage from './pages/Flows';
 import FlowDetail from './pages/FlowDetail';
 import AgentsHub from './pages/AgentsHub';
 import Teams from './pages/Teams';
-import TeamTasks from './pages/TeamTasks';
 import TeamTaskDetail from './pages/TeamTaskDetail';
 import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
 import MessageSound from './components/MessageSound';
 import BrainLoading from './components/BrainLoading';
-import { useBranding } from './branding';
-
-function MobileBrand() {
-  const { branding } = useBranding();
-  return (
-    <>
-      <img src={branding.logoDataUrl || '/rounded-image.png'} alt="" className="w-7 h-7 rounded-lg ring-1 ring-white/10 object-cover" />
-      <span className="text-sm font-semibold text-gradient truncate max-w-[60vw]">{branding.title}</span>
-    </>
-  );
-}
 
 export default function App() {
   const { user, loading } = useAuth();
   const [status, setStatus] = useState<any>(null);
-  const [collapsed, setCollapsed] = useState(() => typeof localStorage !== 'undefined' && localStorage.getItem('sidebar_collapsed') === '1');
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => { try { localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0'); } catch {} }, [collapsed]);
 
   async function refresh() {
     if (!user) return;
@@ -70,32 +55,19 @@ export default function App() {
   if (!status.onboarded) return <Onboarding status={status} onDone={refresh} />;
 
   return (
-    <div className="h-full flex">
+    <SidebarProvider>
       <MessageSound />
-      <Sidebar
-        collapsed={collapsed}
-        mobileOpen={mobileOpen}
-        onToggleCollapse={() => setCollapsed((v) => !v)}
-        onCloseMobile={() => setMobileOpen(false)}
-      />
-      <main className="flex-1 min-w-0 overflow-y-auto">
+      <AppSidebar />
+      <SidebarInset>
+        {/* Topbar: sidebar toggle + page area + theme switcher */}
+        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 backdrop-blur px-4">
+          <SidebarTrigger className="-ml-1" />
+          <Separator orientation="vertical" className="mr-2 h-4" />
+          <div className="flex-1" />
+          <ThemeSwitcher />
+        </header>
         <QuotaBanner />
-        {/* Mobile top bar */}
-        <div className="md:hidden sticky top-0 z-20 glass border-b border-border flex items-center justify-between px-4 py-2.5">
-          <button
-            onClick={() => setMobileOpen(true)}
-            className="w-10 h-10 rounded-xl border border-border bg-surface2/70 flex items-center justify-center text-text hover:border-accent/50 transition"
-            aria-label="Open menu"
-          >
-            <span className="text-lg">≡</span>
-          </button>
-          <div className="flex items-center gap-2">
-            <MobileBrand />
-          </div>
-          <div className="w-10" />
-        </div>
-
-        <div className="p-4 sm:p-6 md:p-8">
+        <div className="p-4 sm:p-6 lg:p-8 min-w-0">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/connectors" element={<Connectors />} />
@@ -122,7 +94,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
-      </main>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

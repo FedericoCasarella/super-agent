@@ -66,28 +66,28 @@ export default function PeoplePage() {
 
   const columns: Column<Person>[] = [
     { key: 'name', header: 'Nome', sortable: true, render: (p) => <span className="font-medium hover:text-accent">{p.name}</span> },
-    { key: 'slug', header: 'Slug', sortable: true, render: (p) => <span className="font-mono text-xs text-muted">{p.slug}</span> },
+    { key: 'slug', header: 'Slug', sortable: true, render: (p) => <span className="font-mono text-xs text-muted-foreground">{p.slug}</span> },
     { key: 'emails', header: 'Email', render: (p) => (
       <div className="text-xs">
-        {(p.emails ?? []).slice(0, 2).map((e) => <div key={e} className="text-muted truncate max-w-[200px]">{e}</div>)}
-        {(p.emails?.length ?? 0) > 2 && <div className="text-[10px] text-muted/70">+{p.emails.length - 2}</div>}
+        {(p.emails ?? []).slice(0, 2).map((e) => <div key={e} className="text-muted-foreground truncate max-w-[200px]">{e}</div>)}
+        {(p.emails?.length ?? 0) > 2 && <div className="text-[10px] text-muted-foreground/70">+{p.emails.length - 2}</div>}
       </div>
     )},
     { key: 'phones', header: 'Telefoni', render: (p) => (
       <div className="text-xs font-mono">
-        {(p.phones ?? []).slice(0, 2).map((ph) => <div key={ph} className="text-muted">{ph}</div>)}
-        {(p.phones?.length ?? 0) > 2 && <div className="text-[10px] text-muted/70">+{p.phones.length - 2}</div>}
+        {(p.phones ?? []).slice(0, 2).map((ph) => <div key={ph} className="text-muted-foreground">{ph}</div>)}
+        {(p.phones?.length ?? 0) > 2 && <div className="text-[10px] text-muted-foreground/70">+{p.phones.length - 2}</div>}
       </div>
     )},
     { key: 'aliases', header: 'Alias', render: (p) => (
       <div className="flex flex-wrap gap-1">
         {(p.aliases ?? []).slice(0, 3).map((a) => (
-          <span key={a} className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface2 border border-border text-muted">{a}</span>
+          <span key={a} className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface2 border border-border text-muted-foreground">{a}</span>
         ))}
-        {(p.aliases?.length ?? 0) > 3 && <span className="text-[10px] text-muted/70">+{p.aliases.length - 3}</span>}
+        {(p.aliases?.length ?? 0) > 3 && <span className="text-[10px] text-muted-foreground/70">+{p.aliases.length - 3}</span>}
       </div>
     )},
-    { key: 'updated', header: 'Ultimo update', sortable: true, render: (p) => <span className="text-xs text-muted font-mono">{fmtDate(p.updated_at)}</span> },
+    { key: 'updated', header: 'Ultimo update', sortable: true, render: (p) => <span className="text-xs text-muted-foreground font-mono">{fmtDate(p.updated_at)}</span> },
     { key: 'psy', header: '', width: 'w-10', render: (p) => p.has_psy ? (
       <button
         onClick={(e) => { e.stopPropagation(); openPsy(p); }}
@@ -161,10 +161,10 @@ export default function PeoplePage() {
                 <BrainCircuit size={18} className="text-accent" />
                 <div>
                   <div className="font-semibold text-sm">{psyPerson.name}</div>
-                  <div className="text-[10px] text-muted font-mono">profilo psicologico</div>
+                  <div className="text-[10px] text-muted-foreground font-mono">profilo psicologico</div>
                 </div>
               </div>
-              <button onClick={() => setPsyPerson(null)} className="p-1.5 rounded-md hover:bg-surface2 text-muted hover:text-text"><X size={16} /></button>
+              <button onClick={() => setPsyPerson(null)} className="p-1.5 rounded-md hover:bg-surface2 text-muted-foreground hover:text-text"><X size={16} /></button>
             </div>
             <div className="overflow-y-auto p-5 flex-1">
               {psyLoading ? (
@@ -174,7 +174,7 @@ export default function PeoplePage() {
               ) : psyNote?.content ? (
                 <MarkdownView content={psyNote.content} />
               ) : (
-                <div className="text-sm text-muted">Profilo non disponibile.</div>
+                <div className="text-sm text-muted-foreground">Profilo non disponibile.</div>
               )}
             </div>
           </div>

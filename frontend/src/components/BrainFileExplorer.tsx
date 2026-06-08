@@ -136,7 +136,7 @@ export default function BrainFileExplorer({
           style={pad}
           title={n.path}
         >
-          <FileIcon size={12} className="shrink-0 text-muted" />
+          <FileIcon size={12} className="shrink-0 text-muted-foreground" />
           <span className="truncate">{n.name}</span>
         </button>
       );
@@ -146,7 +146,7 @@ export default function BrainFileExplorer({
       <div key={n.path}>
         <button
           onClick={() => toggle(n.path)}
-          className="w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-surface2 transition text-muted"
+          className="w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-surface2 transition text-muted-foreground"
           style={pad}
         >
           {open ? <ChevronDown size={11} className="shrink-0" /> : <ChevronRight size={11} className="shrink-0" />}
@@ -161,14 +161,14 @@ export default function BrainFileExplorer({
   return (
     <div className="h-full flex flex-col min-w-[240px] w-[280px]">
       <div className="p-2 border-b border-border flex items-center gap-1.5">
-        <Search size={12} className="text-muted shrink-0" />
+        <Search size={12} className="text-muted-foreground shrink-0" />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Filtra file…"
-          className="flex-1 bg-transparent text-xs focus:outline-none placeholder:text-muted"
+          className="flex-1 bg-transparent text-xs focus:outline-none placeholder:text-muted-foreground"
         />
-        <button onClick={onClose} className="text-muted hover:text-text transition shrink-0" title="Chiudi">
+        <button onClick={onClose} className="text-muted-foreground hover:text-text transition shrink-0" title="Chiudi">
           <X size={13} />
         </button>
       </div>
@@ -187,10 +187,10 @@ export default function BrainFileExplorer({
             })}
           </div>
         )}
-        {!loading && tree.length === 0 && <div className="px-3 py-2 text-xs text-muted">Nessun file.</div>}
+        {!loading && tree.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">Nessun file.</div>}
         {!loading && tree.map((n) => renderNode(n, 0))}
       </div>
-      <div className="border-t border-border px-2 py-1 text-[10px] text-muted">
+      <div className="border-t border-border px-2 py-1 text-[10px] text-muted-foreground">
         {files.length} file totali
       </div>
     </div>

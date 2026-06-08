@@ -9,6 +9,7 @@ import { AuthProvider } from './auth';
 import { BrandingProvider } from './branding';
 import { QuotaProvider } from './quota';
 import { PageVisibilityProvider } from './pageVisibility';
+import { ThemeProvider } from './components/theme-provider';
 import './styles.css';
 
 // Bridge: only `window.alert` rebinds to styled dialog (fire-and-forget OK).
@@ -25,6 +26,7 @@ function NativeDialogBridge() {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
+      <ThemeProvider>
       <ToastProvider>
         <DialogProvider>
           <NativeDialogBridge />
@@ -41,6 +43,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           </AuthProvider>
         </DialogProvider>
       </ToastProvider>
+      </ThemeProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

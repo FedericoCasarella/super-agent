@@ -1,42 +1,77 @@
-import { NavLink } from 'react-router-dom';
-import { useCallback, useEffect, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { useCallback, useState } from 'react';
 import { useI18n } from '../i18n';
 import { useAuth } from '../auth';
-import { Button } from './ui';
-import UsageGauge from './UsageGauge';
-import ActiveAgentsBadge from './ActiveAgentsBadge';
 import { useBranding } from '../branding';
 import { api } from '../api';
 import { useLiveData } from '../ws';
 import { usePageVisibility, type PageKey } from '../pageVisibility';
 import {
+  Sidebar as SbRoot,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarRail,
+} from '@/components/ui/sidebar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
-  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow, Camera as IgIcon,
-  type LucideIcon,
+  Share2, ScrollText, Settings as SettingsIcon, LogOut, MessageCircle,
+  Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow,
+  Camera as IgIcon, type LucideIcon, ChevronsUpDown,
 } from 'lucide-react';
 
-type Props = {
-  collapsed: boolean;
-  mobileOpen: boolean;
-  onToggleCollapse: () => void;
-  onCloseMobile: () => void;
-};
+function humanizeIn(ms: number): string {
+  if (ms <= 0) return 'a momenti';
+  const min = Math.floor(ms / 60000);
+  if (min < 60) return `tra ${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `tra ${h}h ${m ? `${m}m` : ''}`.trim();
+}
 
-export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onCloseMobile }: Props) {
+export default function AppSidebar() {
   const { t } = useI18n();
   const { user, logout } = useAuth();
   const { branding } = useBranding();
-  // Tasks running counter — WS-driven via team_task events, long fallback safety.
   const [tasksRunning, setTasksRunning] = useState(0);
   const loadTasksRunning = useCallback(async () => {
     try { const r = await api.teamTasksRunningCount(); setTasksRunning(r.running); } catch {}
   }, []);
   useLiveData(loadTasksRunning, { refreshOn: ['team_task'], fallbackMs: 120_000 });
 
+  // Claude session usage card data
+  const [usage, setUsage] = useState<{ percent: number; resetIn: string | null; plan: string | null } | null>(null);
+  const loadUsage = useCallback(async () => {
+    try {
+      const r: any = await api.usage();
+      if (!r) return setUsage(null);
+      const budget = r.plan?.costBudgetUsd ?? 0;
+      const percent = budget > 0 ? Math.min(100, Math.round(((r.costUsd ?? 0) / budget) * 100)) : 0;
+      const resetAt = r.resetAt ? new Date(r.resetAt) : null;
+      const resetIn = resetAt ? humanizeIn(resetAt.getTime() - Date.now()) : null;
+      setUsage({
+        percent,
+        resetIn,
+        plan: r.plan?.name ?? null,
+      });
+    } catch {}
+  }, []);
+  useLiveData(loadUsage, { refreshOn: ['usage'], fallbackMs: 60_000 });
+
   const { isVisible } = usePageVisibility();
-  // Each item can carry an optional `gate` PageKey — if set, the entry is
-  // hidden when that page has been toggled off in Settings.
-  const allItems: { to: string; label: string; icon: LucideIcon; badge?: number; gate?: PageKey }[] = [
+  const location = useLocation();
+  type NavItem = { to: string; label: string; icon: LucideIcon; badge?: number; gate?: PageKey };
+  const items: NavItem[] = ([
     { to: '/', label: t('nav.live'), icon: Activity },
     { to: '/connectors', label: t('nav.connectors'), icon: Plug },
     { to: '/brain', label: t('nav.brain'), icon: Brain },
@@ -52,92 +87,116 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onClo
     { to: '/outbound', label: 'Inviati', icon: Send, gate: 'outbound' },
     { to: '/logs', label: 'Logs', icon: ScrollText, gate: 'logs' },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
-  ];
-  const items = allItems.filter((it) => !it.gate || isVisible(it.gate));
-  const widthClass = collapsed ? 'md:w-[72px]' : 'md:w-64';
+  ] as NavItem[]).filter((it) => !it.gate || isVisible(it.gate as PageKey));
+
+  const initials = (user?.name || user?.email || 'U')
+    .split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
 
   return (
-    <>
-      {/* Mobile backdrop */}
-      {mobileOpen && (
-        <div className="fixed inset-0 z-30 bg-bg/60 backdrop-blur-sm md:hidden animate-fade-in" onClick={onCloseMobile} />
-      )}
-
-      <aside
-        className={[
-          'glass border-r border-border flex flex-col gap-1 p-3 shrink-0 overflow-hidden',
-          'fixed inset-y-0 left-0 z-40 w-64',
-          'md:static md:h-screen md:translate-x-0 transition-transform duration-300 ease-out-expo',
-          widthClass,
-          mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
-        ].join(' ')}
-      >
-        <div className={`flex items-center gap-3 px-2 py-3 animate-fade-in ${collapsed ? 'md:justify-center' : ''}`}>
-          <div className="relative shrink-0">
-            <div className="absolute inset-0 rounded-2xl bg-accent/30 blur-xl animate-soft-pulse" />
-            <img src={branding.logoDataUrl || '/rounded-image.png'} alt={branding.title} className="relative w-11 h-11 rounded-2xl ring-1 ring-white/10 shadow-lg object-cover" />
-          </div>
-          <div className={collapsed ? 'md:hidden' : ''}>
-            <div className="text-base font-semibold tracking-tight text-gradient truncate">{branding.title}</div>
-            {branding.subtitle && <div className="text-[10px] uppercase tracking-[0.18em] text-muted truncate">{branding.subtitle}</div>}
+    <SbRoot variant="inset" collapsible="icon">
+      <SidebarHeader>
+        <div className="flex items-center gap-2 px-2 py-1.5">
+          <img
+            src={branding.logoDataUrl || '/rounded-image.png'}
+            alt={branding.title}
+            className="h-9 w-9 rounded-lg object-cover shadow"
+          />
+          <div className="flex flex-col min-w-0 group-data-[collapsible=icon]:hidden">
+            <span className="font-semibold text-sm tracking-tight truncate">{branding.title}</span>
+            {branding.subtitle && (
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground truncate">
+                {branding.subtitle}
+              </span>
+            )}
           </div>
         </div>
+      </SidebarHeader>
 
-        <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-1 mt-2 pr-1 sidebar-scroll">
-          {items.map((it, i) => {
-            const Icon = it.icon;
-            return (
-              <NavLink
-                key={it.to}
-                to={it.to}
-                end
-                onClick={onCloseMobile}
-                title={collapsed ? it.label : undefined}
-                style={{ animationDelay: `${i * 30}ms` }}
-                className={({ isActive }) =>
-                  `group relative flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm transition-all duration-200 ease-out-expo animate-slide-up ${
-                    collapsed ? 'md:justify-center md:px-0' : ''
-                  } ${
-                    isActive
-                      ? 'bg-gradient-to-r from-accent/15 to-accent2/10 text-text border border-accent/30 shadow-[0_0_22px_-8px_rgba(192,132,252,0.6)]'
-                      : 'text-muted hover:text-text hover:bg-surface2/60 hover:translate-x-0.5'
-                  }`
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    {isActive && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-gradient-to-b from-accent to-accent2" />}
-                    <Icon size={18} className={isActive ? 'text-accent2' : 'text-accent/70 group-hover:text-accent2'} />
-                    <span className={`flex-1 ${collapsed ? 'md:hidden' : ''}`}>{it.label}</span>
-                    {it.badge != null && (
-                      <span className={`text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 animate-pulse ${collapsed ? 'md:hidden' : ''}`}>{it.badge}</span>
-                    )}
-                  </>
-                )}
-              </NavLink>
-            );
-          })}
-        </nav>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Navigazione</SidebarGroupLabel>
+          <SidebarMenu>
+            {items.map((it) => {
+              const Icon = it.icon;
+              const isActive = it.to === '/' ? location.pathname === '/' : location.pathname.startsWith(it.to);
+              return (
+                <SidebarMenuItem key={it.to}>
+                  <SidebarMenuButton asChild isActive={isActive} tooltip={it.label}>
+                    <Link to={it.to}>
+                      <Icon />
+                      <span className="flex-1 text-left">{it.label}</span>
+                      {it.badge != null && (
+                        <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--success))]/20 text-[hsl(var(--success))]">
+                          {it.badge}
+                        </span>
+                      )}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarMenu>
+        </SidebarGroup>
+      </SidebarContent>
 
-        <div className="shrink-0 px-1 pt-4 border-t border-border/60 space-y-2">
-          <ActiveAgentsBadge collapsed={collapsed} />
-          <UsageGauge collapsed={collapsed} />
-          {!collapsed && <div className="text-xs text-muted truncate font-medium px-1">{user?.name || user?.email}</div>}
-          <Button variant="ghost" size="sm" className={`w-full ${collapsed ? 'md:px-2' : ''}`} onClick={logout}>
-            {collapsed ? <LogOut size={16} /> : (<><LogOut size={14} className="inline mr-1.5 -mt-0.5" />{t('nav.logout')}</>)}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="hidden md:flex w-full"
-            onClick={onToggleCollapse}
-            title={collapsed ? t('nav.expand') : t('nav.collapseTip')}
-          >
-            {collapsed ? <ChevronsRight size={16} /> : (<><ChevronsLeft size={14} className="inline mr-1.5 -mt-0.5" />{t('nav.collapse')}</>)}
-          </Button>
-          <div className={`text-[10px] text-muted/70 text-center tracking-widest ${collapsed ? 'md:hidden' : ''}`}>v0.1.0</div>
-        </div>
-      </aside>
-    </>
+      <SidebarFooter>
+        {usage && (
+          <Card className="group-data-[collapsible=icon]:hidden p-3 bg-sidebar-accent/40 border-sidebar-border">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span>Claude • {usage.plan ?? 'Plan'}</span>
+              <span className="font-mono">{usage.percent}%</span>
+            </div>
+            <div className="mt-1.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-primary transition-all duration-500"
+                style={{ width: `${usage.percent}%` }}
+              />
+            </div>
+            {usage.resetIn && (
+              <div className="mt-1.5 text-[10px] text-muted-foreground">Reset {usage.resetIn}</div>
+            )}
+          </Card>
+        )}
+
+        {/* User popover — clicked-on avatar opens a panel with details + logout */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button className="flex items-center gap-2 rounded-md p-2 hover:bg-sidebar-accent transition-colors text-left">
+              <Avatar className="h-8 w-8 rounded-lg">
+                <AvatarImage src={(user as any)?.avatar_url ?? undefined} alt={user?.name || user?.email} />
+                <AvatarFallback className="rounded-lg text-xs">{initials}</AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
+                <div className="text-sm font-medium truncate">{user?.name || 'User'}</div>
+                <div className="text-[11px] text-muted-foreground truncate">{user?.email}</div>
+              </div>
+              <ChevronsUpDown className="ml-auto h-4 w-4 text-muted-foreground group-data-[collapsible=icon]:hidden" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="start" sideOffset={8} className="w-60 p-0">
+            <div className="p-3 flex items-center gap-2 border-b">
+              <Avatar className="h-9 w-9 rounded-lg">
+                <AvatarImage src={(user as any)?.avatar_url ?? undefined} alt={user?.name || user?.email} />
+                <AvatarFallback className="rounded-lg text-xs">{initials}</AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{user?.name || 'User'}</div>
+                <div className="text-xs text-muted-foreground truncate">{user?.email}</div>
+              </div>
+            </div>
+            <div className="p-1">
+              <Link to="/settings" className="flex items-center gap-2 w-full px-3 py-1.5 rounded-sm text-sm hover:bg-accent/10">
+                <SettingsIcon className="h-4 w-4" /> Impostazioni
+              </Link>
+              <Separator className="my-1" />
+              <Button variant="ghost" size="sm" className="w-full justify-start text-destructive" onClick={logout}>
+                <LogOut className="h-4 w-4" /> Esci
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </SidebarFooter>
+      <SidebarRail />
+    </SbRoot>
   );
 }

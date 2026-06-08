@@ -17,7 +17,7 @@ function ColorRow({ label, hint, value, onChange }: { label: string; hint?: stri
     >
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium truncate">{label}</span>
-        {hint && <span className="text-[10px] text-muted truncate">{hint}</span>}
+        {hint && <span className="text-[10px] text-muted-foreground truncate">{hint}</span>}
       </div>
       <div className="flex items-center gap-2">
         <span className="relative shrink-0 inline-block w-7 h-7 rounded-md ring-1 ring-white/10" style={{ background: value }}>
@@ -66,7 +66,7 @@ export default function BrainColorsEditor({ onSaved }: { onSaved?: () => void })
   return (
     <div className="space-y-5">
       <section>
-        <div className="text-[11px] uppercase tracking-wider text-muted mb-2 font-semibold">Visibilità</div>
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Visibilità</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {Object.entries(c.visibility).map(([k, v]) => (
             <ColorRow key={k} label={VIS_LABELS[k] ?? k} value={v} onChange={(x) => patch('visibility', k, x)} />
@@ -74,7 +74,7 @@ export default function BrainColorsEditor({ onSaved }: { onSaved?: () => void })
         </div>
       </section>
       <section>
-        <div className="text-[11px] uppercase tracking-wider text-muted mb-2 font-semibold">Per categoria</div>
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Per categoria</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {Object.entries(c.kind).map(([k, v]) => (
             <ColorRow key={k} label={KIND_LABELS[k] ?? k} value={v} onChange={(x) => patch('kind', k, x)} />
@@ -82,7 +82,7 @@ export default function BrainColorsEditor({ onSaved }: { onSaved?: () => void })
         </div>
       </section>
       <section>
-        <div className="text-[11px] uppercase tracking-wider text-muted mb-2 font-semibold">Fallback</div>
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Fallback</div>
         <ColorRow label="Default" hint="Nodo senza visibilità né kind noti" value={c.default} onChange={(x) => patch('default', null, x)} />
       </section>
       <div className="flex justify-between gap-2 pt-3 border-t border-border">
