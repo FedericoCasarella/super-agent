@@ -33,5 +33,9 @@ export type Connector = {
   manifest: ConnectorManifest;
   onTick?: (ctx: ConnectorContext) => Promise<void>;
   onMessage?: (ctx: ConnectorContext, message: string) => Promise<void>;
+  // Fired after the user saves the connector config (PUT /connectors/:name).
+  // Use for side-effects that depend on the saved value: registering external
+  // resources, refreshing caches, etc.
+  onConfigSaved?: (ctx: ConnectorContext) => Promise<void>;
   tools?: ConnectorTool[];
 };

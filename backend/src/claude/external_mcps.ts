@@ -51,6 +51,19 @@ export async function refreshExternalMcps(): Promise<ExternalMcp[]> {
   });
 }
 
+// Claude prefixes MCP tools as `mcp__<internalServerName>__<tool>`, but
+// `claude mcp list` shows the *display* name (e.g. "claude.ai flowspace"),
+// not the actual internal server id (which can be a UUID for claude.ai-scope
+// MCPs). Mapping display→internal isn't possible from the CLI output, so we
+// just allow all MCP tools via a wildcard. Users can still gate per-MCP by
+// disabling servers in claude.ai or removing them with `claude mcp remove`.
+// Claude CLI requires `mcp__<server>__<toolPattern>` for allow rules.
+// Bare `mcp__*` is rejected ("Wildcard tool name not supported in allow rules").
+// Server names are normalize(rawName): "claude.ai flowspace" → "claude_ai_flowspace".
+// We emit one wildcard per connected server. needs_auth excluded — Claude treats
+// them as connectable and may try calls that hang.
 export function externalMcpAllowEntries(): string[] {
-  return cache.filter((x) => x.status === 'connected').map((x) => `mcp__${x.serverName}`);
+  return cache
+    .filter((x) => x.status === 'connected')
+    .map((x) => `mcp__${x.serverName}__*`);
 }

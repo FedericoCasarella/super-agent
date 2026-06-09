@@ -150,6 +150,26 @@ router.put('/connectors/:name', async (req, res) => {
     [req.user!.id, req.params.name, enabled ?? null, cfgJson]
   );
   bus.emit('connectors:changed');
+  // Fire connector's onConfigSaved hook so side-effects (e.g. registering
+  // external resources) run immediately.
+  try {
+    const { getConnector } = await import('../connectors/registry.js');
+    const conn = getConnector(req.params.name);
+    if (conn?.onConfigSaved) {
+      const rows = await query<{ config: any; state: any }>(
+        `SELECT config, state FROM connectors WHERE user_id=$1 AND name=$2`,
+        [req.user!.id, req.params.name],
+      );
+      const r = rows[0] ?? { config: {}, state: {} };
+      await conn.onConfigSaved({
+        userId: req.user!.id,
+        config: r.config ?? {},
+        state: r.state ?? {},
+        saveState: async () => {},
+        log: (msg, meta) => console.log(`[${req.params.name}:u${req.user!.id}] ${msg}`, meta ?? ''),
+      });
+    }
+  } catch (e) { console.error(`[connectors:${req.params.name}] onConfigSaved`, e); }
   res.json({ ok: true });
 });
 

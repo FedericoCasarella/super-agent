@@ -3,7 +3,7 @@ import path from 'node:path';
 import { config } from '../config.js';
 import { MCP_CONFIG_PATH, MCP_SERVER_NAME } from '../mcp/config.js';
 import { query } from '../db/index.js';
-import { externalMcpAllowEntries } from './external_mcps.js';
+import { externalMcpAllowEntries, refreshExternalMcps } from './external_mcps.js';
 import { listVaults } from '../brain/vaults.js';
 import { bus } from '../bus.js';
 
@@ -133,6 +133,12 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     args.push('--append-system-prompt', opts.systemPrompt);
   }
   if (opts.useMcp !== false) {
+    // Pre-warm claude.ai-scope OAuth tokens. `claude mcp list` health-checks
+    // every server, triggering Claude CLI's silent refresh path via the
+    // Keychain-stored refresh_token. Without this, tokens expire at the
+    // ~20min mark mid-run and the MCP server returns "session expired" on
+    // first tool call. ~1-2s cost per turn — worth it.
+    try { await refreshExternalMcps(); } catch {}
     args.push('--mcp-config', MCP_CONFIG_PATH);
   }
   const allowed = opts.allowedTools ?? [

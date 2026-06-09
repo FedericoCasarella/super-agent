@@ -103,7 +103,7 @@ export async function startScheduler() {
   });
   console.log('[scheduler] brain-snapshot loop armed (daily 00:00, all users)');
 
-  // Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
+// Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
   // wa_messages and run bonifyWaMessages(onlyChat=jid). Skips quiet/disabled.
   let bonifyRunning = false;
   cron.schedule('*/5 * * * *', async () => {
