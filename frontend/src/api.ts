@@ -37,6 +37,10 @@ export const api = {
   brainTree: () => req<{ root: string | null; files: string[] }>('/brain/tree'),
   brainGraph: () => req<{ nodes: any[]; links: any[] }>('/brain/graph'),
   brainNote: (path: string) => req<any>(`/brain/note?path=${encodeURIComponent(path)}`),
+  brainNoteSave: (path: string, content: string, data?: any) =>
+    req<{ ok: boolean }>('/brain/note', { method: 'PUT', body: JSON.stringify({ path, content, data }) }),
+  brainNoteDelete: (path: string) =>
+    req<{ ok: boolean }>(`/brain/note?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
   callTool: (name: string, args: any = {}) => req<any>(`/tools/${name}`, { method: 'POST', body: JSON.stringify(args) }),
   logs: (opts: { kinds?: string[]; statuses?: string[]; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();

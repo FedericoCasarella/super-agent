@@ -244,6 +244,68 @@ router.get('/brain/note', async (req, res) => {
   res.json(note);
 });
 
+// Save edited note content. Supports `<vault>::<rel>` ids. Keeps existing
+// frontmatter (data passed back from FE) so `gray-matter` re-serializes.
+router.put('/brain/note', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.body?.path ?? '');
+    const content = String(req.body?.content ?? '');
+    const frontmatter = req.body?.data && typeof req.body.data === 'object' ? req.body.data : {};
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const matter = (await import('gray-matter')).default;
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    const full = path.join(vaultRoot, rel);
+    const md = matter.stringify(content, frontmatter);
+    await fs.mkdir(path.dirname(full), { recursive: true });
+    await fs.writeFile(full, md, 'utf8');
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Delete note from disk. Supports `<vault>::<rel>` ids.
+router.delete('/brain/note', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.query.path ?? '');
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    const full = path.join(vaultRoot, rel);
+    await fs.unlink(full);
+    // Also drop the row from brain_index if present.
+    try { await query(`DELETE FROM brain_index WHERE user_id=$1 AND path=$2`, [userId, rel]); } catch {}
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 router.get('/brain/stats', async (req, res) => {
   const userId = req.user!.id;
   const fs = await import('node:fs/promises');

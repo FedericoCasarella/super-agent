@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { ChevronRight, ChevronDown, File as FileIcon, Folder, FolderOpen, Search, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, File as FileIcon, Folder, FolderOpen, Search, X, Trash2 } from 'lucide-react';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 
 // Obsidian-style file explorer. Renders vault files as a nested folder tree.
 // Click a file → calls onSelect(relPath). Caller wires that to graph focus
@@ -78,11 +84,12 @@ function lsGet(key: string, fallback: string[]): Set<string> {
 function lsSet(key: string, s: Set<string>) { try { localStorage.setItem(key, JSON.stringify(Array.from(s))); } catch {} }
 
 export default function BrainFileExplorer({
-  selectedPath, onSelect, onClose,
+  selectedPath, onSelect, onClose, onDelete,
 }: {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onClose: () => void;
+  onDelete?: (path: string) => void;
 }) {
   const [files, setFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,16 +136,32 @@ export default function BrainFileExplorer({
     if (n.kind === 'file') {
       const active = selectedPath === n.path;
       return (
-        <button
-          key={n.path}
-          onClick={() => onSelect(n.path)}
-          className={`w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-surface2 transition ${active ? 'bg-accent/15 text-accent' : 'text-text'}`}
-          style={pad}
-          title={n.path}
-        >
-          <FileIcon size={12} className="shrink-0 text-muted-foreground" />
-          <span className="truncate">{n.name}</span>
-        </button>
+        <ContextMenu key={n.path}>
+          <ContextMenuTrigger asChild>
+            <button
+              onClick={() => onSelect(n.path)}
+              className={`w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-accent/10 transition ${active ? 'bg-accent/15 text-foreground' : 'text-foreground/80'}`}
+              style={pad}
+              title={n.path}
+            >
+              <FileIcon size={12} className="shrink-0 text-muted-foreground" />
+              <span className="truncate">{n.name}</span>
+            </button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={() => onSelect(n.path)}>
+              <FileIcon className="h-3.5 w-3.5" /> Apri
+            </ContextMenuItem>
+            {onDelete && (
+              <ContextMenuItem
+                onSelect={() => onDelete(n.path)}
+                className="text-destructive focus:text-destructive focus:bg-destructive/10"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Elimina
+              </ContextMenuItem>
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
       );
     }
     const open = isExpanded(n.path);

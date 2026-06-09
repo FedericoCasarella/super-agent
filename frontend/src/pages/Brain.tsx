@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Input, Modal, Field, useToast } from '../components/ui';
+import { Textarea } from '@/components/ui/textarea';
+import { useDialog } from '../components/dialog';
+import { Edit3, Save as SaveIcon, X as XIcon, Trash2, Eye } from 'lucide-react';
 import BrainGraph3D from '../components/BrainGraph3D';
 import BrainGraph3DConstellation from '../components/BrainGraph3DConstellation';
 import MarkdownView from '../components/MarkdownView';
@@ -41,6 +44,7 @@ export default function Brain() {
   const [nvSeed, setNvSeed] = useState(true);
   const [nvBusy, setNvBusy] = useState(false);
   const toast = useToast();
+  const dlg = useDialog();
   async function createVault() {
     setNvBusy(true);
     try {
@@ -143,6 +147,16 @@ export default function Brain() {
                 selectedPath={note?.path ?? null}
                 onSelect={(p) => open(p)}
                 onClose={() => setExplorerOpen(false)}
+                onDelete={async (p) => {
+                  if (!await dlg.confirm(`Eliminare la nota "${p}"?\n\nIrreversibile.`, { tone: 'danger', confirmLabel: 'Elimina' })) return;
+                  try {
+                    await api.brainNoteDelete(p);
+                    toast.push('Nota eliminata', 'on');
+                    if (note?.path === p) setNote(null);
+                    setGraphKey((k) => k + 1);
+                    reloadList();
+                  } catch (e: any) { toast.push(e?.message ?? 'Errore', 'err'); }
+                }}
               />
             </Card>
           )}
@@ -181,18 +195,16 @@ export default function Brain() {
             {!note ? (
               <BrainOverview />
             ) : (
-              <div>
-                <div className="text-xs text-muted-foreground font-mono mb-2 flex items-center gap-2">
-                  {note.data?.visibility === 'protected' && <Chip tone="accent">◆ {t('brain.protectedLabel')}</Chip>}
-                  {note.data?.visibility === 'public' && <Chip tone="accent2">◇ {t('brain.publicLabel')}</Chip>}
-                  <span>{note.path}</span>
-                </div>
-                <h2 className="text-lg font-semibold mb-3">{note.title || note.path}</h2>
-                <div className="flex flex-wrap gap-1 mb-3">
-                  {(note.tags ?? []).map((t: string) => <Chip key={t}>{t}</Chip>)}
-                </div>
-                <MarkdownView content={note.content} onWikilinkClick={(t) => open(t.endsWith('.md') ? t : `${t}.md`)} />
-              </div>
+              <NotePane
+                note={note}
+                onOpenWikilink={(t) => open(t.endsWith('.md') ? t : `${t}.md`)}
+                onSaved={(updated) => setNote(updated)}
+                onDelete={async () => {
+                  if (!await dlg.confirm(`Eliminare la nota "${note.path}"?\n\nQuesta azione è irreversibile.`, { tone: 'danger', confirmLabel: 'Elimina' })) return;
+                  try { await api.brainNoteDelete(note.path); toast.push('Nota eliminata', 'on'); setNote(null); setGraphKey((k) => k + 1); reloadList(); }
+                  catch (e: any) { toast.push(e?.message ?? 'Errore', 'err'); }
+                }}
+              />
             )}
           </Card>
           </div>
@@ -265,6 +277,90 @@ export default function Brain() {
           </label>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+// Editable note pane: read-only markdown render by default, "Modifica" switches
+// to a textarea with autosize + Cmd/Ctrl+S to save + Esc to cancel.
+function NotePane({
+  note,
+  onOpenWikilink,
+  onSaved,
+  onDelete,
+}: {
+  note: any;
+  onOpenWikilink: (target: string) => void;
+  onSaved: (updated: any) => void;
+  onDelete: () => void;
+}) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>(note.content ?? '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setDraft(note.content ?? ''); setEditing(false); }, [note.path]);
+  const dirty = draft !== (note.content ?? '');
+  async function save() {
+    setSaving(true);
+    try {
+      await api.brainNoteSave(note.path, draft, note.data ?? {});
+      onSaved({ ...note, content: draft });
+      toast.push('Salvato', 'on');
+      setEditing(false);
+    } catch (e: any) { toast.push(e?.message ?? 'Errore', 'err'); }
+    finally { setSaving(false); }
+  }
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') { setDraft(note.content ?? ''); setEditing(false); }
+  }
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <div className="text-xs text-muted-foreground font-mono flex items-center gap-2 min-w-0">
+          {note.data?.visibility === 'protected' && <Chip tone="accent">◆ {t('brain.protectedLabel')}</Chip>}
+          {note.data?.visibility === 'public' && <Chip tone="accent2">◇ {t('brain.publicLabel')}</Chip>}
+          <span className="truncate">{note.path}</span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {editing ? (
+            <>
+              <Button size="sm" variant="ghost" onClick={() => { setDraft(note.content ?? ''); setEditing(false); }} disabled={saving}>
+                <XIcon size={13} className="mr-1" /> Annulla
+              </Button>
+              <Button size="sm" onClick={save} disabled={saving || !dirty}>
+                <SaveIcon size={13} className="mr-1" /> {saving ? 'Salvo…' : 'Salva'}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+                <Edit3 size={13} className="mr-1" /> Modifica
+              </Button>
+              <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={onDelete}>
+                <Trash2 size={13} className="mr-1" /> Elimina
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+      <h2 className="text-lg font-semibold mb-3">{note.title || note.path}</h2>
+      <div className="flex flex-wrap gap-1 mb-3">
+        {(note.tags ?? []).map((tag: string) => <Chip key={tag}>{tag}</Chip>)}
+      </div>
+      {editing ? (
+        <Textarea
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
+          className="flex-1 min-h-[60vh] font-mono text-sm"
+          placeholder="Scrivi qui in markdown — Cmd/Ctrl+S per salvare, Esc per annullare"
+        />
+      ) : (
+        <MarkdownView content={note.content} onWikilinkClick={onOpenWikilink} />
+      )}
     </div>
   );
 }
