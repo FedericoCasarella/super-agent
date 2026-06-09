@@ -36,6 +36,7 @@ import Teams from './pages/Teams';
 import TeamTaskDetail from './pages/TeamTaskDetail';
 import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
+import Snapshots from './pages/Snapshots';
 import MessageSound from './components/MessageSound';
 import BrainLoading from './components/BrainLoading';
 
@@ -90,6 +91,7 @@ export default function App() {
             <Route path="/teams" element={<Gated page="teams"><Teams /></Gated>} />
             <Route path="/team-tasks" element={<Navigate to="/tasks?tab=team" replace />} />
             <Route path="/team-tasks/:id" element={<TeamTaskDetail />} />
+            <Route path="/snapshots" element={<Snapshots />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

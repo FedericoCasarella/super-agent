@@ -306,6 +306,48 @@ router.delete('/brain/note', async (req, res) => {
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// Brain snapshots: nightly backups + manual trigger.
+router.get('/brain/snapshots', async (req, res) => {
+  try {
+    const { listSnapshots } = await import('../brain/snapshots.js');
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 25), 1), 200);
+    const offset = Math.max(Number(req.query.offset ?? 0), 0);
+    const vault = req.query.vault ? String(req.query.vault) : undefined;
+    res.json(await listSnapshots(req.user!.id, { vault, limit, offset }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/brain/snapshots/run', async (req, res) => {
+  try {
+    const { createSnapshots } = await import('../brain/snapshots.js');
+    res.json({ ok: true, snapshots: await createSnapshots(req.user!.id, 'manual') });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/brain/snapshots/:id/restore', async (req, res) => {
+  try {
+    const { restoreSnapshot } = await import('../brain/snapshots.js');
+    res.json(await restoreSnapshot(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/brain/snapshots/:id', async (req, res) => {
+  try {
+    const { deleteSnapshot } = await import('../brain/snapshots.js');
+    res.json(await deleteSnapshot(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/brain/snapshots/dir', async (req, res) => {
+  try {
+    const { getSnapshotRoot } = await import('../brain/snapshots.js');
+    res.json({ dir: await getSnapshotRoot(req.user!.id) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/brain/snapshots/dir', async (req, res) => {
+  try {
+    const { setSnapshotRoot, getSnapshotRoot } = await import('../brain/snapshots.js');
+    await setSnapshotRoot(req.user!.id, String(req.body?.dir ?? ''));
+    res.json({ ok: true, dir: await getSnapshotRoot(req.user!.id) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 router.get('/brain/stats', async (req, res) => {
   const userId = req.user!.id;
   const fs = await import('node:fs/promises');

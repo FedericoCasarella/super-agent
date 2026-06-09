@@ -720,3 +720,24 @@ DO $$ BEGIN
     ALTER TABLE wa_contacts ADD COLUMN display_phone TEXT;
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
+
+-- Brain snapshots: nightly copy of each vault + counts of nodes/links/files.
+-- A snapshot row maps to a directory on disk holding the copied .md tree.
+CREATE TABLE IF NOT EXISTS brain_snapshots (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  vault_name TEXT NOT NULL,
+  vault_path TEXT NOT NULL,
+  snapshot_dir TEXT NOT NULL,
+  file_count INT NOT NULL DEFAULT 0,
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  neurons_count INT NOT NULL DEFAULT 0,
+  links_count INT NOT NULL DEFAULT 0,
+  duration_ms INT NOT NULL DEFAULT 0,
+  trigger TEXT NOT NULL DEFAULT 'cron',   -- 'cron' | 'manual'
+  status TEXT NOT NULL DEFAULT 'ok',      -- 'ok' | 'error'
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS brain_snapshots_user_created_idx ON brain_snapshots(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS brain_snapshots_user_vault_idx ON brain_snapshots(user_id, vault_name, created_at DESC);

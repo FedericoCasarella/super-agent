@@ -44,7 +44,7 @@ export default function DataTable<T>({
   fetcher,
   columns,
   chipFilters = [],
-  searchPlaceholder = 'Cerca…',
+  searchPlaceholder,
   rowKey,
   onRowClick,
   refreshKey,
@@ -93,7 +93,14 @@ export default function DataTable<T>({
       setTotal(r.total ?? 0);
     } catch (e: any) {
       if (id !== reqId.current) return;
-      setErr(String(e?.message ?? e));
+      // Strip HTML responses (404 default pages) — show concise message only.
+      let msg = String(e?.message ?? e);
+      if (/<!DOCTYPE|<html|<pre>/i.test(msg)) {
+        const m = msg.match(/Cannot\s+\w+\s+\S+/i);
+        msg = m ? m[0] : 'Errore di rete';
+      }
+      setErr(msg);
+      setRows([]); setTotal(0);
     }
     finally { if (id === reqId.current) setLoading(false); }
   }
@@ -141,24 +148,28 @@ export default function DataTable<T>({
   }
 
 
+  const showSearch = !!searchPlaceholder;
+
   return (
     <div className="space-y-3 flex-1 min-h-0 flex flex-col">
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={qInput}
-            onChange={(e) => setQInput(e.target.value)}
-            placeholder={searchPlaceholder}
-            className="pl-8"
-          />
-        </div>
+        {showSearch && (
+          <div className="relative flex-1 min-w-[200px] max-w-md">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={qInput}
+              onChange={(e) => setQInput(e.target.value)}
+              placeholder={searchPlaceholder}
+              className="pl-8"
+            />
+          </div>
+        )}
         {activeFilterCount > 0 && (
           <Button size="sm" variant="ghost" onClick={clearFilters}>
             <X size={12} className="inline mr-1 -mt-0.5" /> Reset ({activeFilterCount})
           </Button>
         )}
-        <Button size="sm" variant="ghost" onClick={load} disabled={loading} title="Ricarica">
+        <Button size="sm" variant="ghost" onClick={load} disabled={loading} title="Ricarica" className="ml-auto">
           <RefreshCw size={13} className={`${loading ? 'animate-spin' : ''}`} />
         </Button>
         {toolbar}

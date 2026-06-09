@@ -37,6 +37,19 @@ export const api = {
   brainTree: () => req<{ root: string | null; files: string[] }>('/brain/tree'),
   brainGraph: () => req<{ nodes: any[]; links: any[] }>('/brain/graph'),
   brainNote: (path: string) => req<any>(`/brain/note?path=${encodeURIComponent(path)}`),
+  brainSnapshots: (opts: { vault?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.vault) p.set('vault', opts.vault);
+    p.set('limit', String(opts.limit ?? 25));
+    p.set('offset', String(opts.offset ?? 0));
+    return req<{ rows: any[]; total: number }>(`/brain/snapshots?${p}`);
+  },
+  brainSnapshotRun: () => req<{ ok: boolean; snapshots: any[] }>('/brain/snapshots/run', { method: 'POST' }),
+  brainSnapshotDelete: (id: number) => req<{ ok: boolean }>(`/brain/snapshots/${id}`, { method: 'DELETE' }),
+  brainSnapshotRestore: (id: number) =>
+    req<{ ok: boolean; restored?: number; safety_snapshot_id?: number; error?: string }>(`/brain/snapshots/${id}/restore`, { method: 'POST' }),
+  brainSnapshotDirGet: () => req<{ dir: string }>('/brain/snapshots/dir'),
+  brainSnapshotDirSet: (dir: string) => req<{ ok: boolean; dir: string }>('/brain/snapshots/dir', { method: 'PUT', body: JSON.stringify({ dir }) }),
   brainNoteSave: (path: string, content: string, data?: any) =>
     req<{ ok: boolean }>('/brain/note', { method: 'PUT', body: JSON.stringify({ path, content, data }) }),
   brainNoteDelete: (path: string) =>

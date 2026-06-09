@@ -27,7 +27,7 @@ import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
   Share2, ScrollText, Settings as SettingsIcon, LogOut, MessageCircle,
   Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow,
-  Camera as IgIcon, type LucideIcon, ChevronsUpDown,
+  Camera as IgIcon, type LucideIcon, ChevronsUpDown, Archive,
 } from 'lucide-react';
 
 function humanizeIn(ms: number): string {
@@ -86,6 +86,7 @@ export default function AppSidebar() {
     { to: '/flows', label: 'Flows', icon: Workflow, gate: 'flows' },
     { to: '/outbound', label: 'Inviati', icon: Send, gate: 'outbound' },
     { to: '/logs', label: 'Logs', icon: ScrollText, gate: 'logs' },
+    { to: '/snapshots', label: 'Snapshot', icon: Archive },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
   ] as NavItem[]).filter((it) => !it.gate || isVisible(it.gate as PageKey));
 

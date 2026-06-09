@@ -87,6 +87,22 @@ export async function startScheduler() {
   });
   console.log('[scheduler] reflection loop armed (every 2m, all users)');
 
+  // Brain snapshots: 00:00 nightly per-user vault copy + counts.
+  let snapRunning = false;
+  cron.schedule('0 0 * * *', async () => {
+    if (snapRunning) return;
+    snapRunning = true;
+    try {
+      const { createSnapshots } = await import('../brain/snapshots.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try { const r = await createSnapshots(u.id, 'cron'); console.log(`[snapshots:u${u.id}] ${r.length} vaults snapshotted`); }
+        catch (e) { console.error(`[snapshots:u${u.id}]`, e); }
+      }
+    } finally { snapRunning = false; }
+  });
+  console.log('[scheduler] brain-snapshot loop armed (daily 00:00, all users)');
+
   // Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
   // wa_messages and run bonifyWaMessages(onlyChat=jid). Skips quiet/disabled.
   let bonifyRunning = false;
