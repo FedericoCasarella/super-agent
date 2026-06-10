@@ -524,11 +524,13 @@ export async function suggestReply(userId: number, chatJid: string, opts: { hint
 
 export async function sendWaMessage(userId: number, chatJid: string, text: string, origin: string = 'user', source: 'user' | 'ai' = 'user'): Promise<{ ok: boolean; error?: string }> {
   const { logOutbound } = await import('../../../comm/outbound_log.js');
-  const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') {
-    await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, body: text, origin, error: 'WhatsApp non connesso' });
-    return { ok: false, error: 'WhatsApp non connesso' };
+  if (!(await ensureWaConnected(userId))) {
+    const cur = sessions.get(userId);
+    const err = cur?.status === 'qr' ? 'WhatsApp in attesa di pairing (QR)' : `WhatsApp non connesso (status=${cur?.status ?? 'none'})`;
+    await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, body: text, origin, error: err });
+    return { ok: false, error: err };
   }
+  const s = sessions.get(userId)!;
   if (!text || !text.trim()) {
     await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, body: text, origin, error: 'empty text' });
     return { ok: false, error: 'empty text' };
@@ -1141,8 +1143,11 @@ export async function aiDedupeChats(userId: number): Promise<{ ok: boolean; merg
 }
 
 export async function refreshContactsAndGroups(userId: number): Promise<{ ok: boolean; groups: number; merged?: number; error?: string }> {
-  const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') return { ok: false, groups: 0, error: 'WhatsApp non connesso' };
+  if (!(await ensureWaConnected(userId))) {
+    const cur = sessions.get(userId);
+    return { ok: false, groups: 0, error: cur?.status === 'qr' ? 'WhatsApp in attesa di pairing (QR)' : `WhatsApp non connesso (status=${cur?.status ?? 'none'})` };
+  }
+  const s = sessions.get(userId)!;
   try {
     // Fetch all groups + participants
     const all: any = await (s.sock as any).groupFetchAllParticipating?.();
@@ -1179,8 +1184,11 @@ export async function refreshContactsAndGroups(userId: number): Promise<{ ok: bo
 }
 
 export async function syncOneChat(userId: number, chatJid: string, batches = 3): Promise<{ ok: boolean; requested: number; error?: string }> {
-  const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') return { ok: false, requested: 0, error: 'WhatsApp non connesso' };
+  if (!(await ensureWaConnected(userId))) {
+    const cur = sessions.get(userId);
+    return { ok: false, requested: 0, error: cur?.status === 'qr' ? 'WhatsApp in attesa di pairing (QR)' : `WhatsApp non connesso (status=${cur?.status ?? 'none'})` };
+  }
+  const s = sessions.get(userId)!;
   let requested = 0;
   for (let i = 0; i < batches; i++) {
     const rows = await query<{ msg_id: string; ts: string }>(
@@ -1202,9 +1210,36 @@ export async function syncOneChat(userId: number, chatJid: string, batches = 3):
   return { ok: true, requested };
 }
 
+// Wait until the in-memory WA session for `userId` reports `connected`, or
+// until `timeoutMs` elapses. Returns true on success. If no session exists,
+// triggers `startWaForUser` first — so a stale UI button press after backend
+// restart (or after Baileys auto-reconnected mid-handshake) doesn't error.
+async function ensureWaConnected(userId: number, timeoutMs = 12_000): Promise<boolean> {
+  const start = Date.now();
+  let s = sessions.get(userId);
+  if (!s) {
+    try { await startWaForUser(userId); } catch {}
+    s = sessions.get(userId);
+  }
+  while (Date.now() - start < timeoutMs) {
+    s = sessions.get(userId);
+    if (s?.status === 'connected') return true;
+    // Status 'qr' means awaiting pairing — no point waiting further.
+    if (s?.status === 'qr') return false;
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  return sessions.get(userId)?.status === 'connected';
+}
+
 export async function syncWaForUser(userId: number): Promise<{ ok: boolean; chats: number; requested: number; hint?: string; error?: string }> {
-  const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') return { ok: false, chats: 0, requested: 0, error: 'WhatsApp non connesso' };
+  if (!(await ensureWaConnected(userId))) {
+    const cur = sessions.get(userId);
+    const detail = cur?.status === 'qr'
+      ? 'WhatsApp in attesa di pairing (QR). Apri /whatsapp e scansiona.'
+      : `WhatsApp non connesso (status=${cur?.status ?? 'none'})`;
+    return { ok: false, chats: 0, requested: 0, error: detail };
+  }
+  const s = sessions.get(userId)!;
   // Sync ALL chats — most-recent first, throttled.
   const PER_CHAT_DELAY_MS = 600;
   const rows = await query<{ chat_jid: string; msg_id: string; ts: string }>(

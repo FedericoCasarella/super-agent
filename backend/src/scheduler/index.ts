@@ -88,20 +88,47 @@ export async function startScheduler() {
   console.log('[scheduler] reflection loop armed (every 2m, all users)');
 
   // Brain snapshots: 00:00 nightly per-user vault copy + counts.
+  // Pin to Europe/Rome so it fires at midnight LOCAL regardless of system TZ
+  // (default would be process TZ — if running in UTC container, "00:00" =
+  // 02:00 CEST and the user thinks it's broken).
   let snapRunning = false;
-  cron.schedule('0 0 * * *', async () => {
+  async function runSnapshotSweep(label: string) {
     if (snapRunning) return;
     snapRunning = true;
     try {
       const { createSnapshots } = await import('../brain/snapshots.js');
       const users = await listActiveUsers();
       for (const u of users) {
-        try { const r = await createSnapshots(u.id, 'cron'); console.log(`[snapshots:u${u.id}] ${r.length} vaults snapshotted`); }
-        catch (e) { console.error(`[snapshots:u${u.id}]`, e); }
+        try { const r = await createSnapshots(u.id, 'cron'); console.log(`[snapshots:${label}:u${u.id}] ${r.length} vaults snapshotted`); }
+        catch (e) { console.error(`[snapshots:${label}:u${u.id}]`, e); }
       }
     } finally { snapRunning = false; }
-  });
-  console.log('[scheduler] brain-snapshot loop armed (daily 00:00, all users)');
+  }
+  cron.schedule('0 0 * * *', () => { runSnapshotSweep('cron').catch(() => {}); }, { timezone: 'Europe/Rome' });
+  console.log('[scheduler] brain-snapshot loop armed (daily 00:00 Europe/Rome)');
+
+  // Catch-up: backend was down at midnight, or process restarted mid-sweep.
+  // On boot, check whether a cron snapshot for TODAY already exists per user;
+  // if not, run one now. Guarantees daily coverage even with frequent restarts.
+  (async () => {
+    try {
+      const { createSnapshots } = await import('../brain/snapshots.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try {
+          const r = await query<{ c: number }>(
+            `SELECT count(*)::int AS c FROM brain_snapshots
+             WHERE user_id=$1 AND trigger='cron' AND created_at::date = (now() AT TIME ZONE 'Europe/Rome')::date`,
+            [u.id],
+          );
+          if ((r[0]?.c ?? 0) > 0) continue;
+          console.log(`[snapshots:catchup:u${u.id}] no cron snapshot for today — running now`);
+          const out = await createSnapshots(u.id, 'cron');
+          console.log(`[snapshots:catchup:u${u.id}] ${out.length} vaults snapshotted`);
+        } catch (e) { console.error(`[snapshots:catchup:u${u.id}]`, e); }
+      }
+    } catch (e) { console.error('[snapshots:catchup]', e); }
+  })().catch(() => {});
 
 // Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
   // wa_messages and run bonifyWaMessages(onlyChat=jid). Skips quiet/disabled.

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { ChevronRight, ChevronDown, File as FileIcon, Folder, FolderOpen, Search, X, Trash2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, File as FileIcon, Folder, FolderOpen, Search, X, Trash2, FolderSearch } from 'lucide-react';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -152,6 +152,9 @@ export default function BrainFileExplorer({
             <ContextMenuItem onSelect={() => onSelect(n.path)}>
               <FileIcon className="h-3.5 w-3.5" /> Apri
             </ContextMenuItem>
+            <ContextMenuItem onSelect={() => { api.brainReveal(n.path).catch(() => {}); }}>
+              <FolderSearch className="h-3.5 w-3.5" /> Mostra nel Finder
+            </ContextMenuItem>
             {onDelete && (
               <ContextMenuItem
                 onSelect={() => onDelete(n.path)}
@@ -167,15 +170,24 @@ export default function BrainFileExplorer({
     const open = isExpanded(n.path);
     return (
       <div key={n.path}>
-        <button
-          onClick={() => toggle(n.path)}
-          className="w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-surface2 transition text-muted-foreground"
-          style={pad}
-        >
-          {open ? <ChevronDown size={11} className="shrink-0" /> : <ChevronRight size={11} className="shrink-0" />}
-          {open ? <FolderOpen size={12} className="shrink-0 text-accent2" /> : <Folder size={12} className="shrink-0 text-accent2" />}
-          <span className="truncate font-medium">{n.name}</span>
-        </button>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <button
+              onClick={() => toggle(n.path)}
+              className="w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-surface2 transition text-muted-foreground"
+              style={pad}
+            >
+              {open ? <ChevronDown size={11} className="shrink-0" /> : <ChevronRight size={11} className="shrink-0" />}
+              {open ? <FolderOpen size={12} className="shrink-0 text-accent2" /> : <Folder size={12} className="shrink-0 text-accent2" />}
+              <span className="truncate font-medium">{n.name}</span>
+            </button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={() => { api.brainReveal(n.path).catch(() => {}); }}>
+              <FolderSearch className="h-3.5 w-3.5" /> Mostra nel Finder
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
         {open && n.children.map((c) => renderNode(c, depth + 1))}
       </div>
     );

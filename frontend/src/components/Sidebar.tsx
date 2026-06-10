@@ -23,6 +23,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
   Share2, ScrollText, Settings as SettingsIcon, LogOut, MessageCircle,
@@ -96,12 +97,18 @@ export default function AppSidebar() {
   return (
     <SbRoot variant="inset" collapsible="icon">
       <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 py-1.5">
-          <img
-            src={branding.logoDataUrl || '/rounded-image.png'}
-            alt={branding.title}
-            className="h-9 w-9 rounded-lg object-cover shadow"
-          />
+        <div className="flex items-center gap-2 px-2 py-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+          <div
+            className="shadow shrink-0 overflow-hidden rounded-lg group-data-[collapsible=icon]:rounded-full"
+            style={{ width: 36, height: 36, flex: '0 0 36px' }}
+          >
+            <img
+              src={branding.logoDataUrl || '/rounded-image.png'}
+              alt={branding.title}
+              className="block w-full h-full object-cover"
+              style={{ aspectRatio: '1 / 1' }}
+            />
+          </div>
           <div className="flex flex-col min-w-0 group-data-[collapsible=icon]:hidden">
             <span className="font-semibold text-sm tracking-tight truncate">{branding.title}</span>
             {branding.subtitle && (
@@ -142,30 +149,48 @@ export default function AppSidebar() {
 
       <SidebarFooter>
         {usage && (
-          <Card className="group-data-[collapsible=icon]:hidden p-3 bg-sidebar-accent/40 border-sidebar-border">
-            <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
-              <span>Claude • {usage.plan ?? 'Plan'}</span>
-              <span className="font-mono">{usage.percent}%</span>
+          <>
+            {/* Expanded: full card with bar */}
+            <Card className="group-data-[collapsible=icon]:hidden p-3 bg-sidebar-accent/40 border-sidebar-border">
+              <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span>Claude • {usage.plan ?? 'Plan'}</span>
+                <span className="font-mono">{usage.percent}%</span>
+              </div>
+              <div className="mt-1.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-primary transition-all duration-500"
+                  style={{ width: `${usage.percent}%` }}
+                />
+              </div>
+              {usage.resetIn && (
+                <div className="mt-1.5 text-[10px] text-muted-foreground">Reset {usage.resetIn}</div>
+              )}
+            </Card>
+            {/* Collapsed: gradient progress ring with % in center */}
+            <div className="hidden group-data-[collapsible=icon]:flex items-center justify-center">
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button type="button" className="block focus:outline-none">
+                      <UsageRing percent={usage.percent} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    {usage.resetIn ? `Reset ${usage.resetIn}` : 'Nessuna scadenza nota'}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
-            <div className="mt-1.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
-              <div
-                className="h-full rounded-full bg-gradient-primary transition-all duration-500"
-                style={{ width: `${usage.percent}%` }}
-              />
-            </div>
-            {usage.resetIn && (
-              <div className="mt-1.5 text-[10px] text-muted-foreground">Reset {usage.resetIn}</div>
-            )}
-          </Card>
+          </>
         )}
 
         {/* User popover — clicked-on avatar opens a panel with details + logout */}
         <Popover>
           <PopoverTrigger asChild>
-            <button className="flex items-center gap-2 rounded-md p-2 hover:bg-sidebar-accent transition-colors text-left">
-              <Avatar className="h-8 w-8 rounded-lg">
+            <button className="flex items-center gap-2 rounded-md p-2 hover:bg-sidebar-accent transition-colors text-left group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-1">
+              <Avatar className="h-8 w-8 rounded-full shrink-0">
                 <AvatarImage src={(user as any)?.avatar_url ?? undefined} alt={user?.name || user?.email} />
-                <AvatarFallback className="rounded-lg text-xs">{initials}</AvatarFallback>
+                <AvatarFallback className="rounded-full text-xs flex items-center justify-center leading-none">{initials}</AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
                 <div className="text-sm font-medium truncate">{user?.name || 'User'}</div>
@@ -176,9 +201,9 @@ export default function AppSidebar() {
           </PopoverTrigger>
           <PopoverContent side="top" align="start" sideOffset={8} className="w-60 p-0">
             <div className="p-3 flex items-center gap-2 border-b">
-              <Avatar className="h-9 w-9 rounded-lg">
+              <Avatar className="h-9 w-9 rounded-full shrink-0">
                 <AvatarImage src={(user as any)?.avatar_url ?? undefined} alt={user?.name || user?.email} />
-                <AvatarFallback className="rounded-lg text-xs">{initials}</AvatarFallback>
+                <AvatarFallback className="rounded-full text-xs flex items-center justify-center leading-none">{initials}</AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{user?.name || 'User'}</div>
@@ -199,5 +224,55 @@ export default function AppSidebar() {
       </SidebarFooter>
       <SidebarRail />
     </SbRoot>
+  );
+}
+
+// Gradient progress ring for the collapsed sidebar. SVG so it stays crisp at
+// 32px. Uses an SVG <linearGradient> with the same stops as `bg-gradient-primary`
+// so it visually matches the expanded bar.
+function UsageRing({ percent }: { percent: number }) {
+  const p = Math.max(0, Math.min(100, percent));
+  const size = 34;
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c * (1 - p / 100);
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="block">
+      <defs>
+        <linearGradient id="usage-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="hsl(var(--primary))" />
+          <stop offset="100%" stopColor="hsl(var(--accent))" />
+        </linearGradient>
+      </defs>
+      {/* track */}
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth={stroke} opacity={0.35} />
+      {/* progress */}
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke="url(#usage-ring-grad)"
+        strokeWidth={stroke}
+        strokeDasharray={c}
+        strokeDashoffset={offset}
+        strokeLinecap="round"
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        style={{ transition: 'stroke-dashoffset 500ms ease' }}
+      />
+      <text
+        x="50%"
+        y="50%"
+        dominantBaseline="central"
+        textAnchor="middle"
+        fontSize="9"
+        fontWeight={600}
+        fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="hsl(var(--foreground))"
+      >
+        {p}%
+      </text>
+    </svg>
   );
 }

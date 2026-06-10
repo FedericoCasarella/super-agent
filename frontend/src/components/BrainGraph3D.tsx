@@ -6,6 +6,14 @@ import { useWS } from '../ws';
 
 const MRI_GREEN = '#39ff7a';
 const MRI_DURATION_MS = 4200;
+// New-link spark: Obsidian-style synapse formation pulse
+const NEW_LINK_DURATION_MS = 5000;
+const NEW_LINK_COLOR = '#7dd3fc';        // cyan
+const NEW_LINK_GLOW  = 'rgba(125, 211, 252, 0.85)';
+
+function linkKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
 
 type Node = { id: string; title: string; kind: string; tags: string[]; size: number; visibility?: 'protected' | 'public' | null; origin_email?: string | null; x?: number; y?: number };
 type Link = { source: string | Node; target: string | Node };
@@ -97,31 +105,73 @@ export default function BrainGraph3D({
   // MRI map: nodeId → expiry-ms. Lit when agent reads/writes a vault note via brain:access WS.
   const mriRef = useRef<Map<string, number>>(new Map());
   const [mriTick, setMriTick] = useState(0);
+  // New-link map: linkKey → expiry-ms. Sparks a synapse-formation animation when
+  // backend emits `brain:link_added` after writeNote/appendNote.
+  const newLinksRef = useRef<Map<string, number>>(new Map());
   useWS((msg) => {
-    if (msg?.type !== 'brain:access') return;
-    const p = msg.payload ?? {};
-    if (!p.rel) return;
-    const now = Date.now();
-    const expire = now + MRI_DURATION_MS;
-    const rel = String(p.rel);
-    // Primary id format: <vault>::<rel>. Also match by rel-only for tolerance.
-    const ids = new Set<string>();
-    if (p.vaultName) ids.add(`${p.vaultName}::${rel}`);
-    // Tolerant fallback: scan current graph for any node whose id endsWith rel
-    for (const n of dataRef.current.nodes) {
-      if (n.id === rel || n.id.endsWith(`::${rel}`)) ids.add(n.id);
+    if (msg?.type === 'brain:access') {
+      const p = msg.payload ?? {};
+      if (!p.rel) return;
+      const now = Date.now();
+      const expire = now + MRI_DURATION_MS;
+      const rel = String(p.rel);
+      // Primary id format: <vault>::<rel>. Also match by rel-only for tolerance.
+      const ids = new Set<string>();
+      if (p.vaultName) ids.add(`${p.vaultName}::${rel}`);
+      // Tolerant fallback: scan current graph for any node whose id endsWith rel
+      for (const n of dataRef.current.nodes) {
+        if (n.id === rel || n.id.endsWith(`::${rel}`)) ids.add(n.id);
+      }
+      for (const id of ids) mriRef.current.set(id, expire);
+      setMriTick((t) => t + 1);
+      return;
     }
-    for (const id of ids) mriRef.current.set(id, expire);
-    setMriTick((t) => t + 1);
+    if (msg?.type === 'brain:link_added') {
+      const p = msg.payload ?? {};
+      const src = String(p.source ?? '').replace(/\.md$/i, '');
+      const tgt = String(p.target ?? '').replace(/\.md$/i, '');
+      if (!src || !tgt) return;
+      // Resolve to actual node ids in the current graph (vault::rel or rel match)
+      const resolve = (needle: string): string | null => {
+        for (const n of dataRef.current.nodes) {
+          if (n.id === needle || n.id.endsWith(`::${needle}`) || n.id.endsWith(`::${needle}.md`)) return n.id;
+        }
+        return null;
+      };
+      const a = resolve(src);
+      const b = resolve(tgt);
+      if (!a || !b || a === b) return;
+      const now = Date.now();
+      const expire = now + NEW_LINK_DURATION_MS;
+      newLinksRef.current.set(linkKey(a, b), expire);
+      // Light up both endpoints with MRI pulse so the eye is drawn to them
+      mriRef.current.set(a, now + MRI_DURATION_MS);
+      mriRef.current.set(b, now + MRI_DURATION_MS);
+      // Inject link into graph data if not already present
+      setData((d) => {
+        const has = d.links.some((l) => {
+          const s = typeof l.source === 'object' ? (l.source as Node).id : l.source;
+          const t = typeof l.target === 'object' ? (l.target as Node).id : l.target;
+          return linkKey(String(s), String(t)) === linkKey(a, b);
+        });
+        if (has) return d;
+        return { nodes: d.nodes, links: [...d.links, { source: a, target: b }] };
+      });
+      setMriTick((t) => t + 1);
+      return;
+    }
   });
-  // Tick every ~80ms while MRI active to redraw fades
+  // Tick every ~80ms while MRI or new-link animation is active to redraw fades
   useEffect(() => {
-    if (mriRef.current.size === 0) return;
+    if (mriRef.current.size === 0 && newLinksRef.current.size === 0) return;
     const iv = setInterval(() => {
       const now = Date.now();
       let changed = false;
       for (const [id, end] of mriRef.current) {
         if (end <= now) { mriRef.current.delete(id); changed = true; }
+      }
+      for (const [k, end] of newLinksRef.current) {
+        if (end <= now) { newLinksRef.current.delete(k); changed = true; }
       }
       setMriTick((t) => t + 1);
       if (changed && fgRef.current) (fgRef.current as any).refresh?.();
@@ -372,21 +422,52 @@ export default function BrainGraph3D({
 
   // Idle = dark gray everywhere. On hover, only the links touching the hovered
   // node light up cyan; the rest stay dark gray.
+  // New links (from brain:link_added WS) get a synapse-formation pulse: bright
+  // cyan glow that fades over NEW_LINK_DURATION_MS, mimicking Obsidian.
   const linkPaint = useCallback((link: any, ctx: CanvasRenderingContext2D, scale: number) => {
     const s = typeof link.source === 'object' ? link.source : null;
     const t = typeof link.target === 'object' ? link.target : null;
     if (!s || !t) return;
     const focus = hover ?? selected;
     const isHot = !!focus && (s.id === focus || t.id === focus);
+
+    // Synapse formation pulse for newly created links
+    const k = linkKey(String(s.id), String(t.id));
+    const newEnd = newLinksRef.current.get(k);
+    const isNew = !!newEnd && newEnd > Date.now();
+
     ctx.save();
-    ctx.strokeStyle = isHot ? LINK_HI : LINK_COLOR;
-    ctx.lineWidth = (isHot ? 1.4 : 0.7) / scale;
-    ctx.beginPath();
-    ctx.moveTo(s.x, s.y);
-    ctx.lineTo(t.x, t.y);
-    ctx.stroke();
+    if (isNew) {
+      const remaining = (newEnd ?? 0) - Date.now();
+      const phase = 1 - remaining / NEW_LINK_DURATION_MS; // 0→1
+      const env = Math.sin(phase * Math.PI);              // 0→1→0
+      // outer glow halo
+      ctx.shadowColor = NEW_LINK_GLOW;
+      ctx.shadowBlur = (10 + 18 * env) / scale * scale; // keep blur in screen px
+      ctx.strokeStyle = NEW_LINK_COLOR;
+      ctx.lineWidth = (1.5 + 2.2 * env) / scale;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+      // bright core line
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = `rgba(255,255,255,${0.6 + 0.4 * env})`;
+      ctx.lineWidth = (0.7 + 1.2 * env) / scale;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = isHot ? LINK_HI : LINK_COLOR;
+      ctx.lineWidth = (isHot ? 1.4 : 0.7) / scale;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+    }
     ctx.restore();
-  }, [hover, selected]);
+  }, [hover, selected, mriTick]);
 
   return (
     <div ref={wrapRef} className="w-full h-full relative" style={{ background: '#0f0f12' }}>
@@ -415,14 +496,23 @@ export default function BrainGraph3D({
         linkCanvasObject={linkPaint}
         linkWidth={1.2}
         linkDirectionalParticles={(l: any) => {
-          const focus = hover ?? selected;
-          if (!focus) return 0;
           const s = typeof l.source === 'object' ? l.source.id : l.source;
           const t = typeof l.target === 'object' ? l.target.id : l.target;
+          const k = linkKey(String(s), String(t));
+          const newEnd = newLinksRef.current.get(k);
+          if (newEnd && newEnd > Date.now()) return 7;
+          const focus = hover ?? selected;
+          if (!focus) return 0;
           return (s === focus || t === focus) ? 5 : 0;
         }}
-        linkDirectionalParticleSpeed={0.006}
-        linkDirectionalParticleWidth={3.5}
+        linkDirectionalParticleSpeed={(l: any) => {
+          const s = typeof l.source === 'object' ? l.source.id : l.source;
+          const t = typeof l.target === 'object' ? l.target.id : l.target;
+          const k = linkKey(String(s), String(t));
+          const newEnd = newLinksRef.current.get(k);
+          return newEnd && newEnd > Date.now() ? 0.014 : 0.006;
+        }}
+        linkDirectionalParticleWidth={4}
         linkDirectionalParticleColor={() => SYNAPSE}
         onNodeHover={(n: any) => setHover(n?.id ?? null)}
         onNodeClick={(n: any) => {

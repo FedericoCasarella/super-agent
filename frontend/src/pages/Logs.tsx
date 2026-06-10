@@ -3,6 +3,7 @@ import { api } from '../api';
 import { Card, Chip, Modal } from '../components/ui';
 import { useI18n } from '../i18n';
 import DataTable, { Column, ChipFilter } from '../components/DataTable';
+import { Info } from 'lucide-react';
 
 type Row = {
   id: number; ts: string; kind: string; status: string; model: string;
@@ -79,6 +80,20 @@ export default function Logs() {
   return (
     <div className="space-y-5 h-full flex flex-col">
       <h1 className="text-2xl font-semibold text-gradient">{t('logs.title')}</h1>
+
+      <div className="flex items-start gap-3 rounded-lg border border-accent/30 bg-accent/5 p-3 text-xs">
+        <Info size={16} className="text-accent shrink-0 mt-0.5" />
+        <div className="text-muted-foreground leading-relaxed">
+          <span className="font-medium text-foreground">Proiezione di spesa.</span>{' '}
+          I costi mostrati sono una <span className="text-foreground">stima teorica</span> basata su tariffe pubbliche dei modelli.
+          Usando il <span className="text-foreground">piano integrato di Claude</span> (Pro/Max) <span className="text-foreground">non corrispondono a un addebito reale</span>:
+          i turn rientrano nel piano e non vengono fatturati a consumo.
+          {' '}
+          <span className="text-foreground">Eccezione</span>: i servizi esterni come{' '}
+          <span className="font-mono">Whisper</span> (trascrizione voce) ed{' '}
+          <span className="font-mono">ElevenLabs</span> (TTS) hanno billing diretto e i loro costi qui sono reali.
+        </div>
+      </div>
 
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

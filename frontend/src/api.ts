@@ -54,6 +54,8 @@ export const api = {
     req<{ ok: boolean }>('/brain/note', { method: 'PUT', body: JSON.stringify({ path, content, data }) }),
   brainNoteDelete: (path: string) =>
     req<{ ok: boolean }>(`/brain/note?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  brainReveal: (path: string) =>
+    req<{ ok: boolean; path: string }>('/brain/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
   callTool: (name: string, args: any = {}) => req<any>(`/tools/${name}`, { method: 'POST', body: JSON.stringify(args) }),
   logs: (opts: { kinds?: string[]; statuses?: string[]; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();

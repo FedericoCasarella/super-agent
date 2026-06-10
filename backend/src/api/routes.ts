@@ -326,6 +326,56 @@ router.delete('/brain/note', async (req, res) => {
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// Reveal a vault path in the OS file manager (Finder on macOS, Explorer on
+// Windows, xdg-open on Linux). Accepts `<vault>::<rel>` or bare rel. If the
+// resolved path is a file, opens its PARENT folder with the file highlighted
+// when the platform supports it.
+router.post('/brain/reveal', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.body?.path ?? req.query?.path ?? '');
+    if (!raw) return res.status(400).json({ error: 'path missing' });
+    const path = await import('node:path');
+    const fs = await import('node:fs/promises');
+    const { spawn } = await import('node:child_process');
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    // Resolve + sandbox: must stay under vaultRoot
+    const full = path.resolve(vaultRoot, rel);
+    const rootResolved = path.resolve(vaultRoot);
+    if (full !== rootResolved && !full.startsWith(rootResolved + path.sep)) {
+      return res.status(400).json({ error: 'path escapes vault' });
+    }
+    let stat;
+    try { stat = await fs.stat(full); } catch { return res.status(404).json({ error: 'not found' }); }
+    if (process.platform === 'darwin') {
+      // -R reveals the item in its parent folder (file or dir); for the vault
+      // root itself we just `open` it directly.
+      const args = stat.isFile() ? ['-R', full] : [full];
+      spawn('open', args, { detached: true, stdio: 'ignore' }).unref();
+    } else if (process.platform === 'win32') {
+      const args = stat.isFile() ? ['/select,', full] : [full];
+      spawn('explorer', args, { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      const target = stat.isFile() ? path.dirname(full) : full;
+      spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref();
+    }
+    res.json({ ok: true, path: full });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 // Brain snapshots: nightly backups + manual trigger.
 router.get('/brain/snapshots', async (req, res) => {
   try {

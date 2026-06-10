@@ -112,7 +112,41 @@ export async function createSnapshots(userId: number, trigger: 'cron' | 'manual'
     );
     out.push(rows[0]);
   }
+
+  // Telegram heads-up so every snapshot (cron 00:00 or manual run) leaves a
+  // visible trail. Aggregate stats; one message per run, not per vault.
+  try {
+    // pg returns bigint columns as STRING. Forcing Number() avoids
+    // string-concat bugs in reduce ("0" + "765625" + "2831000" → 7.6e12).
+    const num = (v: any) => (typeof v === 'number' ? v : Number(v ?? 0)) || 0;
+    const okCount = out.filter((s) => s.status === 'ok').length;
+    const errCount = out.length - okCount;
+    const totalBytes = out.reduce((a, s) => a + num(s.size_bytes), 0);
+    const totalFiles = out.reduce((a, s) => a + num(s.file_count), 0);
+    const totalNeurons = out.reduce((a, s) => a + num(s.neurons_count), 0);
+    const totalLinks = out.reduce((a, s) => a + num(s.links_count), 0);
+    const head = errCount
+      ? `⚠️ Snapshot ${trigger} — ${okCount} ok, ${errCount} errore`
+      : `📦 Snapshot ${trigger} — ${okCount} cervell${okCount === 1 ? 'o' : 'i'}`;
+    const lines = out.map((s) =>
+      s.status === 'ok'
+        ? `• ${s.vault_name} · ${num(s.neurons_count)} neuroni · ${num(s.links_count)} link · ${fmtBytes(num(s.size_bytes))}`
+        : `• ${s.vault_name} · ❌ ${s.error ?? 'errore'}`,
+    );
+    const tail = `Tot: ${totalNeurons} neuroni · ${totalLinks} link · ${totalFiles} file · ${fmtBytes(totalBytes)}`;
+    const msg = [head, '', ...lines, '', tail].join('\n');
+    const { sendTelegram } = await import('../telegram/bot.js');
+    await sendTelegram(userId, msg, 'snapshot');
+  } catch (e) { console.error('[snapshots] telegram notify failed', e); }
+
   return out;
+}
+
+function fmtBytes(n: number): string {
+  if (!n || n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
 export async function listSnapshots(userId: number, opts: { vault?: string; limit?: number; offset?: number } = {}): Promise<{ rows: Snapshot[]; total: number }> {
