@@ -126,6 +126,41 @@
 }
 
 @layer utilities {
+  /* Force readable text inside rendered email HTML when the app theme is dark.
+     Email senders set their own inline color/background (light-mode assumption);
+     without overrides the body becomes a gray-on-black blob. We:
+       - force all text to the theme foreground (white-ish on dark)
+       - strip backgrounds so embedded white blocks vanish
+       - keep link color as the brand accent so CTAs stay clickable
+       - tame images width to fit the pane
+  */
+  .dark .mail-body,
+  .dark .mail-body * {
+    color: hsl(var(--foreground)) !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    border-color: hsl(var(--border)) !important;
+  }
+  .dark .mail-body a,
+  .dark .mail-body a * {
+    color: hsl(var(--accent)) !important;
+  }
+  .dark .mail-body img { max-width: 100%; height: auto; }
+  .dark .mail-body table,
+  .dark .mail-body td,
+  .dark .mail-body th { border-color: hsl(var(--border)) !important; }
+  /* Buttons that emails draw as colored boxes — keep the user able to spot them */
+  .dark .mail-body a[style*="background"],
+  .dark .mail-body a[style*="BACKGROUND"] {
+    background-color: hsl(var(--accent) / 0.18) !important;
+    color: hsl(var(--accent)) !important;
+    border: 1px solid hsl(var(--accent) / 0.4) !important;
+    border-radius: 6px !important;
+    padding: 6px 12px !important;
+    display: inline-block;
+    text-decoration: none !important;
+  }
+
   .glass {
     background: linear-gradient(180deg, rgba(27,27,37,0.6), rgba(19,19,26,0.6));
     backdrop-filter: blur(14px) saturate(140%);

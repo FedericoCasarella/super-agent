@@ -1386,6 +1386,24 @@ router.get('/whatsapp/pending', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   res.json({ count: await m.pendingCount(req.user!.id) });
 });
+router.get('/whatsapp/unread', async (req, res) => {
+  try {
+    const r = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM wa_messages
+       WHERE user_id=$1 AND from_me=false AND processed_at IS NULL
+         AND msg_id NOT LIKE 'chat:%' AND text <> ''`, [req.user!.id]);
+    res.json({ count: r[0]?.c ?? 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/instagram/unread', async (req, res) => {
+  try {
+    const r = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM ig_messages
+       WHERE user_id=$1 AND from_me=false AND processed_at IS NULL AND text <> ''`,
+      [req.user!.id]);
+    res.json({ count: r[0]?.c ?? 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/bonify', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const limit = Number(req.body?.limit ?? 100);
@@ -1786,6 +1804,206 @@ router.get('/settings', async (req, res) => {
   res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message });
 });
 // Branding (per-user customizable title + logo)
+// ---------------------------------------------------------------------------
+// MAIL — full email client backed by mail_messages + mail_attachments.
+// ---------------------------------------------------------------------------
+router.get('/mail/accounts', async (req, res) => {
+  try {
+    const { listAccounts } = await import('../mail/service.js');
+    const accs = await listAccounts(req.user!.id);
+    // Diagnostic block when empty so the UI can guide the user without
+    // making the user crack open backend logs.
+    let diag: any = undefined;
+    if (!accs.length) {
+      const rows = await query<{ config: any; enabled: boolean }>(
+        `SELECT config, enabled FROM connectors WHERE user_id=$1 AND name='imap'`,
+        [req.user!.id],
+      );
+      const r = rows[0];
+      const rawAccs = (r?.config?.accounts ?? []) as any[];
+      diag = {
+        connectorRow: !!r,
+        enabled: r?.enabled ?? null,
+        rawCount: rawAccs.length,
+        firstMissing: rawAccs[0]
+          ? ['label', 'host', 'user', 'pass'].filter((k) => !rawAccs[0]?.[k])
+          : null,
+      };
+    }
+    res.json({
+      accounts: accs.map((a) => ({ label: a.label, address: a.user, host: a.host, mailbox: a.mailbox ?? 'INBOX' })),
+      diag,
+    });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/messages', async (req, res) => {
+  try {
+    const { listMessages } = await import('../mail/service.js');
+    const r = await listMessages(req.user!.id, {
+      account: req.query.account ? String(req.query.account) : undefined,
+      folder: req.query.folder ? String(req.query.folder) : undefined,
+      q: req.query.q ? String(req.query.q) : undefined,
+      unread: req.query.unread === 'true',
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      offset: req.query.offset ? Number(req.query.offset) : undefined,
+    });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/threads/:key', async (req, res) => {
+  try {
+    const { getThread } = await import('../mail/service.js');
+    const r = await getThread(req.user!.id, String(req.params.key));
+    res.json({ messages: r });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/messages/:id', async (req, res) => {
+  try {
+    const { getMessage } = await import('../mail/service.js');
+    const r = await getMessage(req.user!.id, Number(req.params.id));
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.patch('/mail/messages/:id', async (req, res) => {
+  try {
+    const { setFlags } = await import('../mail/service.js');
+    await setFlags(req.user!.id, Number(req.params.id), {
+      seen: typeof req.body?.seen === 'boolean' ? req.body.seen : undefined,
+      flagged: typeof req.body?.flagged === 'boolean' ? req.body.flagged : undefined,
+      starred: typeof req.body?.starred === 'boolean' ? req.body.starred : undefined,
+    });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.delete('/mail/messages/:id', async (req, res) => {
+  try {
+    const { trashMessage } = await import('../mail/service.js');
+    await trashMessage(req.user!.id, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/attachments/:id', async (req, res) => {
+  try {
+    const { getAttachment } = await import('../mail/service.js');
+    const a = await getAttachment(req.user!.id, Number(req.params.id));
+    if (!a) return res.status(404).json({ error: 'not found' });
+    if (a.content_type) res.type(a.content_type);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(a.filename)}"`);
+    const fs = await import('node:fs');
+    fs.createReadStream(a.path).pipe(res);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/sync', async (req, res) => {
+  try {
+    const { syncAccount, syncAccountAllFolders } = await import('../mail/service.js');
+    const account = String(req.body?.account ?? '');
+    // If a specific folder is requested, sync just that. Otherwise iterate all.
+    if (req.body?.folder) {
+      const r = await syncAccount(req.user!.id, account, { limit: req.body?.limit ?? 1000, folder: String(req.body.folder) });
+      res.json(r);
+    } else {
+      const r = await syncAccountAllFolders(req.user!.id, account, { limit: req.body?.limit ?? 1000 });
+      res.json({
+        ok: r.ok,
+        fetched: r.totals.fetched,
+        skipped: r.totals.skipped,
+        scanned: r.totals.scanned,
+        diag: { perFolder: r.perFolder },
+      });
+    }
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/folders', async (req, res) => {
+  try {
+    const { listFolders } = await import('../mail/service.js');
+    const r = await listFolders(req.user!.id, String(req.query.account ?? ''));
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/bonify', async (req, res) => {
+  try {
+    const { bonifyAll } = await import('../mail/service.js');
+    const r = await bonifyAll(req.user!.id, {
+      account: req.body?.account ? String(req.body.account) : undefined,
+      force: !!req.body?.force,
+      limit: req.body?.limit ? Number(req.body.limit) : undefined,
+    });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/messages/:id/bonify', async (req, res) => {
+  try {
+    const { bonifyOne } = await import('../mail/service.js');
+    const r = await bonifyOne(req.user!.id, Number(req.params.id), !!req.body?.force);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/send', upload.array('attachments', 10), async (req, res) => {
+  try {
+    const { sendMail } = await import('../mail/service.js');
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const b = req.body ?? {};
+    const refs: string[] = Array.isArray(b.references) ? b.references
+      : typeof b.references === 'string' && b.references.length ? b.references.split(',').map((x: string) => x.trim()).filter(Boolean)
+      : [];
+    const r = await sendMail(req.user!.id, {
+      accountLabel: String(b.account ?? ''),
+      to: String(b.to ?? ''),
+      cc: b.cc ? String(b.cc) : undefined,
+      bcc: b.bcc ? String(b.bcc) : undefined,
+      subject: String(b.subject ?? '(no subject)'),
+      body: String(b.body ?? ''),
+      html: b.html ? String(b.html) : undefined,
+      inReplyTo: b.inReplyTo ? String(b.inReplyTo) : undefined,
+      references: refs,
+      attachments: files.map((f) => ({ filename: f.originalname, content: f.buffer, contentType: f.mimetype })),
+    });
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// AI-drafted reply — same pattern as WA suggestReply.
+router.post('/mail/messages/:id/suggest', quotaGuard, async (req, res) => {
+  try {
+    const { getMessage } = await import('../mail/service.js');
+    const m = await getMessage(req.user!.id, Number(req.params.id));
+    if (!m) return res.status(404).json({ error: 'not found' });
+    const hint = String(req.body?.hint ?? '').slice(0, 400);
+    const { runClaude } = await import('../claude/runner.js');
+    const prompt = [
+      `Sei l'assistente personale dell'utente. Scrivi una bozza di risposta a questa email.`,
+      `Lingua: stessa dell'email originale (default italiano).`,
+      `Tono: professionale ma diretto. Niente filler. Vai al punto.`,
+      hint ? `Direttiva utente: ${hint}` : ``,
+      ``,
+      `--- EMAIL ORIGINALE ---`,
+      `From: ${m.from_name ?? ''} <${m.from_addr ?? ''}>`,
+      `Subject: ${m.subject ?? ''}`,
+      ``,
+      String(m.body_text ?? '').slice(0, 4000),
+      `--- FINE EMAIL ---`,
+      ``,
+      `Restituisci SOLO il corpo della risposta, niente subject né intestazioni.`,
+    ].join('\n');
+    const r = await runClaude(req.user!.id, prompt, { timeoutMs: 60_000, kind: 'mail_suggest', meta: { mailId: m.id } });
+    if (!r.ok) return res.status(400).json({ ok: false, error: r.stderr || 'agent error' });
+    res.json({ ok: true, draft: r.text.trim() });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
 // ---------------------------------------------------------------------------
 // REPORT — time saved aggregates + PRIMA vs ADESSO radar.
 // PRIMA = cold-start vector [0,1,0,0] (Comunicazione, Brain, CRM, Memoria).

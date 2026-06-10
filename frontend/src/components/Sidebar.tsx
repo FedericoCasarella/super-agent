@@ -24,11 +24,13 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faWhatsapp, faInstagram } from '@fortawesome/free-brands-svg-icons';
 import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
   Share2, ScrollText, Settings as SettingsIcon, LogOut, MessageCircle,
   Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow,
-  Camera as IgIcon, type LucideIcon, ChevronsUpDown, Archive, LineChart,
+  Camera as IgIcon, type LucideIcon, ChevronsUpDown, Archive, LineChart, Mail as MailIcon,
 } from 'lucide-react';
 
 function humanizeIn(ms: number): string {
@@ -49,6 +51,25 @@ export default function AppSidebar() {
     try { const r = await api.teamTasksRunningCount(); setTasksRunning(r.running); } catch {}
   }, []);
   useLiveData(loadTasksRunning, { refreshOn: ['team_task'], fallbackMs: 120_000 });
+
+  // Unread email count for the /mail badge
+  const [mailUnread, setMailUnread] = useState(0);
+  const loadMailUnread = useCallback(async () => {
+    try { const r = await api.mailList({ unread: true, folder: 'INBOX', limit: 1 }); setMailUnread(r.total ?? 0); } catch {}
+  }, []);
+  useLiveData(loadMailUnread, { refreshOn: ['mail:new', 'mail:flags'], fallbackMs: 60_000 });
+
+  const [waUnread, setWaUnread] = useState(0);
+  const loadWaUnread = useCallback(async () => {
+    try { const r = await api.waUnread(); setWaUnread(r.count); } catch {}
+  }, []);
+  useLiveData(loadWaUnread, { refreshOn: ['wa:message', 'wa:bonify'], fallbackMs: 60_000 });
+
+  const [igUnread, setIgUnread] = useState(0);
+  const loadIgUnread = useCallback(async () => {
+    try { const r = await api.igUnread(); setIgUnread(r.count); } catch {}
+  }, []);
+  useLiveData(loadIgUnread, { refreshOn: ['ig:message'], fallbackMs: 60_000 });
 
   // Claude session usage card data
   const [usage, setUsage] = useState<{ percent: number; resetIn: string | null; plan: string | null } | null>(null);
@@ -80,8 +101,9 @@ export default function AppSidebar() {
     { to: '/tasks', label: 'Tasks', icon: ListChecks, badge: tasksRunning > 0 ? tasksRunning : undefined },
     { to: '/agents', label: 'Agents', icon: Zap },
     { to: '/perks', label: 'Perks', icon: Sparkles },
-    { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, gate: 'whatsapp' },
-    { to: '/instagram', label: 'Instagram', icon: IgIcon, gate: 'instagram' },
+    { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, gate: 'whatsapp', badge: waUnread > 0 ? waUnread : undefined },
+    { to: '/mail', label: 'Email', icon: MailIcon, badge: mailUnread > 0 ? mailUnread : undefined },
+    { to: '/instagram', label: 'Instagram', icon: IgIcon, gate: 'instagram', badge: igUnread > 0 ? igUnread : undefined },
     { to: '/people', label: 'People', icon: UsersIcon, gate: 'people' },
     { to: '/teams', label: 'Teams', icon: NetworkIcon, gate: 'teams' },
     { to: '/flows', label: 'Flows', icon: Workflow, gate: 'flows' },
@@ -128,11 +150,18 @@ export default function AppSidebar() {
             {items.map((it) => {
               const Icon = it.icon;
               const isActive = it.to === '/' ? location.pathname === '/' : location.pathname.startsWith(it.to);
+              // Brand icons only for WhatsApp + Instagram nav rows so they
+              // pop visually in the list. Other rows keep lucide line icons.
+              const brand = it.to === '/whatsapp' ? faWhatsapp
+                          : it.to === '/instagram' ? faInstagram
+                          : null;
               return (
                 <SidebarMenuItem key={it.to}>
                   <SidebarMenuButton asChild isActive={isActive} tooltip={it.label}>
                     <Link to={it.to}>
-                      <Icon />
+                      {brand
+                        ? <FontAwesomeIcon icon={brand} style={{ width: 16, height: 16 }} />
+                        : <Icon />}
                       <span className="flex-1 text-left">{it.label}</span>
                       {it.badge != null && (
                         <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--success))]/20 text-[hsl(var(--success))]">

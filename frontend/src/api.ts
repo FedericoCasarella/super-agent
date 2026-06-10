@@ -255,4 +255,46 @@ export const api = {
   igSync: (pages = 3) => req<any>('/instagram/sync', { method: 'POST', body: JSON.stringify({ pages }) }),
   igSyncThread: (id: string, pages = 5) => req<any>(`/instagram/threads/${encodeURIComponent(id)}/sync`, { method: 'POST', body: JSON.stringify({ pages }) }),
   report: (range: '7d' | '30d' | '90d' | 'all' = '30d') => req<any>(`/report?range=${range}`),
+  // ----- MAIL CLIENT -----
+  mailAccounts: () => req<{ accounts: { label: string; address: string; host: string; mailbox: string }[] }>('/mail/accounts'),
+  mailList: (opts: { account?: string; folder?: string; q?: string; unread?: boolean; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.account) p.set('account', opts.account);
+    if (opts.folder) p.set('folder', opts.folder);
+    if (opts.q) p.set('q', opts.q);
+    if (opts.unread) p.set('unread', 'true');
+    if (opts.limit) p.set('limit', String(opts.limit));
+    if (opts.offset) p.set('offset', String(opts.offset));
+    return req<{ rows: any[]; total: number }>(`/mail/messages?${p}`);
+  },
+  mailGet: (id: number) => req<any>(`/mail/messages/${id}`),
+  mailThread: (key: string) => req<{ messages: any[] }>(`/mail/threads/${encodeURIComponent(key)}`),
+  mailMark: (id: number, patch: { seen?: boolean; flagged?: boolean; starred?: boolean }) => req<any>(`/mail/messages/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  mailTrash: (id: number) => req<any>(`/mail/messages/${id}`, { method: 'DELETE' }),
+  mailSync: (account: string, limit = 1000) => req<any>('/mail/sync', { method: 'POST', body: JSON.stringify({ account, limit }) }),
+  mailBonify: (opts: { account?: string; force?: boolean; limit?: number } = {}) => req<any>('/mail/bonify', { method: 'POST', body: JSON.stringify(opts) }),
+  mailBonifyOne: (id: number, force = false) => req<any>(`/mail/messages/${id}/bonify`, { method: 'POST', body: JSON.stringify({ force }) }),
+  mailFolders: (account: string) => req<{ ok: boolean; folders: { name: string; label: string; kind: string; subscribed: boolean }[]; error?: string }>(`/mail/folders?account=${encodeURIComponent(account)}`),
+  waUnread: () => req<{ count: number }>('/whatsapp/unread'),
+  igUnread: () => req<{ count: number }>('/instagram/unread'),
+  mailSuggest: (id: number, hint?: string) => req<any>(`/mail/messages/${id}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
+  mailSend: (payload: { account: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html?: string; inReplyTo?: string; references?: string[]; attachments?: File[] }) => {
+    const fd = new FormData();
+    fd.append('account', payload.account);
+    fd.append('to', payload.to);
+    if (payload.cc) fd.append('cc', payload.cc);
+    if (payload.bcc) fd.append('bcc', payload.bcc);
+    fd.append('subject', payload.subject);
+    fd.append('body', payload.body);
+    if (payload.html) fd.append('html', payload.html);
+    if (payload.inReplyTo) fd.append('inReplyTo', payload.inReplyTo);
+    if (payload.references?.length) fd.append('references', payload.references.join(','));
+    for (const f of (payload.attachments ?? [])) fd.append('attachments', f);
+    return fetch('/api/mail/send', { method: 'POST', credentials: 'include', body: fd }).then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      return j;
+    });
+  },
+  mailAttachmentUrl: (id: number) => `/api/mail/attachments/${id}`,
 };

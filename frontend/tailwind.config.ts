@@ -86,6 +86,7 @@ export default {
         'shimmer':         { '0%': { backgroundPosition: '-200% 0' }, '100%': { backgroundPosition: '200% 0' } },
         'accordion-down':  { from: { height: '0' }, to: { height: 'var(--radix-accordion-content-height)' } },
         'accordion-up':    { from: { height: 'var(--radix-accordion-content-height)' }, to: { height: '0' } },
+        'mail-sync':       { '0%': { transform: 'translateX(-100%)' }, '100%': { transform: 'translateX(300%)' } },
       },
       animation: {
         'fade-in':         'fade-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both',
@@ -95,6 +96,7 @@ export default {
         'shimmer':         'shimmer 2.4s linear infinite',
         'accordion-down':  'accordion-down 0.2s ease-out',
         'accordion-up':    'accordion-up 0.2s ease-out',
+        'mail-sync':       'mail-sync 1.1s linear infinite',
       },
       transitionTimingFunction: {
         'out-expo': 'cubic-bezier(0.16, 1, 0.3, 1)',

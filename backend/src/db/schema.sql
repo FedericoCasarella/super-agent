@@ -741,3 +741,65 @@ CREATE TABLE IF NOT EXISTS brain_snapshots (
 );
 CREATE INDEX IF NOT EXISTS brain_snapshots_user_created_idx ON brain_snapshots(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS brain_snapshots_user_vault_idx ON brain_snapshots(user_id, vault_name, created_at DESC);
+
+-- =====================================================================
+-- Mail client (IMAP + SMTP). Full message metadata for fast list/search;
+-- bodies stored in TEXT cols. Attachments persisted to disk, paths in
+-- mail_attachments. Thread grouping via in-reply-to / references chain.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS mail_messages (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_label TEXT NOT NULL,            -- matches imap connector accounts[].label
+  uid INT,                                -- IMAP UID (null for sent-via-SMTP rows)
+  message_id TEXT,                        -- RFC822 Message-ID
+  in_reply_to TEXT,
+  refs TEXT[] NOT NULL DEFAULT '{}',     -- References chain
+  thread_key TEXT,                        -- normalized key for grouping (first msg-id or subject hash)
+  folder TEXT NOT NULL DEFAULT 'INBOX',
+  direction TEXT NOT NULL DEFAULT 'in',   -- 'in' | 'out'
+  from_addr TEXT,
+  from_name TEXT,
+  to_addrs TEXT[] NOT NULL DEFAULT '{}',
+  cc_addrs TEXT[] NOT NULL DEFAULT '{}',
+  bcc_addrs TEXT[] NOT NULL DEFAULT '{}',
+  subject TEXT,
+  preview TEXT,                           -- first ~280 chars of text body
+  body_text TEXT,
+  body_html TEXT,
+  raw_size INT NOT NULL DEFAULT 0,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  seen BOOLEAN NOT NULL DEFAULT false,
+  flagged BOOLEAN NOT NULL DEFAULT false,
+  starred BOOLEAN NOT NULL DEFAULT false,
+  trashed_at TIMESTAMPTZ,                 -- soft-delete
+  UNIQUE(user_id, account_label, uid)
+);
+CREATE INDEX IF NOT EXISTS mail_messages_user_ts_idx ON mail_messages(user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS mail_messages_user_account_ts_idx ON mail_messages(user_id, account_label, ts DESC);
+CREATE INDEX IF NOT EXISTS mail_messages_user_thread_idx ON mail_messages(user_id, thread_key);
+CREATE INDEX IF NOT EXISTS mail_messages_user_folder_idx ON mail_messages(user_id, folder, ts DESC);
+CREATE INDEX IF NOT EXISTS mail_messages_user_seen_idx ON mail_messages(user_id, seen);
+
+CREATE TABLE IF NOT EXISTS mail_attachments (
+  id BIGSERIAL PRIMARY KEY,
+  message_id BIGINT NOT NULL REFERENCES mail_messages(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  content_type TEXT,
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  cid TEXT,                               -- Content-ID for inline images
+  inline BOOLEAN NOT NULL DEFAULT false,
+  path TEXT NOT NULL,                     -- absolute filesystem path
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS mail_attachments_msg_idx ON mail_attachments(message_id);
+
+-- Mail "bonifica" timestamp: when set, the message has been ingested into the
+-- brain (vault note + people linking) by the user via the UI button. Skipped
+-- by batch runs unless force=true.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='mail_messages' AND column_name='bonified_at') THEN
+    ALTER TABLE mail_messages ADD COLUMN bonified_at TIMESTAMPTZ;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS mail_messages_user_bonified_idx ON mail_messages(user_id, bonified_at);

@@ -24,6 +24,12 @@ import { bus } from '../../../bus.js';
 import { query } from '../../../db/index.js';
 import { upsertPerson } from '../people/index.js';
 
+// Debug logs gated behind SUPER_AGENT_IG_DEBUG=1. Default off so poll
+// status / storage save / session noise stays out of the console.
+const DBG_IG = process.env.SUPER_AGENT_IG_DEBUG === '1';
+const ilog = (...args: any[]) => { if (DBG_IG) console.log(...args); };
+const iwarn = (...args: any[]) => { if (DBG_IG) console.warn(...args); };
+
 type Status = 'starting' | '2fa' | 'checkpoint' | 'connected' | 'closed';
 
 type Session = {
@@ -69,7 +75,7 @@ async function saveStorage(userId: number, ctx: BrowserContext) {
   try {
     await ensureDir(sessionDir(userId));
     await ctx.storageState({ path: storagePath(userId) });
-    console.log(`[ig:u${userId}] storage saved → ${storagePath(userId)}`);
+    ilog(`[ig:u${userId}] storage saved → ${storagePath(userId)}`);
   } catch (e: any) {
     console.error(`[ig:u${userId}] saveStorage failed`, e?.message ?? e);
   }
@@ -199,7 +205,7 @@ async function attachRealtime(userId: number, page: Page) {
         if (!body || typeof body !== 'object') return;
         const threads: any[] = body.inbox?.threads ?? (body.thread ? [body.thread] : []);
         if (threads.length === 0) return;
-        console.log(`[ig:rt:u${userId}] capture ${payload.source}: ${threads.length} threads from ${url.slice(0, 80)}`);
+        ilog(`[ig:rt:u${userId}] capture ${payload.source}: ${threads.length} threads from ${url.slice(0, 80)}`);
         for (const t of threads) {
           if (!t || !t.thread_id) continue;
           try { await ingestThread(userId, t); } catch (e) { console.error('[ig:rt:ingest]', e); }
@@ -213,7 +219,7 @@ async function attachRealtime(userId: number, page: Page) {
   try {
     await page.goto(IG_BASE + '/direct/inbox/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   } catch (e: any) { console.warn('[ig:rt] inbox goto', e?.message); }
-  console.log(`[ig:u${userId}] realtime attached — listening to inbox push`);
+  ilog(`[ig:u${userId}] realtime attached — listening to inbox push`);
 }
 
 async function teardown(s: Session) {
@@ -250,12 +256,12 @@ async function apiGet(page: Page, urlPath: string, qs: Record<string, string | n
       try { return JSON.parse(txt); } catch { return { __nonjson: true, status: r.status, body: txt.slice(0, 300) }; }
     }, { path: urlPath, params });
     if (data?.__nonjson) {
-      console.warn(`[ig:api] GET ${urlPath} non-json ${data.status}: ${data.body}`);
+      iwarn(`[ig:api] GET ${urlPath} non-json ${data.status}: ${data.body}`);
       return null;
     }
     return data;
   } catch (e: any) {
-    console.warn(`[ig:api] GET ${urlPath} threw`, e?.message);
+    iwarn(`[ig:api] GET ${urlPath} threw`, e?.message);
     return null;
   }
 }
@@ -285,7 +291,7 @@ async function apiPost(page: Page, urlPath: string, form: Record<string, string>
       try { return JSON.parse(txt); } catch { return { __nonjson: true, status: r.status, body: txt.slice(0, 300) }; }
     }, { path: urlPath, form });
   } catch (e: any) {
-    console.warn(`[ig:api] POST ${urlPath} threw`, e?.message);
+    iwarn(`[ig:api] POST ${urlPath} threw`, e?.message);
     return null;
   }
 }
@@ -364,7 +370,7 @@ async function restoreSession(userId: number): Promise<{ ok: boolean; status: st
     await page.goto(IG_BASE + '/direct/inbox/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
     const url = page.url();
     if (/\/accounts\/login\//.test(url)) {
-      console.warn(`[ig:u${userId}] storage stale → fresh login required`);
+      iwarn(`[ig:u${userId}] storage stale → fresh login required`);
       await teardown(session);
       sessions.delete(userId);
       // Don't wipe storage.json — it's harmless if invalid and a successful
@@ -374,7 +380,7 @@ async function restoreSession(userId: number): Promise<{ ok: boolean; status: st
       return { ok: false, status: 'closed', error: 'session expired' };
     }
     if (/\/challenge\//.test(url) || /\/accounts\/disabled_popup\//.test(url)) {
-      console.warn(`[ig:u${userId}] restore landed on challenge page — keeping session live for code submit`);
+      iwarn(`[ig:u${userId}] restore landed on challenge page — keeping session live for code submit`);
       session.status = 'checkpoint';
       session.lastError = 'Instagram richiede verifica. Controlla email/SMS e inserisci il codice.';
       // KEEP session + page alive so submitIgCheckpoint can fill the form.
@@ -385,7 +391,7 @@ async function restoreSession(userId: number): Promise<{ ok: boolean; status: st
     }
     const me = await detectMe(page);
     if (!me) {
-      console.warn(`[ig:u${userId}] restore: couldn't detect me, treating as closed`);
+      iwarn(`[ig:u${userId}] restore: couldn't detect me, treating as closed`);
       await teardown(session);
       sessions.delete(userId);
       bus.emit('ig:status', { userId, status: 'closed', error: 'detectMe failed' });
@@ -397,7 +403,7 @@ async function restoreSession(userId: number): Promise<{ ok: boolean; status: st
     await saveStorage(userId, context);
     bus.emit('ig:status', { userId, status: 'connected', me });
     await attachRealtime(userId, sessions.get(userId)!.page); startPolling(userId);
-    console.log(`[ig:u${userId}] restored as @${me.username}`);
+    ilog(`[ig:u${userId}] restored as @${me.username}`);
     return { ok: true, status: 'connected' };
   } catch (e: any) {
     console.error(`[ig:u${userId}] restore failed`, e?.message);
@@ -421,7 +427,7 @@ async function doFreshLogin(userId: number, username: string, password: string):
     // Baseline screenshot right after navigation so we always have something.
     try { await page.screenshot({ path: path.join(sessionDir(userId), 'login-debug.png'), fullPage: true }); } catch (e: any) { console.error('[ig] screenshot fail', e?.message); }
     try { const html = await page.content(); await fs.writeFile(path.join(sessionDir(userId), 'login-debug.html'), html, 'utf-8'); } catch {}
-    console.log(`[ig:u${userId}] login page loaded → ${page.url()}`);
+    ilog(`[ig:u${userId}] login page loaded → ${page.url()}`);
     // Cookie banner — click "Consenti tutti i cookie" (Accept). Reliable closer.
     // Trying "Rifiuta" sometimes leaves the modal half-open in headless. Accept
     // is purely a UI signal here; we control the actual cookie storage.
@@ -439,7 +445,7 @@ async function doFreshLogin(userId: number, username: string, password: string):
         const btn = page.locator(sel).first();
         if (await btn.count() > 0) {
           await btn.click({ timeout: 5_000 });
-          console.log(`[ig:u${userId}] dismissed cookie banner via "${sel}"`);
+          ilog(`[ig:u${userId}] dismissed cookie banner via "${sel}"`);
           break;
         }
       } catch {}
@@ -495,22 +501,22 @@ async function doFreshLogin(userId: number, username: string, password: string):
     await page.keyboard.type(password, { delay: 50 });
     await page.waitForTimeout(500);
     const clicked = await submitAriaButton(page, ['Accedi', 'Log in', 'Login'], passInput);
-    console.log(`[ig:u${userId}] login submit clicked=${clicked}`);
+    ilog(`[ig:u${userId}] login submit clicked=${clicked}`);
     // Wait for URL to leave /accounts/login/ (IG redirects on success / 2fa / challenge).
     try {
       await page.waitForURL((url) => !/\/accounts\/login(\/?|\?)/.test(url.toString()), { timeout: 30_000 });
     } catch {
-      console.warn(`[ig:u${userId}] login URL didn't change after 30s`);
+      iwarn(`[ig:u${userId}] login URL didn't change after 30s`);
     }
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
     await page.waitForTimeout(1_500);
-    console.log(`[ig:u${userId}] post-submit URL = ${page.url()}`);
+    ilog(`[ig:u${userId}] post-submit URL = ${page.url()}`);
     try { await page.screenshot({ path: path.join(sessionDir(userId), 'post-submit.png'), fullPage: true }); } catch {}
     try { const html = await page.content(); await fs.writeFile(path.join(sessionDir(userId), 'post-submit.html'), html, 'utf-8'); } catch {}
     // Look for explicit error message ("password errata", "wrong password")
     try {
       const errText = await page.locator('p[id^="slfErrorAlert"], [role="alert"]').first().textContent({ timeout: 2_000 });
-      if (errText) console.warn(`[ig:u${userId}] login error banner: "${errText}"`);
+      if (errText) iwarn(`[ig:u${userId}] login error banner: "${errText}"`);
     } catch {}
     // Wait for navigation to settle (could be: home, /challenge/, /accounts/onetap/, /accounts/login/two_factor)
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
@@ -556,7 +562,7 @@ async function doFreshLogin(userId: number, username: string, password: string):
     await saveStorage(userId, context);
     bus.emit('ig:status', { userId, status: 'connected', me });
     await attachRealtime(userId, sessions.get(userId)!.page); startPolling(userId);
-    console.log(`[ig:u${userId}] logged in as @${me.username}`);
+    ilog(`[ig:u${userId}] logged in as @${me.username}`);
     return { ok: true, status: 'connected' };
   } catch (e: any) {
     console.error(`[ig:u${userId}] login failed`, e?.message);
@@ -600,7 +606,7 @@ export async function submitIgTwoFactor(userId: number, code: string): Promise<{
     } catch {
       // Stuck on /two_factor/. Could be: invalid code, IG rate-limit silent fail,
       // or extra step injected. Capture state, surface to user.
-      console.warn(`[ig:u${userId}] 2fa URL didn't change after 60s`);
+      iwarn(`[ig:u${userId}] 2fa URL didn't change after 60s`);
       try { await s.page.screenshot({ path: path.join(sessionDir(userId), 'post-2fa-stuck.png'), fullPage: true }); } catch {}
       // Detect explicit error message
       let errBanner = '';
@@ -612,7 +618,7 @@ export async function submitIgTwoFactor(userId: number, code: string): Promise<{
     }
     await s.page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
     await s.page.waitForTimeout(1_500);
-    console.log(`[ig:u${userId}] post-2fa URL = ${s.page.url()}`);
+    ilog(`[ig:u${userId}] post-2fa URL = ${s.page.url()}`);
     // Force navigation to root — sometimes IG sets ds_user_id only on a subsequent
     // page load after the 2fa redirect chain settles.
     try {
@@ -624,7 +630,7 @@ export async function submitIgTwoFactor(userId: number, code: string): Promise<{
     const cookies = await s.context.cookies();
     const dsUserId = cookies.find((c) => c.name === 'ds_user_id')?.value;
     const sessionId = cookies.find((c) => c.name === 'sessionid')?.value;
-    console.log(`[ig:u${userId}] post-2fa cookies: ds_user_id=${dsUserId ?? 'MISSING'} sessionid=${sessionId ? 'OK' : 'MISSING'}`);
+    ilog(`[ig:u${userId}] post-2fa cookies: ds_user_id=${dsUserId ?? 'MISSING'} sessionid=${sessionId ? 'OK' : 'MISSING'}`);
     await s.page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
     const url = s.page.url();
     if (/\/two_factor\//.test(url) || (await s.page.locator('text=/incorrect|sbagliato|wrong/i').count()) > 0) {
@@ -678,11 +684,11 @@ export async function submitIgCheckpoint(userId: number, code: string): Promise<
     try {
       await s.page.waitForURL((url) => !/\/challenge\//.test(url.toString()), { timeout: 30_000 });
     } catch {
-      console.warn(`[ig:u${userId}] checkpoint URL didn't change after 30s`);
+      iwarn(`[ig:u${userId}] checkpoint URL didn't change after 30s`);
     }
     await s.page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
     await s.page.waitForTimeout(1_500);
-    console.log(`[ig:u${userId}] post-checkpoint URL = ${s.page.url()}`);
+    ilog(`[ig:u${userId}] post-checkpoint URL = ${s.page.url()}`);
     await s.page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
     const url = s.page.url();
     if (/\/challenge\//.test(url)) {
@@ -724,7 +730,7 @@ export function getIgStatus(userId: number): { status: string; me?: any; error?:
   // Lazy restore if storage on disk exists.
   storageExists(userId).then((exists) => {
     if (exists && !sessions.get(userId)) {
-      console.log(`[ig:u${userId}] lazy restore from storage…`);
+      ilog(`[ig:u${userId}] lazy restore from storage…`);
       startIgForUser(userId).catch((e) => console.error('[ig] lazy restore', e));
     }
   });
@@ -739,7 +745,7 @@ function startPolling(userId: number) {
   if (!s) return;
   if (s.pollTimer) clearTimeout(s.pollTimer);
   if (!AUTOPOLL_ENABLED) {
-    console.log(`[ig:u${userId}] auto-polling disabled. Manual sync only.`);
+    ilog(`[ig:u${userId}] auto-polling disabled. Manual sync only.`);
     return;
   }
   s.pollIntervalMs = POLL_INTERVAL_BASE_MS;
@@ -766,7 +772,7 @@ function startPolling(userId: number) {
 async function pollOnce(userId: number, opts: { pages?: number } = {}): Promise<{ ok: boolean; threads: number; items: number; error?: string }> {
   const s = sessions.get(userId);
   if (!s || s.status !== 'connected') return { ok: false, threads: 0, items: 0, error: 'not connected' };
-  console.log(`[ig:u${userId}] poll start (pages=${opts.pages ?? 1})`);
+  ilog(`[ig:u${userId}] poll start (pages=${opts.pages ?? 1})`);
   const allThreads: any[] = [];
   let cursor: string | undefined;
   const maxPages = Math.max(1, Math.min(opts.pages ?? 1, 10));
@@ -790,7 +796,7 @@ async function pollOnce(userId: number, opts: { pages?: number } = {}): Promise<
   for (const t of allThreads) {
     try { totalItems += (t.items?.length ?? 0); await ingestThread(userId, t); } catch (e) { console.error('[ig:ingest]', e); }
   }
-  console.log(`[ig:u${userId}] poll done: ${allThreads.length} threads, ${totalItems} items`);
+  ilog(`[ig:u${userId}] poll done: ${allThreads.length} threads, ${totalItems} items`);
   await saveStorage(userId, s.context);
   return { ok: true, threads: allThreads.length, items: totalItems };
 }
@@ -923,7 +929,7 @@ export async function sendIgMessage(userId: number, threadId: string, text: stri
     // text in textarea, press Enter. Slower but matches what a real user does.
     await s.page.goto(`${IG_BASE}/direct/t/${encodeURIComponent(threadId)}/`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await s.page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-    console.log(`[ig:u${userId}] send: thread URL = ${s.page.url()}`);
+    ilog(`[ig:u${userId}] send: thread URL = ${s.page.url()}`);
     // Try multiple composer selectors — IG rotates them.
     const composerSelectors = [
       'div[role="textbox"][contenteditable="true"]',
@@ -939,7 +945,7 @@ export async function sendIgMessage(userId: number, threadId: string, text: stri
       try {
         await loc.waitFor({ state: 'visible', timeout: 4_000 });
         composer = loc;
-        console.log(`[ig:u${userId}] composer found via "${sel}"`);
+        ilog(`[ig:u${userId}] composer found via "${sel}"`);
         break;
       } catch {}
     }
@@ -1000,7 +1006,7 @@ async function scheduleFollowUp(userId: number, threadId: string) {
      WHERE user_id=$1 AND thread_id=$2`,
     [userId, threadId, hoursDelay],
   );
-  console.log(`[ig:followup:u${userId}] scheduled follow-up #${count + 1} for ${threadId} in ${hoursDelay}h`);
+  ilog(`[ig:followup:u${userId}] scheduled follow-up #${count + 1} for ${threadId} in ${hoursDelay}h`);
 }
 
 // Cancel pending follow-up (called when counterpart replies).
@@ -1327,12 +1333,12 @@ bus.on('ig:message', async (m: any) => {
     autoResponderCooldown.set(key, Date.now());
     const goal = rows[0].auto_responder_goal ?? undefined;
     const tid = m.msg.thread_id;
-    console.log(`[ig:autoresponder:u${m.userId}] firing on ${tid} (goal=${goal ?? 'none'})`);
+    ilog(`[ig:autoresponder:u${m.userId}] firing on ${tid} (goal=${goal ?? 'none'})`);
     emitActivity(m.userId, tid, 'reading', 'Leggo il nuovo messaggio…');
     emitActivity(m.userId, tid, 'thinking', 'Formulo risposta…');
     const sugg = await suggestIgReply(m.userId, tid, { goal });
     if (!sugg.ok || !sugg.draft) {
-      console.warn(`[ig:autoresponder:u${m.userId}] suggest failed: ${sugg.error}`);
+      iwarn(`[ig:autoresponder:u${m.userId}] suggest failed: ${sugg.error}`);
       emitActivity(m.userId, tid, 'error', sugg.error || 'Nessuna bozza.');
       return;
     }
@@ -1340,7 +1346,7 @@ bus.on('ig:message', async (m: any) => {
     await cancelFollowUp(m.userId, tid);
     emitActivity(m.userId, tid, 'sending', 'Invio risposta…');
     const sent = await sendIgMessage(m.userId, tid, sugg.draft, 'autoresponder', 'ai');
-    if (!sent.ok) { console.warn(`[ig:autoresponder:u${m.userId}] send failed: ${sent.error}`); emitActivity(m.userId, tid, 'error', sent.error || 'Invio fallito.'); }
+    if (!sent.ok) { iwarn(`[ig:autoresponder:u${m.userId}] send failed: ${sent.error}`); emitActivity(m.userId, tid, 'error', sent.error || 'Invio fallito.'); }
     else {
       emitActivity(m.userId, tid, 'sent', 'Risposta inviata.');
       await scheduleFollowUp(m.userId, tid);
