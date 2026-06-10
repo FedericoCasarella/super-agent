@@ -14,12 +14,21 @@ function transformWikilinks(src: string): string {
   });
 }
 
+// Strip a YAML frontmatter block at the start if present. Backend should
+// already do this via gray-matter, but agent-generated notes occasionally
+// have leading whitespace / BOM that defeat matter() parsing — clean here.
+function stripFrontmatter(src: string): string {
+  const m = src.match(/^﻿?\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return m ? src.slice(m[0].length) : src;
+}
+
 export default function MarkdownView({ content, onWikilinkClick }: Props) {
-  const md = transformWikilinks(content ?? '');
+  const md = transformWikilinks(stripFrontmatter(content ?? ''));
   return (
     <div className="prose-md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={(url) => url}
         components={{
           a({ href, children }) {
             if (href?.startsWith('wikilink:')) {
@@ -47,10 +56,10 @@ export default function MarkdownView({ content, onWikilinkClick }: Props) {
           em: ({ children }) => <em className="italic text-text/90">{children}</em>,
           code: ({ children }) => <code className="font-mono text-xs bg-surface2 border border-border rounded px-1.5 py-0.5">{children}</code>,
           pre: ({ children }) => <pre className="font-mono text-xs bg-surface2 border border-border rounded-lg p-3 overflow-x-auto my-3">{children}</pre>,
-          blockquote: ({ children }) => <blockquote className="border-l-2 border-accent/40 pl-3 text-muted my-2">{children}</blockquote>,
+          blockquote: ({ children }) => <blockquote className="border-l-2 border-accent/40 pl-3 text-muted-foreground my-2">{children}</blockquote>,
           hr: () => <hr className="border-border my-4" />,
           table: ({ children }) => <table className="text-sm border border-border rounded my-2">{children}</table>,
-          th: ({ children }) => <th className="border-b border-border px-2 py-1 text-left text-muted">{children}</th>,
+          th: ({ children }) => <th className="border-b border-border px-2 py-1 text-left text-muted-foreground">{children}</th>,
           td: ({ children }) => <td className="border-b border-border/40 px-2 py-1">{children}</td>,
         }}
       >

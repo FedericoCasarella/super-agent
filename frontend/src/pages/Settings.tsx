@@ -7,6 +7,8 @@ import { useAuth } from '../auth';
 import BrainLoading from '../components/BrainLoading';
 import BrandingEditor from '../components/BrandingEditor';
 import BrainColorsEditor from '../components/BrainColorsEditor';
+import { usePageVisibility, PAGE_META, type PageKey } from '../pageVisibility';
+import { LayoutGrid } from 'lucide-react';
 
 export default function Settings() {
   const [s, setS] = useState<any>(null);
@@ -99,21 +101,23 @@ export default function Settings() {
     <div className="space-y-6 max-w-3xl">
       <h1 className="text-2xl font-semibold">{t('settings.title')}</h1>
 
+      <PageVisibilityCard />
+
       <Card>
         <h2 className="text-lg font-semibold mb-1">Branding app</h2>
-        <p className="text-sm text-muted mb-4">Personalizza nome e logo. Visibile in sidebar, login e tab del browser.</p>
+        <p className="text-sm text-muted-foreground mb-4">Personalizza nome e logo. Visibile in sidebar, login e tab del browser.</p>
         <BrandingEditor onSaved={() => toast.push('Branding salvato', 'on')} />
       </Card>
 
       <Card>
         <h2 className="text-lg font-semibold mb-1">Colori cervello (neuroni)</h2>
-        <p className="text-sm text-muted mb-4">Personalizza i colori dei nodi nel grafo 3D per visibilità e categoria. Color picker o hex.</p>
+        <p className="text-sm text-muted-foreground mb-4">Personalizza i colori dei nodi nel grafo 3D per visibilità e categoria. Color picker o hex.</p>
         <BrainColorsEditor onSaved={() => toast.push('Colori salvati', 'on')} />
       </Card>
 
       <Card>
         <h2 className="text-lg font-semibold mb-1">{t('settings.language')}</h2>
-        <p className="text-sm text-muted mb-4">{t('settings.languageDesc')}</p>
+        <p className="text-sm text-muted-foreground mb-4">{t('settings.languageDesc')}</p>
         <div className="flex gap-2">
           {(['it','en'] as Lang[]).map((l) => (
             <Button
@@ -132,7 +136,7 @@ export default function Settings() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold mb-1">{lang === 'it' ? 'Suono notifica' : 'Notification sound'}</h2>
-            <p className="text-sm text-muted">{lang === 'it' ? 'Suona un chime in browser quando arriva un messaggio Telegram.' : 'Play a chime in the browser when a Telegram message arrives.'}</p>
+            <p className="text-sm text-muted-foreground">{lang === 'it' ? 'Suona un chime in browser quando arriva un messaggio Telegram.' : 'Play a chime in the browser when a Telegram message arrives.'}</p>
           </div>
           <Toggle
             checked={s.sound_on_message !== false}
@@ -147,7 +151,7 @@ export default function Settings() {
 
       <Card>
         <h2 className="text-lg font-semibold mb-1">{t('settings.vaults')}</h2>
-        <p className="text-sm text-muted mb-4">{t('settings.vaultsDesc')}</p>
+        <p className="text-sm text-muted-foreground mb-4">{t('settings.vaultsDesc')}</p>
         {vaults.length > 0 && (
           <ul className="space-y-2 mb-4">
             {vaults.map((v) => (
@@ -157,7 +161,7 @@ export default function Settings() {
                     <span className="font-medium">{v.name}</span>
                     {v.is_primary && <Chip tone="on">{t('settings.vaultPrimary')}</Chip>}
                   </div>
-                  <div className="text-xs text-muted font-mono truncate">{v.path}</div>
+                  <div className="text-xs text-muted-foreground font-mono truncate">{v.path}</div>
                 </div>
                 <div className="flex gap-2 shrink-0">
                   {!v.is_primary && <Button size="sm" variant="ghost" onClick={() => setPrimaryVault(v.id)}>{t('settings.vaultSetPrimary')}</Button>}
@@ -188,11 +192,11 @@ export default function Settings() {
 
       <Card>
         <h2 className="text-lg font-semibold mb-1">{t('settings.vault')}</h2>
-        <p className="text-sm text-muted mb-4">{t('settings.vaultDesc')}</p>
+        <p className="text-sm text-muted-foreground mb-4">{t('settings.vaultDesc')}</p>
         <Field label={t('settings.vaultPath')}>
           <Input className="font-mono" value={vault} onChange={(e) => setVault(e.target.value)} />
         </Field>
-        <div className="text-xs text-muted mt-2">Current: <span className="font-mono text-text">{s.vault ?? '(none)'}</span></div>
+        <div className="text-xs text-muted-foreground mt-2">Current: <span className="font-mono text-text">{s.vault ?? '(none)'}</span></div>
         <div className="mt-4 flex gap-2 justify-end">
           <Button variant="ghost" onClick={() => setVault(s.vault ?? '')} disabled={!vaultChanged}>{t('common.reset')}</Button>
           <Button variant="danger" onClick={() => setConfirmOpen(true)} disabled={!vaultChanged}>{t('settings.changeVault')}</Button>
@@ -222,7 +226,7 @@ export default function Settings() {
 
       <Card>
         <h2 className="text-lg font-semibold mb-1">{t('settings.telegram')}</h2>
-        <p className="text-sm text-muted mb-3">
+        <p className="text-sm text-muted-foreground mb-3">
           {s.telegram?.chatId ? <>Chat: <Chip tone="on">{s.telegram.chatId}</Chip></> : <Chip tone="warn">{t('settings.notLinked')}</Chip>}
         </p>
         <Field label={t('settings.replaceToken')}><Input className="font-mono" placeholder="123456:ABC-…" value={token} onChange={(e) => setToken(e.target.value)} /></Field>
@@ -231,7 +235,7 @@ export default function Settings() {
 
       <Card className="border-err/40">
         <h2 className="text-lg font-semibold mb-1 text-err">{lang === 'it' ? 'Zona pericolo' : 'Danger zone'}</h2>
-        <p className="text-sm text-muted mb-4">
+        <p className="text-sm text-muted-foreground mb-4">
           {lang === 'it'
             ? 'Eliminare l\'account rimuove tutti i tuoi dati dal database (settings, messaggi, brain index, persone, agent runs, task, richieste network). I file del vault sul filesystem restano dove sono — eliminali manualmente se vuoi.'
             : 'Deleting your account wipes all your data from the database (settings, messages, brain index, people, agent runs, tasks, network requests). Vault files on disk stay where they are — remove them manually if you want.'}
@@ -278,11 +282,53 @@ export default function Settings() {
         }
       >
         <Banner tone="warn">{t('settings.confirmVaultBody')}</Banner>
-        <div className="mt-4 text-xs text-muted space-y-1 font-mono">
+        <div className="mt-4 text-xs text-muted-foreground space-y-1 font-mono">
           <div>{t('settings.from')}: {s.vault ?? '(none)'}</div>
           <div>{t('settings.to')}: {vault}</div>
         </div>
       </Modal>
     </div>
+  );
+}
+
+// =====================================================================
+// Layout card — toggles per-page in the sidebar. Locally stored.
+// =====================================================================
+function PageVisibilityCard() {
+  const { visible, toggle } = usePageVisibility();
+  const keys = Object.keys(PAGE_META) as PageKey[];
+  return (
+    <Card>
+      <div className="flex items-start gap-3 mb-3">
+        <LayoutGrid size={20} className="text-accent shrink-0 mt-0.5" />
+        <div>
+          <h2 className="text-lg font-semibold">Layout sidebar</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Mostra / nascondi pagine intere. Disabilitate sono inaccessibili anche tramite URL diretto. Default: minimo
+            essenziale così la barra resta pulita.
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+        {keys.map((k) => {
+          const meta = PAGE_META[k];
+          const on = !!visible[k];
+          return (
+            <div
+              key={k}
+              className={`flex items-start gap-3 p-3 rounded-xl border transition ${
+                on ? 'border-accent/40 bg-accent/5' : 'border-border bg-surface2/30'
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">{meta.label}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{meta.description}</div>
+              </div>
+              <Toggle checked={on} onChange={() => toggle(k)} />
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }

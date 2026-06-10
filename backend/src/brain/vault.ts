@@ -10,6 +10,49 @@ function emitBrainAccess(userId: number, rel: string, tool: 'read' | 'write') {
   bus.emit('brain:access', { userId, vaultName: 'default', rel, tool, ts: Date.now() });
 }
 
+// Extract every link target (wikilink + frontmatter related/refs) referenced by
+// a note. Returns a Set of normalized relative paths (no extension, no [[]]).
+function extractLinkTargets(frontmatter: Record<string, any>, body: string): Set<string> {
+  const out = new Set<string>();
+  const push = (raw: any) => {
+    if (raw == null) return;
+    if (Array.isArray(raw)) { for (const v of raw) push(v); return; }
+    const s = String(raw).trim();
+    if (!s) return;
+    // Strip [[..]] wrapper, alias pipe, .md suffix, leading ./
+    const m = s.match(/\[\[([^\]|]+)/);
+    const cleaned = (m ? m[1] : s).replace(/\.md$/i, '').replace(/^\.\//, '').trim();
+    if (cleaned) out.add(cleaned);
+  };
+  push(frontmatter?.related);
+  push(frontmatter?.refs);
+  // Body wikilinks
+  for (const m of body.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)) push(m[1]);
+  return out;
+}
+
+// Read EXISTING file (if any) and return the targets it had before the write.
+async function previousTargets(fullPath: string): Promise<Set<string>> {
+  try {
+    const raw = await fs.readFile(fullPath, 'utf8');
+    const parsed = matter(raw);
+    return extractLinkTargets(parsed.data ?? {}, parsed.content ?? '');
+  } catch { return new Set(); }
+}
+
+function emitNewLinks(userId: number, sourceRel: string, before: Set<string>, after: Set<string>) {
+  for (const t of after) {
+    if (before.has(t)) continue;
+    bus.emit('brain:link_added', {
+      userId,
+      vaultName: 'default',
+      source: sourceRel.replace(/\.md$/i, ''),
+      target: t,
+      ts: Date.now(),
+    });
+  }
+}
+
 export type VaultNote = {
   path: string;
   title?: string;
@@ -53,10 +96,12 @@ export async function writeNote(userId: number, relPath: string, frontmatter: Re
   if (!root) throw new Error('vault not configured');
   const full = path.join(root, relPath);
   await fs.mkdir(path.dirname(full), { recursive: true });
+  const before = await previousTargets(full);
   const fm = matter.stringify(body.trimEnd() + '\n', frontmatter);
   await fs.writeFile(full, fm, 'utf8');
   await indexNote(userId, relPath, frontmatter, body);
   emitBrainAccess(userId, relPath, 'write');
+  emitNewLinks(userId, relPath, before, extractLinkTargets(frontmatter, body));
   return full;
 }
 
@@ -65,6 +110,7 @@ export async function appendNote(userId: number, relPath: string, line: string, 
   if (!root) throw new Error('vault not configured');
   const full = path.join(root, relPath);
   await fs.mkdir(path.dirname(full), { recursive: true });
+  const before = await previousTargets(full);
   let existing = '';
   try { existing = await fs.readFile(full, 'utf8'); } catch {}
   if (!existing) {
@@ -74,6 +120,12 @@ export async function appendNote(userId: number, relPath: string, line: string, 
     await fs.appendFile(full, '\n' + line + '\n', 'utf8');
   }
   emitBrainAccess(userId, relPath, 'write');
+  // Re-read to pick up any new wikilinks from the appended line.
+  try {
+    const raw = await fs.readFile(full, 'utf8');
+    const parsed = matter(raw);
+    emitNewLinks(userId, relPath, before, extractLinkTargets(parsed.data ?? {}, parsed.content ?? ''));
+  } catch {}
   return full;
 }
 
@@ -108,11 +160,17 @@ export async function searchNotes(userId: number, q: string, limit = 20): Promis
       const full = path.join(dir, e.name);
       if (e.isDirectory()) { await walk(full); continue; }
       if (!e.name.endsWith('.md')) continue;
+      const rel = path.relative(vaultRoot, full);
+      // Match by filename / relative path BEFORE reading content. User often
+      // searches by filename (e.g. "sop-delivery-ai-coach.md") and the term
+      // isn't inside the body — previous code missed every such hit.
+      const nameHit = e.name.toLowerCase().includes(term) || rel.toLowerCase().includes(term);
       const raw = await fs.readFile(full, 'utf8');
-      if (!raw.toLowerCase().includes(term)) continue;
+      const bodyHit = raw.toLowerCase().includes(term);
+      if (!nameHit && !bodyHit) continue;
       const parsed = matter(raw);
       out.push({
-        path: path.relative(vaultRoot, full),
+        path: rel,
         title: parsed.data.title,
         tags: parsed.data.tags ?? [],
         data: parsed.data,

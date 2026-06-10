@@ -87,7 +87,98 @@ export async function startScheduler() {
   });
   console.log('[scheduler] reflection loop armed (every 2m, all users)');
 
-  // Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
+  // WA watchdog: every 60s scan active users and restart any WA session that
+  // is missing or in a stale 'closed' state. Prevents the agent from sitting
+  // on `status=idle` after a backend restart, network drop, or phone-side
+  // disconnect (Baileys' own auto-retry path doesn't fire on every disconnect
+  // reason).
+  let waWatchRunning = false;
+  cron.schedule('* * * * *', async () => {
+    if (waWatchRunning) return;
+    waWatchRunning = true;
+    try {
+      const wa = await import('../connectors/builtin/whatsapp/index.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try {
+          const st = wa.getWaStatus(u.id);
+          if (st.status === 'starting' || st.status === 'closed' || st.status === 'idle') {
+            await wa.startWaForUser(u.id).catch(() => {});
+          }
+        } catch {}
+      }
+    } catch (e) { console.error('[wa-watchdog]', e); }
+    finally { waWatchRunning = false; }
+  });
+  console.log('[scheduler] wa-watchdog armed (every 1m)');
+
+  // Mail auto-sync: react to `mail:new` events. When the IMAP cron's
+  // persistInbound fires for an account the user flagged `mail.autoSync=true`,
+  // immediately bonifica that single message (brain note + people linking).
+  // Per-message, NOT a polling loop.
+  bus.on('mail:new', async (m: any) => {
+    if (!m?.userId || !m?.account || !m?.id) return;
+    try {
+      const pref = await getSetting<{ enabled: boolean }>(m.userId, `mail.autoSync.${m.account}`);
+      if (!pref?.enabled) return;
+      bus.emit('mail:autosync', { userId: m.userId, account: m.account, mailId: m.id, phase: 'started' });
+      const { bonifyOne } = await import('../mail/service.js');
+      const r = await bonifyOne(m.userId, m.id, false);
+      bus.emit('mail:autosync', {
+        userId: m.userId, account: m.account, mailId: m.id,
+        phase: r.ok ? 'done' : 'error',
+        skipped: r.skipped, subj: r.subj, error: r.error,
+      });
+    } catch (e: any) {
+      bus.emit('mail:autosync', { userId: m.userId, account: m.account, mailId: m.id, phase: 'error', error: String(e?.message ?? e) });
+    }
+  });
+  console.log('[scheduler] mail auto-sync armed (per-message, on mail:new)');
+
+  // Brain snapshots: 00:00 nightly per-user vault copy + counts.
+  // Pin to Europe/Rome so it fires at midnight LOCAL regardless of system TZ
+  // (default would be process TZ — if running in UTC container, "00:00" =
+  // 02:00 CEST and the user thinks it's broken).
+  let snapRunning = false;
+  async function runSnapshotSweep(label: string) {
+    if (snapRunning) return;
+    snapRunning = true;
+    try {
+      const { createSnapshots } = await import('../brain/snapshots.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try { const r = await createSnapshots(u.id, 'cron'); console.log(`[snapshots:${label}:u${u.id}] ${r.length} vaults snapshotted`); }
+        catch (e) { console.error(`[snapshots:${label}:u${u.id}]`, e); }
+      }
+    } finally { snapRunning = false; }
+  }
+  cron.schedule('0 0 * * *', () => { runSnapshotSweep('cron').catch(() => {}); }, { timezone: 'Europe/Rome' });
+  console.log('[scheduler] brain-snapshot loop armed (daily 00:00 Europe/Rome)');
+
+  // Catch-up: backend was down at midnight, or process restarted mid-sweep.
+  // On boot, check whether a cron snapshot for TODAY already exists per user;
+  // if not, run one now. Guarantees daily coverage even with frequent restarts.
+  (async () => {
+    try {
+      const { createSnapshots } = await import('../brain/snapshots.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try {
+          const r = await query<{ c: number }>(
+            `SELECT count(*)::int AS c FROM brain_snapshots
+             WHERE user_id=$1 AND trigger='cron' AND created_at::date = (now() AT TIME ZONE 'Europe/Rome')::date`,
+            [u.id],
+          );
+          if ((r[0]?.c ?? 0) > 0) continue;
+          console.log(`[snapshots:catchup:u${u.id}] no cron snapshot for today — running now`);
+          const out = await createSnapshots(u.id, 'cron');
+          console.log(`[snapshots:catchup:u${u.id}] ${out.length} vaults snapshotted`);
+        } catch (e) { console.error(`[snapshots:catchup:u${u.id}]`, e); }
+      }
+    } catch (e) { console.error('[snapshots:catchup]', e); }
+  })().catch(() => {});
+
+// Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
   // wa_messages and run bonifyWaMessages(onlyChat=jid). Skips quiet/disabled.
   let bonifyRunning = false;
   cron.schedule('*/5 * * * *', async () => {
@@ -122,6 +213,51 @@ export async function startScheduler() {
   });
   console.log('[scheduler] wa auto-bonify loop armed (every 5m, per-chat opt-in)');
 
+  // IG auto-bonify loop — same pattern as WA but on ig_messages/ig_threads.
+  let igBonifyRunning = false;
+  cron.schedule('*/5 * * * *', async () => {
+    if (igBonifyRunning) return;
+    igBonifyRunning = true;
+    try {
+      const ig = await import('../connectors/builtin/instagram/index.js');
+      const rows = await query<{ user_id: number; thread_id: string; pending: number }>(
+        `SELECT t.user_id::int, t.thread_id,
+                (SELECT count(*)::int FROM ig_messages m
+                 WHERE m.user_id=t.user_id AND m.thread_id=t.thread_id
+                   AND m.processed_at IS NULL AND m.text <> '' AND NOT m.from_me) AS pending
+         FROM ig_threads t WHERE t.auto_bonify=true`,
+      );
+      for (const r of rows) {
+        if (!r.pending || r.pending <= 0) continue;
+        let remaining = r.pending;
+        let cycles = 0;
+        while (remaining > 0 && cycles < 5) {
+          const limit = Math.min(remaining, 500);
+          console.log(`[ig-auto-bonify:u${r.user_id}] ${r.thread_id} cycle ${cycles+1}/5 pending=${remaining} → running ${limit}`);
+          try { const res = await ig.bonifyIgMessages(r.user_id, { onlyThread: r.thread_id, limit }); remaining -= res.processed ?? limit; }
+          catch (e) { console.error('[ig-auto-bonify]', e); break; }
+          cycles++;
+        }
+      }
+    } catch (e) { console.error('[ig-auto-bonify] loop error', e); }
+    finally { igBonifyRunning = false; }
+  });
+  console.log('[scheduler] ig auto-bonify loop armed (every 5m, per-thread opt-in)');
+
+  // IG follow-up tick — every minute walks ig_threads with follow_up_at <= now
+  // and fires runFollowUp via the connector.
+  let igFollowUpRunning = false;
+  cron.schedule('* * * * *', async () => {
+    if (igFollowUpRunning) return;
+    igFollowUpRunning = true;
+    try {
+      const ig = await import('../connectors/builtin/instagram/index.js');
+      await ig.tickIgFollowUps();
+    } catch (e) { console.error('[ig-followup] loop error', e); }
+    finally { igFollowUpRunning = false; }
+  });
+  console.log('[scheduler] ig follow-up loop armed (every 1m)');
+
   await refreshScheduledTasks();
   console.log('[scheduler] user-defined tasks loaded');
   startInternalAgentsScheduler();
@@ -149,12 +285,45 @@ export async function runTick(userId: number, name: string) {
   }
 }
 
+// Dedup: skip events whose stable key was already processed in the recent
+// past. Without this, a duplicate IMAP poller (e.g. two backend instances
+// fighting over the same session, or rapid restarts that re-fetch the same
+// UID) would fire onConnectorEvent N times → N Telegram pings for one email.
+const recentEventKeys = new Map<string, number>();
+const EVENT_DEDUP_MS = 10 * 60_000;
+// Per-user mutex so two near-simultaneous events (email + WS push) can't
+// spawn two Claude runs in parallel that both reply.
+const proactiveInFlight = new Set<number>();
+
+function eventKey(ev: { userId: number; connector: string; kind: string; payload: any }): string {
+  const p = ev.payload ?? {};
+  // Best-effort stable id: account+uid for emails, otherwise channel+msg_id.
+  const id = p.uid ?? p.id ?? p.msg_id ?? p.subj ?? JSON.stringify(p).slice(0, 80);
+  return `${ev.userId}:${ev.connector}:${ev.kind}:${p.account ?? ''}:${id}`;
+}
+
 async function onConnectorEvent(ev: { userId: number; connector: string; kind: string; payload: any }) {
-  const vault = await getVaultRoot(ev.userId);
-  const prompt = await buildProactivePrompt(ev.userId, `${ev.connector}:${ev.kind}`, ev.payload);
-  const res = await runClaude(ev.userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 60_000, kind: 'proactive', meta: { trigger: `${ev.connector}:${ev.kind}` } });
-  if (!res.ok) return;
-  const out = res.text.trim();
-  if (!out || out === 'SKIP') return;
-  try { await sendTelegram(ev.userId, out); } catch (e) { console.error('[scheduler] sendTelegram', e); }
+  const now = Date.now();
+  // Sweep expired
+  for (const [k, ts] of recentEventKeys) if (now - ts > EVENT_DEDUP_MS) recentEventKeys.delete(k);
+  const key = eventKey(ev);
+  if (recentEventKeys.has(key)) {
+    console.log(`[scheduler] skip dup event ${key}`);
+    return;
+  }
+  recentEventKeys.set(key, now);
+  if (proactiveInFlight.has(ev.userId)) {
+    console.log(`[scheduler:u${ev.userId}] proactive turn in-flight — skipping ${ev.connector}:${ev.kind}`);
+    return;
+  }
+  proactiveInFlight.add(ev.userId);
+  try {
+    const vault = await getVaultRoot(ev.userId);
+    const prompt = await buildProactivePrompt(ev.userId, `${ev.connector}:${ev.kind}`, ev.payload);
+    const res = await runClaude(ev.userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 60_000, kind: 'proactive', meta: { trigger: `${ev.connector}:${ev.kind}` } });
+    if (!res.ok) return;
+    const out = res.text.trim();
+    if (!out || out === 'SKIP') return;
+    try { await sendTelegram(ev.userId, out); } catch (e) { console.error('[scheduler] sendTelegram', e); }
+  } finally { proactiveInFlight.delete(ev.userId); }
 }

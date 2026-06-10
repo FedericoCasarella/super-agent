@@ -216,6 +216,14 @@ async function runStep(userId: number, runId: number, step: FlowStep, ctx: any):
       const r = await wa.sendWaMessage(userId, jid, text, `flow:${ctx.flow.id}`);
       return { ok: r.ok, output: { sent: r.ok }, error: r.error };
     }
+    case 'instagram.send': {
+      const ig = await import('../connectors/builtin/instagram/index.js');
+      const tid = String(config.thread_id ?? '');
+      const text = String(config.text ?? '');
+      if (!tid || !text) return { ok: false, error: 'thread_id + text required' };
+      const r = await ig.sendIgMessage(userId, tid, text, `flow:${ctx.flow.id}`, 'ai');
+      return { ok: r.ok, output: { sent: r.ok }, error: r.error };
+    }
     case 'brain.write_note': {
       const path = String(config.path ?? '');
       const body = String(config.body ?? '');
@@ -315,6 +323,26 @@ const TRIGGER_MATCHERS: Record<string, TriggerMatch> = {
   'team.fired':       (cfg, p) => !cfg.team_id || Number(cfg.team_id) === Number(p.teamId),
 };
 
+// True iff at least one enabled, non-archived flow has a trigger of this type
+// for this user. Orchestrator uses it to skip its default reply when the user
+// has explicitly wired a flow to handle the channel — otherwise both fire and
+// the user gets two answers.
+export async function hasFlowForTrigger(userId: number, triggerType: string): Promise<boolean> {
+  // Only count flows that ACTUALLY have steps wired up. An empty flow with
+  // just a trigger and zero steps would silently swallow the message — the
+  // orchestrator skipped its default reply and the flow had nothing to run.
+  // Result: user sent message, got nothing back.
+  const rows = await query<{ n: number }>(
+    `SELECT count(*)::int AS n
+     FROM flow_triggers t
+     JOIN flows f ON f.id=t.flow_id
+     WHERE t.type=$1 AND f.user_id=$2 AND f.enabled=true AND f.archived=false
+       AND EXISTS(SELECT 1 FROM flow_steps s WHERE s.flow_id=f.id)`,
+    [triggerType, userId],
+  );
+  return (rows[0]?.n ?? 0) > 0;
+}
+
 async function dispatchTrigger(triggerType: string, userId: number, payload: any) {
   const rows = await query<{ flow_id: number; user_id: number; cfg: any }>(
     `SELECT t.flow_id::int, f.user_id::int, t.config AS cfg
@@ -335,6 +363,8 @@ export function attachFlowDispatchers() {
   busAttached = true;
   // WhatsApp incoming
   bus.on('wa:message', (m: any) => { if (m?.userId) dispatchTrigger('whatsapp.received', m.userId, m); });
+  // Instagram DM incoming
+  bus.on('ig:message', (m: any) => { if (m?.userId) dispatchTrigger('instagram.received', m.userId, m); });
   // Telegram incoming
   bus.on('telegram:incoming', (m: any) => { if (m?.userId) dispatchTrigger('telegram.received', m.userId, m); });
   // Voice transcribed (telegram bot emits as telegram:incoming with transcript text; we also rebroadcast)

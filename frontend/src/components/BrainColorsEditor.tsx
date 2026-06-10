@@ -11,24 +11,33 @@ const VIS_LABELS: Record<string, string> = { protected: 'Protetto', public: 'Pub
 
 function ColorRow({ label, hint, value, onChange }: { label: string; hint?: string; value: string; onChange: (v: string) => void }) {
   return (
-    <div className="flex items-center gap-3 py-1.5">
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium">{label}</div>
-        {hint && <div className="text-[10px] text-muted">{hint}</div>}
+    <label
+      className="flex flex-col gap-1.5 p-2.5 rounded-xl border border-border/60 bg-surface2/30 hover:border-accent/40 hover:bg-surface2/60 transition cursor-pointer"
+      title="Clicca per cambiare colore"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium truncate">{label}</span>
+        {hint && <span className="text-[10px] text-muted-foreground truncate">{hint}</span>}
       </div>
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-10 h-8 rounded cursor-pointer bg-transparent border border-border"
-      />
-      <Input
-        className="w-28 font-mono text-xs"
-        value={value}
-        onChange={(e) => { const v = e.target.value; if (/^#[0-9a-f]{0,6}$/i.test(v)) onChange(v); }}
-        placeholder="#c084fc"
-      />
-    </div>
+      <div className="flex items-center gap-2">
+        <span className="relative shrink-0 inline-block w-7 h-7 rounded-md ring-1 ring-white/10" style={{ background: value }}>
+          <input
+            type="color"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            aria-label={label}
+          />
+        </span>
+        <Input
+          className="flex-1 font-mono text-xs"
+          value={value}
+          onChange={(e) => { const v = e.target.value; if (/^#[0-9a-f]{0,6}$/i.test(v)) onChange(v); }}
+          onClick={(e) => e.preventDefault()}
+          placeholder="#c084fc"
+        />
+      </div>
+    </label>
   );
 }
 
@@ -55,24 +64,28 @@ export default function BrainColorsEditor({ onSaved }: { onSaved?: () => void })
   function reset() { setC(DEFAULT_BRAIN_COLORS); }
 
   return (
-    <div className="space-y-4">
-      <div>
-        <div className="text-xs uppercase tracking-wider text-muted mb-2 font-semibold">Visibilità</div>
-        {Object.entries(c.visibility).map(([k, v]) => (
-          <ColorRow key={k} label={VIS_LABELS[k] ?? k} value={v} onChange={(x) => patch('visibility', k, x)} />
-        ))}
-      </div>
-      <div>
-        <div className="text-xs uppercase tracking-wider text-muted mb-2 font-semibold">Per categoria</div>
-        {Object.entries(c.kind).map(([k, v]) => (
-          <ColorRow key={k} label={KIND_LABELS[k] ?? k} value={v} onChange={(x) => patch('kind', k, x)} />
-        ))}
-      </div>
-      <div>
-        <div className="text-xs uppercase tracking-wider text-muted mb-2 font-semibold">Fallback</div>
-        <ColorRow label="Default" hint="Usato quando il nodo non ha visibilità né kind noti" value={c.default} onChange={(x) => patch('default', null, x)} />
-      </div>
-      <div className="flex justify-between gap-2 pt-2 border-t border-border">
+    <div className="space-y-5">
+      <section>
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Visibilità</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {Object.entries(c.visibility).map(([k, v]) => (
+            <ColorRow key={k} label={VIS_LABELS[k] ?? k} value={v} onChange={(x) => patch('visibility', k, x)} />
+          ))}
+        </div>
+      </section>
+      <section>
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Per categoria</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {Object.entries(c.kind).map(([k, v]) => (
+            <ColorRow key={k} label={KIND_LABELS[k] ?? k} value={v} onChange={(x) => patch('kind', k, x)} />
+          ))}
+        </div>
+      </section>
+      <section>
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Fallback</div>
+        <ColorRow label="Default" hint="Nodo senza visibilità né kind noti" value={c.default} onChange={(x) => patch('default', null, x)} />
+      </section>
+      <div className="flex justify-between gap-2 pt-3 border-t border-border">
         <Button variant="ghost" size="sm" onClick={reset}>Ripristina default</Button>
         <Button onClick={save} disabled={saving}>{saving ? 'Salvo…' : 'Salva colori'}</Button>
       </div>

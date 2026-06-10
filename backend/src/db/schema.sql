@@ -145,13 +145,6 @@ DO $$ BEGIN
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS agent_runs_user_idx ON agent_runs(user_id);
 
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_tasks' AND column_name='user_id') THEN
-    ALTER TABLE scheduled_tasks ADD COLUMN user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
-  END IF;
-EXCEPTION WHEN others THEN NULL; END $$;
-CREATE INDEX IF NOT EXISTS scheduled_tasks_user_idx ON scheduled_tasks(user_id);
-
 CREATE TABLE IF NOT EXISTS internal_agents (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -270,6 +263,15 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS scheduled_tasks_enabled_idx ON scheduled_tasks(enabled);
+
+-- user_id patch: must run AFTER scheduled_tasks exists (fresh installs created the
+-- table without this column; this idempotently backfills it on new and old DBs).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_tasks' AND column_name='user_id') THEN
+    ALTER TABLE scheduled_tasks ADD COLUMN user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS scheduled_tasks_user_idx ON scheduled_tasks(user_id);
 
 -- Sub-agents (human-in-the-loop spawned by main agent)
 CREATE TABLE IF NOT EXISTS agent_proposals (
@@ -616,3 +618,225 @@ CREATE TABLE IF NOT EXISTS plugins (
   installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- =====================================================================
+-- Instagram DM connector (instagram-private-api). Mirrors wa_* shape.
+-- thread_id   = IG conversation id (string)
+-- user_ig_id  = IG numeric user id of the other party (PK helper)
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS ig_messages (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  msg_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  sender_ig_id TEXT NOT NULL,
+  sender_username TEXT,
+  sender_name TEXT,
+  person_slug TEXT,
+  from_me BOOLEAN NOT NULL DEFAULT false,
+  text TEXT NOT NULL DEFAULT '',
+  item_type TEXT NOT NULL DEFAULT 'text',
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ,
+  source TEXT,
+  UNIQUE(user_id, msg_id)
+);
+CREATE INDEX IF NOT EXISTS ig_messages_user_thread_ts_idx ON ig_messages(user_id, thread_id, ts DESC);
+CREATE INDEX IF NOT EXISTS ig_messages_user_ts_idx ON ig_messages(user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS ig_messages_user_processed_idx ON ig_messages(user_id, processed_at);
+
+CREATE TABLE IF NOT EXISTS ig_threads (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL,
+  title TEXT,
+  is_group BOOLEAN NOT NULL DEFAULT false,
+  participants JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_activity TIMESTAMPTZ,
+  auto_bonify BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(user_id, thread_id)
+);
+CREATE INDEX IF NOT EXISTS ig_threads_user_activity_idx ON ig_threads(user_id, last_activity DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS ig_threads_user_autobonify_idx ON ig_threads(user_id) WHERE auto_bonify=true;
+
+CREATE TABLE IF NOT EXISTS ig_contacts (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ig_id TEXT NOT NULL,
+  username TEXT,
+  full_name TEXT,
+  profile_pic_url TEXT,
+  is_verified BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(user_id, ig_id)
+);
+CREATE INDEX IF NOT EXISTS ig_contacts_user_username_idx ON ig_contacts(user_id, username);
+
+-- IG auto-responder: when enabled on a thread, agent auto-replies to incoming
+-- DMs trying to drive the conversation toward the goal text. Goal is the
+-- user-supplied objective ("vendere consulenza", "qualifica lead", ecc.).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ig_threads' AND column_name='auto_responder') THEN
+    ALTER TABLE ig_threads ADD COLUMN auto_responder BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE ig_threads ADD COLUMN auto_responder_goal TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS ig_threads_user_autoresponder_idx ON ig_threads(user_id) WHERE auto_responder=true;
+
+-- Follow-up tracking for auto-responder. When agent sends, schedule a check.
+-- If counterpart still silent at follow_up_at, fire follow-up message and bump
+-- count. Max 3 follow-ups per thread.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ig_threads' AND column_name='follow_up_at') THEN
+    ALTER TABLE ig_threads ADD COLUMN follow_up_at TIMESTAMPTZ;
+    ALTER TABLE ig_threads ADD COLUMN follow_up_count INT NOT NULL DEFAULT 0;
+    ALTER TABLE ig_threads ADD COLUMN last_outbound_at TIMESTAMPTZ;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS ig_threads_followup_idx ON ig_threads(user_id, follow_up_at) WHERE follow_up_at IS NOT NULL;
+
+-- WA profile picture cache. Baileys returns a temporary URL; we store last
+-- fetched value + ts so we can refresh stale ones (IG/WA rotate signed URLs).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='profile_pic_url') THEN
+    ALTER TABLE wa_contacts ADD COLUMN profile_pic_url TEXT;
+    ALTER TABLE wa_contacts ADD COLUMN profile_pic_fetched_at TIMESTAMPTZ;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+-- Manual brain-link per WA chat (or contact). No more auto-linking by phone;
+-- user explicitly cables a chat to a Person via the UI.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='linked_person_slug') THEN
+    ALTER TABLE wa_contacts ADD COLUMN linked_person_slug TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS wa_contacts_linked_person_idx ON wa_contacts(user_id, linked_person_slug) WHERE linked_person_slug IS NOT NULL;
+
+-- Per-chat user overrides: name + phone shown in UI. Survive every WA sync,
+-- never overwritten by Baileys upsertContacts (it only touches `name`/`notify`).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='display_name') THEN
+    ALTER TABLE wa_contacts ADD COLUMN display_name TEXT;
+    ALTER TABLE wa_contacts ADD COLUMN display_phone TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+-- Brain snapshots: nightly copy of each vault + counts of nodes/links/files.
+-- A snapshot row maps to a directory on disk holding the copied .md tree.
+CREATE TABLE IF NOT EXISTS brain_snapshots (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  vault_name TEXT NOT NULL,
+  vault_path TEXT NOT NULL,
+  snapshot_dir TEXT NOT NULL,
+  file_count INT NOT NULL DEFAULT 0,
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  neurons_count INT NOT NULL DEFAULT 0,
+  links_count INT NOT NULL DEFAULT 0,
+  duration_ms INT NOT NULL DEFAULT 0,
+  trigger TEXT NOT NULL DEFAULT 'cron',   -- 'cron' | 'manual'
+  status TEXT NOT NULL DEFAULT 'ok',      -- 'ok' | 'error'
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS brain_snapshots_user_created_idx ON brain_snapshots(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS brain_snapshots_user_vault_idx ON brain_snapshots(user_id, vault_name, created_at DESC);
+
+-- =====================================================================
+-- Mail client (IMAP + SMTP). Full message metadata for fast list/search;
+-- bodies stored in TEXT cols. Attachments persisted to disk, paths in
+-- mail_attachments. Thread grouping via in-reply-to / references chain.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS mail_messages (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_label TEXT NOT NULL,            -- matches imap connector accounts[].label
+  uid INT,                                -- IMAP UID (null for sent-via-SMTP rows)
+  message_id TEXT,                        -- RFC822 Message-ID
+  in_reply_to TEXT,
+  refs TEXT[] NOT NULL DEFAULT '{}',     -- References chain
+  thread_key TEXT,                        -- normalized key for grouping (first msg-id or subject hash)
+  folder TEXT NOT NULL DEFAULT 'INBOX',
+  direction TEXT NOT NULL DEFAULT 'in',   -- 'in' | 'out'
+  from_addr TEXT,
+  from_name TEXT,
+  to_addrs TEXT[] NOT NULL DEFAULT '{}',
+  cc_addrs TEXT[] NOT NULL DEFAULT '{}',
+  bcc_addrs TEXT[] NOT NULL DEFAULT '{}',
+  subject TEXT,
+  preview TEXT,                           -- first ~280 chars of text body
+  body_text TEXT,
+  body_html TEXT,
+  raw_size INT NOT NULL DEFAULT 0,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  seen BOOLEAN NOT NULL DEFAULT false,
+  flagged BOOLEAN NOT NULL DEFAULT false,
+  starred BOOLEAN NOT NULL DEFAULT false,
+  trashed_at TIMESTAMPTZ,                 -- soft-delete
+  UNIQUE(user_id, account_label, uid)
+);
+CREATE INDEX IF NOT EXISTS mail_messages_user_ts_idx ON mail_messages(user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS mail_messages_user_account_ts_idx ON mail_messages(user_id, account_label, ts DESC);
+CREATE INDEX IF NOT EXISTS mail_messages_user_thread_idx ON mail_messages(user_id, thread_key);
+CREATE INDEX IF NOT EXISTS mail_messages_user_folder_idx ON mail_messages(user_id, folder, ts DESC);
+CREATE INDEX IF NOT EXISTS mail_messages_user_seen_idx ON mail_messages(user_id, seen);
+
+CREATE TABLE IF NOT EXISTS mail_attachments (
+  id BIGSERIAL PRIMARY KEY,
+  message_id BIGINT NOT NULL REFERENCES mail_messages(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  content_type TEXT,
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  cid TEXT,                               -- Content-ID for inline images
+  inline BOOLEAN NOT NULL DEFAULT false,
+  path TEXT NOT NULL,                     -- absolute filesystem path
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS mail_attachments_msg_idx ON mail_attachments(message_id);
+
+-- Mail "bonifica" timestamp: when set, the message has been ingested into the
+-- brain (vault note + people linking) by the user via the UI button. Skipped
+-- by batch runs unless force=true.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='mail_messages' AND column_name='bonified_at') THEN
+    ALTER TABLE mail_messages ADD COLUMN bonified_at TIMESTAMPTZ;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS mail_messages_user_bonified_idx ON mail_messages(user_id, bonified_at);
+
+-- Persisted IMAP folder cache. Fills on first /mail/folders call per account,
+-- subsequent requests read from here so the UI never waits on an IMAP LIST
+-- handshake. Background refresh is triggered when `updated_at` is older than
+-- the freshness window in the service layer.
+CREATE TABLE IF NOT EXISTS mail_folders (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_label TEXT NOT NULL,
+  name TEXT NOT NULL,
+  label TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  subscribed BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, account_label, name)
+);
+CREATE INDEX IF NOT EXISTS mail_folders_user_account_idx ON mail_folders(user_id, account_label);
+
+-- =====================================================================
+-- Thought Analyzer (sess.8266) — diario cognitivo + knowledge graph
+-- Pensieri come oggetti di prima classe: un messaggio nel flusso
+-- conversazionale sparisce; un pensiero e' aggregabile nel tempo, che e'
+-- la condizione necessaria per far emergere i loop ricorrenti.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS thoughts (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  text TEXT NOT NULL,
+  src TEXT NOT NULL DEFAULT 'telegram',          -- telegram | voice | api
+  emotion TEXT,                                   -- popolato dall'analisi leggera
+  themes JSONB NOT NULL DEFAULT '[]'::jsonb,       -- string[]
+  backlinks JSONB NOT NULL DEFAULT '[]'::jsonb,    -- string[] (titoli note vault)
+  vault_path TEXT,                                -- nodo creato, relativo al vault
+  analyzed BOOLEAN NOT NULL DEFAULT false,
+  digested_on DATE                                -- data del digest che l'ha aggregato
+);
+CREATE INDEX IF NOT EXISTS thoughts_user_ts_idx ON thoughts(user_id, ts DESC);

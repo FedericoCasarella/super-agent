@@ -1,8 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { api } from './api';
 import { useAuth } from './auth';
-import Sidebar from './components/Sidebar';
+import { QuotaBanner } from './quota';
+import { usePageVisibility, type PageKey } from './pageVisibility';
+import AppSidebar from './components/Sidebar';
+import { SidebarProvider, SidebarTrigger, SidebarInset } from '@/components/ui/sidebar';
+import { BreadcrumbsProvider, Breadcrumbs } from './components/Breadcrumbs';
+import { ThemeSwitcher } from '@/components/theme-switcher';
+import { Separator } from '@/components/ui/separator';
+
+function Gated({ page, children }: { page: PageKey; children: ReactNode }) {
+  const { isVisible } = usePageVisibility();
+  if (!isVisible(page)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Connectors from './pages/Connectors';
@@ -15,100 +28,160 @@ import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import PeoplePage from './pages/People';
 import WhatsApp from './pages/WhatsApp';
+import InstagramPage from './pages/Instagram';
 import Outbound from './pages/Outbound';
 import FlowsPage from './pages/Flows';
 import FlowDetail from './pages/FlowDetail';
 import AgentsHub from './pages/AgentsHub';
 import Teams from './pages/Teams';
-import TeamTasks from './pages/TeamTasks';
 import TeamTaskDetail from './pages/TeamTaskDetail';
 import Network from './pages/Network';
 import AuthPage from './pages/AuthPage';
+import Snapshots from './pages/Snapshots';
+import Report from './pages/Report';
+import Mail from './pages/Mail';
 import MessageSound from './components/MessageSound';
 import BrainLoading from './components/BrainLoading';
-import { useBranding } from './branding';
-
-function MobileBrand() {
-  const { branding } = useBranding();
-  return (
-    <>
-      <img src={branding.logoDataUrl || '/rounded-image.png'} alt="" className="w-7 h-7 rounded-lg ring-1 ring-white/10 object-cover" />
-      <span className="text-sm font-semibold text-gradient truncate max-w-[60vw]">{branding.title}</span>
-    </>
-  );
-}
 
 export default function App() {
+  // Backend liveness probe — runs BEFORE auth so the app is blocked behind a
+  // full-screen overlay when the backend is unreachable (even on the auth
+  // page). Once /api/ping resolves, the rest of the app mounts as usual.
+  const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: any;
+    async function probe() {
+      try {
+        const r = await fetch('/api/ping', { credentials: 'include' });
+        if (cancelled) return;
+        if (r.ok) {
+          setBackendUp(true);
+          return;
+        }
+        setBackendUp(false);
+      } catch {
+        if (cancelled) return;
+        setBackendUp(false);
+      }
+      timer = setTimeout(probe, 2000);
+    }
+    probe();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, []);
+
+  // Once the backend comes back, kick the periodic probe again to detect
+  // outages mid-session.
+  useEffect(() => {
+    if (backendUp !== true) return;
+    const iv = setInterval(async () => {
+      try {
+        const r = await fetch('/api/ping', { credentials: 'include' });
+        if (!r.ok) setBackendUp(false);
+      } catch { setBackendUp(false); }
+    }, 10_000);
+    return () => clearInterval(iv);
+  }, [backendUp]);
+
+  if (backendUp !== true) {
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background">
+        <BrainLoading size={140} label="Ci sto lavorando…" />
+      </div>
+    );
+  }
+
+  return <AppInner />;
+}
+
+function AppInner() {
   const { user, loading } = useAuth();
   const [status, setStatus] = useState<any>(null);
-  const [collapsed, setCollapsed] = useState(() => typeof localStorage !== 'undefined' && localStorage.getItem('sidebar_collapsed') === '1');
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => { try { localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0'); } catch {} }, [collapsed]);
+  const [backendDown, setBackendDown] = useState(false);
 
   async function refresh() {
     if (!user) return;
-    try { setStatus(await api.status()); } catch {}
+    try {
+      const s = await api.status();
+      setStatus(s);
+      setBackendDown(false);
+    } catch {
+      setBackendDown(true);
+    }
   }
   useEffect(() => { refresh(); }, [user]);
+  // Retry every 2s while the backend is unreachable. Cleared as soon as a
+  // successful /status response lands.
+  useEffect(() => {
+    if (!user) return;
+    if (status && !backendDown) return;
+    const id = setInterval(() => { refresh(); }, 2000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, status, backendDown]);
 
   if (loading) return <div className="h-full flex items-center justify-center"><BrainLoading size={140} /></div>;
   if (!user) return <AuthPage />;
-  if (!status) return <div className="h-full flex items-center justify-center"><BrainLoading size={140} /></div>;
+  if (!status) return (
+    <div className="h-full flex items-center justify-center">
+      <BrainLoading size={140} label={backendDown ? 'Backend non raggiungibile — riprovo…' : 'Connessione al backend…'} />
+    </div>
+  );
   if (!status.onboarded) return <Onboarding status={status} onDone={refresh} />;
 
   return (
-    <div className="h-full flex">
+    <SidebarProvider>
+      <BreadcrumbsProvider>
       <MessageSound />
-      <Sidebar
-        collapsed={collapsed}
-        mobileOpen={mobileOpen}
-        onToggleCollapse={() => setCollapsed((v) => !v)}
-        onCloseMobile={() => setMobileOpen(false)}
-      />
-      <main className="flex-1 min-w-0 overflow-y-auto">
-        {/* Mobile top bar */}
-        <div className="md:hidden sticky top-0 z-20 glass border-b border-border flex items-center justify-between px-4 py-2.5">
-          <button
-            onClick={() => setMobileOpen(true)}
-            className="w-10 h-10 rounded-xl border border-border bg-surface2/70 flex items-center justify-center text-text hover:border-accent/50 transition"
-            aria-label="Open menu"
-          >
-            <span className="text-lg">≡</span>
-          </button>
-          <div className="flex items-center gap-2">
-            <MobileBrand />
-          </div>
-          <div className="w-10" />
-        </div>
-
-        <div className="p-4 sm:p-6 md:p-8">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/connectors" element={<Connectors />} />
-            <Route path="/brain" element={<Brain />} />
-            <Route path="/roadmap" element={<Roadmap />} />
-            <Route path="/tasks" element={<Tasks />} />
-            <Route path="/perks" element={<Agents />} />
-            <Route path="/perks/:name" element={<AgentDetail />} />
-            <Route path="/agents" element={<AgentsHub />} />
-            <Route path="/whatsapp" element={<WhatsApp />} />
-            <Route path="/people" element={<PeoplePage />} />
-            <Route path="/live-agents" element={<Navigate to="/agents" replace />} />
-            <Route path="/network" element={<Network />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/outbound" element={<Outbound />} />
-            <Route path="/flows" element={<FlowsPage />} />
-            <Route path="/flows/:id" element={<FlowDetail />} />
-            <Route path="/custom-agents" element={<Navigate to="/agents?tab=custom" replace />} />
-            <Route path="/teams" element={<Teams />} />
-            <Route path="/team-tasks" element={<Navigate to="/tasks?tab=team" replace />} />
-            <Route path="/team-tasks/:id" element={<TeamTaskDetail />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </div>
-      </main>
-    </div>
+      <AppSidebar />
+      <SidebarInset>
+        {/* Topbar: sidebar toggle + breadcrumbs + theme switcher */}
+        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 backdrop-blur px-4">
+          <SidebarTrigger className="-ml-1" />
+          <Separator orientation="vertical" className="mr-2 h-4" />
+          <Breadcrumbs />
+          <div className="flex-1" />
+          <ThemeSwitcher />
+        </header>
+        <QuotaBanner />
+        {/* Full-bleed routes (own layout, no parent padding so they can fill
+            the viewport exactly — e.g. the mail client 3-pane). */}
+        <Routes>
+          <Route path="/mail" element={<div className="overflow-hidden h-[calc(100dvh-56px)] md:h-[calc(100dvh-72px)]"><Mail /></div>} />
+          <Route path="*" element={
+            <div className="p-4 sm:p-6 lg:p-8 min-w-0">
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/connectors" element={<Connectors />} />
+                <Route path="/brain" element={<Brain />} />
+                <Route path="/roadmap" element={<Roadmap />} />
+                <Route path="/tasks" element={<Tasks />} />
+                <Route path="/perks" element={<Agents />} />
+                <Route path="/perks/:name" element={<AgentDetail />} />
+                <Route path="/agents" element={<AgentsHub />} />
+                <Route path="/whatsapp" element={<Gated page="whatsapp"><WhatsApp /></Gated>} />
+                <Route path="/instagram" element={<Gated page="instagram"><InstagramPage /></Gated>} />
+                <Route path="/people" element={<Gated page="people"><PeoplePage /></Gated>} />
+                <Route path="/live-agents" element={<Navigate to="/agents" replace />} />
+                <Route path="/network" element={<Network />} />
+                <Route path="/logs" element={<Gated page="logs"><Logs /></Gated>} />
+                <Route path="/outbound" element={<Gated page="outbound"><Outbound /></Gated>} />
+                <Route path="/flows" element={<Gated page="flows"><FlowsPage /></Gated>} />
+                <Route path="/flows/:id" element={<Gated page="flows"><FlowDetail /></Gated>} />
+                <Route path="/custom-agents" element={<Navigate to="/agents?tab=custom" replace />} />
+                <Route path="/teams" element={<Gated page="teams"><Teams /></Gated>} />
+                <Route path="/team-tasks" element={<Navigate to="/tasks?tab=team" replace />} />
+                <Route path="/team-tasks/:id" element={<TeamTaskDetail />} />
+                <Route path="/snapshots" element={<Snapshots />} />
+                <Route path="/report" element={<Report />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </div>
+          } />
+        </Routes>
+      </SidebarInset>
+      </BreadcrumbsProvider>
+    </SidebarProvider>
   );
 }

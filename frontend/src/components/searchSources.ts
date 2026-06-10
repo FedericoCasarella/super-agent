@@ -22,6 +22,17 @@ export async function fetchWaChats(q: string): Promise<Option[]> {
   } catch { return []; }
 }
 
+export async function fetchIgThreads(q: string): Promise<Option[]> {
+  try {
+    const threads: any[] = await api.igThreads();
+    return filt(threads.map((t) => ({
+      value: t.thread_id,
+      label: t.title || t.thread_id,
+      sublabel: t.is_group ? `gruppo · ${t.thread_id}` : t.thread_id,
+    })), q);
+  } catch { return []; }
+}
+
 export async function fetchTeams(q: string): Promise<Option[]> {
   try {
     const r: any[] = await api.teamsList();

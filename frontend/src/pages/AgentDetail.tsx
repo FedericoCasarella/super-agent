@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useLiveData } from '../ws';
+import { useSetBreadcrumb } from '../components/Breadcrumbs';
 import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 import { usePerkCooldown } from '../hooks/usePerkCooldown';
@@ -21,6 +23,7 @@ export default function AgentDetail() {
   const { name = '' } = useParams();
   const nav = useNavigate();
   const [agent, setAgent] = useState<any>(null);
+  useSetBreadcrumb([{ label: 'Perks', to: '/perks' }, { label: agent?.title ?? agent?.name ?? name }]);
   const [hour, setHour] = useState(0);
   const [minute, setMinute] = useState(0);
   const [intervalHours, setIntervalHours] = useState<number | null>(null);
@@ -31,22 +34,15 @@ export default function AgentDetail() {
   const { left: cdLeft, start: cdStart, clear: cdClear } = usePerkCooldown(60);
   const cd = cdLeft(name);
 
-  async function load() {
+  const load = useCallback(async () => {
     const all = await api.internalAgents();
     const a = all.find((x: any) => x.name === name);
     if (!a) { nav('/perks'); return; }
     setAgent(a); setHour(a.hour); setMinute(a.minute);
     setIntervalHours(a.interval_hours ?? null);
     setCadence(a.interval_hours && a.interval_hours > 0 ? 'interval' : 'daily');
-  }
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [name]);
-  // Poll while running so UI flips back to "runNow" when execution completes
-  useEffect(() => {
-    if (!agent?.running) return;
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent?.running]);
+  }, [name, nav]);
+  useLiveData(load, { refreshOn: ['internal_agent'], fallbackMs: 120_000, deps: [name] });
 
   async function saveSchedule() {
     const ih = cadence === 'interval' ? Math.max(1, Math.min(168, Number(intervalHours ?? 3))) : null;
@@ -89,7 +85,7 @@ export default function AgentDetail() {
     finally { setBusy(false); }
   }
 
-  if (!agent) return <div className="text-muted">{t('common.loading')}</div>;
+  if (!agent) return <div className="text-muted-foreground">{t('common.loading')}</div>;
   const r = agent.last_report ?? {};
 
   // Generic stat extraction: collect every scalar field at top level (numbers/strings/bools).
@@ -137,8 +133,8 @@ export default function AgentDetail() {
   return (
     <div className="space-y-6 max-w-4xl">
       <div className="flex items-center gap-3 text-sm">
-        <button onClick={() => nav('/perks')} className="text-muted hover:text-text transition">← {t('agents.title')}</button>
-        <span className="text-muted">/</span>
+        <button onClick={() => nav('/perks')} className="text-muted-foreground hover:text-text transition">← {t('agents.title')}</button>
+        <span className="text-muted-foreground">/</span>
         <span>{agent.title}</span>
       </div>
 
@@ -153,7 +149,7 @@ export default function AgentDetail() {
               <h1 className="text-3xl font-semibold text-gradient">{agent.title}</h1>
               <Chip tone={agent.enabled ? 'on' : 'warn'}>{agent.enabled ? t('agents.on') : t('agents.off')}</Chip>
             </div>
-            <p className="text-sm text-muted max-w-2xl">{agent.description}</p>
+            <p className="text-sm text-muted-foreground max-w-2xl">{agent.description}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -164,15 +160,15 @@ export default function AgentDetail() {
 
       <Card>
         <h2 className="text-lg font-semibold mb-1">{t('agents.schedule')}</h2>
-        <p className="text-sm text-muted mb-5">{t('agents.scheduleHint')}</p>
-        <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1 mb-4 w-fit">
+        <p className="text-sm text-muted-foreground mb-5">{t('agents.scheduleHint')}</p>
+        <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1 mb-4 w-fit">
           <Button size="sm" variant={cadence === 'daily' ? 'primary' : 'ghost'} onClick={() => setCadence('daily')}>Giornaliero (hh:mm)</Button>
           <Button size="sm" variant={cadence === 'interval' ? 'primary' : 'ghost'} onClick={() => setCadence('interval')}>Ogni N ore</Button>
         </div>
         {cadence === 'daily' ? (
           <div className="flex items-center gap-4 flex-wrap">
             <Field label={t('agents.hour')}><Input type="number" min={0} max={23} value={hour} onChange={(e) => setHour(Math.max(0, Math.min(23, Number(e.target.value))))} className="font-mono text-center text-2xl w-24" /></Field>
-            <span className="text-3xl text-muted mt-6">:</span>
+            <span className="text-3xl text-muted-foreground mt-6">:</span>
             <Field label={t('agents.minute')}><Input type="number" min={0} max={59} value={minute} onChange={(e) => setMinute(Math.max(0, Math.min(59, Number(e.target.value))))} className="font-mono text-center text-2xl w-24" /></Field>
             <div className="ml-auto self-end">
               <Button onClick={saveSchedule}>{t('agents.saveSchedule')}</Button>
@@ -186,7 +182,7 @@ export default function AgentDetail() {
             </div>
           </div>
         )}
-        <div className="text-xs text-muted mt-4">
+        <div className="text-xs text-muted-foreground mt-4">
           {agent.interval_hours && agent.interval_hours > 0
             ? <>Eseguito ogni <span className="font-mono text-text">{agent.interval_hours}h</span></>
             : <>{t('agents.nextFire')}: <span className="font-mono text-text">{pad(agent.hour)}:{pad(agent.minute)}</span> · {t('agents.daily')}</>}
@@ -197,7 +193,7 @@ export default function AgentDetail() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold mb-1">{t('agents.notifyTitle')}</h2>
-            <p className="text-sm text-muted">{t('agents.notifyDesc')}</p>
+            <p className="text-sm text-muted-foreground">{t('agents.notifyDesc')}</p>
           </div>
           <Toggle checked={!!agent.notify_on_run} onChange={toggleNotify} />
         </div>
@@ -207,19 +203,19 @@ export default function AgentDetail() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">{t('agents.lastReport')}</h2>
           {agent.last_run_at && (
-            <div className="text-xs text-muted">
+            <div className="text-xs text-muted-foreground">
               {new Date(agent.last_run_at).toLocaleString()} ·{' '}
               <span className={agent.last_status === 'ok' ? 'text-ok' : 'text-err'}>{agent.last_status}</span>
             </div>
           )}
         </div>
-        {!agent.last_run_at && <div className="text-muted text-sm">{t('agents.neverRun')}</div>}
+        {!agent.last_run_at && <div className="text-muted-foreground text-sm">{t('agents.neverRun')}</div>}
         {agent.last_run_at && (
           <>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {stats.filter(([, v]) => v != null).map(([k, v]) => (
                 <div key={k} className="border border-border rounded-2xl p-4 bg-surface2/40">
-                  <div className="text-[10px] uppercase text-muted tracking-wider">{k}</div>
+                  <div className="text-[10px] uppercase text-muted-foreground tracking-wider">{k}</div>
                   <div className="font-mono text-xl mt-1">{String(v)}</div>
                 </div>
               ))}
@@ -241,7 +237,7 @@ export default function AgentDetail() {
                       {p}
                     </a>
                   ))}
-                  {allPaths.length > 50 && <div className="text-[10px] text-muted pl-1">+{allPaths.length - 50} altri</div>}
+                  {allPaths.length > 50 && <div className="text-[10px] text-muted-foreground pl-1">+{allPaths.length - 50} altri</div>}
                 </div>
               </div>
             )}
@@ -254,9 +250,9 @@ export default function AgentDetail() {
                     if (d && typeof d === 'object' && 'from' in d && 'to' in d) {
                       return (
                         <div key={i} className="flex items-center gap-2 text-sm border border-border rounded-xl p-2.5 bg-surface2/30">
-                          <span className="font-mono text-xs text-muted truncate flex-1">{d.path ?? d.slug ?? ''}</span>
+                          <span className="font-mono text-xs text-muted-foreground truncate flex-1">{d.path ?? d.slug ?? ''}</span>
                           <Chip>{String(d.from ?? '—')}</Chip>
-                          <span className="text-muted">→</span>
+                          <span className="text-muted-foreground">→</span>
                           <Chip tone={d.to === 'protected' ? 'err' : d.to === 'public' ? 'on' : 'default'}>{String(d.to)}</Chip>
                         </div>
                       );
@@ -269,10 +265,10 @@ export default function AgentDetail() {
                         {d?.path ? (
                           <a href={`/brain?note=${encodeURIComponent(d.path)}`} className="font-mono text-xs text-accent hover:underline truncate flex-1">{label}</a>
                         ) : (
-                          <span className="font-mono text-xs text-muted truncate flex-1">{String(label)}</span>
+                          <span className="font-mono text-xs text-muted-foreground truncate flex-1">{String(label)}</span>
                         )}
                         {tag && <Chip>{String(tag)}</Chip>}
-                        {meta && <span className="text-[10px] text-muted font-mono">{meta}</span>}
+                        {meta && <span className="text-[10px] text-muted-foreground font-mono">{meta}</span>}
                       </div>
                     );
                   })}

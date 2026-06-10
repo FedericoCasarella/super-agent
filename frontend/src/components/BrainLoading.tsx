@@ -19,7 +19,7 @@ export default function BrainLoading({ size = 80, label = null, className = '', 
         autoplay
         style={{ width: size, height: size }}
       />
-      {label != null && <span className="text-xs text-muted">{label}</span>}
+      {label != null && <span className="text-xs text-muted-foreground">{label}</span>}
     </div>
   );
 }

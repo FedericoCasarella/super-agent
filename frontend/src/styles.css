@@ -1,18 +1,120 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* shadcn theme tokens — light (default) + dark (.dark class on <html>).
+   Primary is gradient purple→light-blue. Single source of truth for theme.
+   Toggle via ThemeProvider (next-themes style: sets `.dark` class on root). */
 @layer base {
-  :root { color-scheme: dark; }
-  html, body, #root { height: 100%; }
-  body {
-    background:
-      radial-gradient(900px 500px at 90% -10%, rgba(192,132,252,0.10), transparent 60%),
-      radial-gradient(800px 500px at -10% 110%, rgba(34,211,238,0.07), transparent 60%),
-      #0a0a0c;
-    background-attachment: fixed;
+  :root {
+    --background: 250 100% 99%;
+    --foreground: 240 24% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 24% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 24% 12%;
+    --primary: 268 84% 60%;            /* violet-500 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 14% 95%;
+    --secondary-foreground: 240 24% 18%;
+    --muted: 240 14% 95%;
+    --muted-foreground: 240 6% 45%;
+    --accent: 268 84% 60%;
+    --accent-foreground: 0 0% 100%;
+    --accent-2: 199 89% 65%;           /* light blue (sky-400-ish) */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 158 64% 45%;
+    --warning: 38 92% 50%;
+    --border: 240 10% 90%;
+    --input: 240 10% 90%;
+    --ring: 268 84% 60%;
+    --radius: 0.75rem;
+    --sidebar-background: 240 14% 97%;
+    --sidebar-foreground: 240 24% 18%;
+    --sidebar-primary: 268 84% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 10% 92%;
+    --sidebar-accent-foreground: 240 24% 18%;
+    --sidebar-border: 240 10% 88%;
+    --sidebar-ring: 268 84% 60%;
+    color-scheme: light;
   }
-  *, *::before, *::after { transition-property: background-color, border-color, color, fill, stroke, opacity, transform, box-shadow; transition-duration: 220ms; transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
+  .dark {
+    --background: 240 18% 6%;
+    --foreground: 240 10% 92%;
+    --card: 240 14% 9%;
+    --card-foreground: 240 10% 92%;
+    --popover: 240 14% 9%;
+    --popover-foreground: 240 10% 92%;
+    --primary: 268 92% 70%;
+    --primary-foreground: 240 18% 6%;
+    --secondary: 240 14% 14%;
+    --secondary-foreground: 240 10% 92%;
+    --muted: 240 14% 14%;
+    --muted-foreground: 240 6% 60%;
+    --accent: 268 92% 70%;
+    --accent-foreground: 240 18% 6%;
+    --accent-2: 199 92% 72%;
+    --destructive: 0 70% 55%;
+    --destructive-foreground: 240 10% 92%;
+    --success: 158 64% 52%;
+    --warning: 38 92% 60%;
+    --border: 240 10% 18%;
+    --input: 240 10% 18%;
+    --ring: 268 92% 70%;
+    --sidebar-background: 240 16% 8%;
+    --sidebar-foreground: 240 10% 92%;
+    --sidebar-primary: 268 92% 70%;
+    --sidebar-primary-foreground: 240 16% 8%;
+    --sidebar-accent: 240 14% 14%;
+    --sidebar-accent-foreground: 240 10% 92%;
+    --sidebar-border: 240 10% 18%;
+    --sidebar-ring: 268 92% 70%;
+    color-scheme: dark;
+  }
+  body {
+    font-family: 'Geist', 'Inter', system-ui, sans-serif;
+    @apply bg-background text-foreground;
+  }
+  /* shadcn default: every `border` utility uses the theme border token. Without
+     this, Tailwind v3 falls back to gray-200 (~#e5e7eb) which renders as a
+     bright white-ish line on dark backgrounds. */
+  * {
+    @apply border-border;
+  }
+}
+
+@layer base {
+  :root { /* legacy passthrough — keeps un-migrated components functional */ }
+  html, body, #root { height: 100%; }
+  *, *::before, *::after { transition-property: background-color, border-color, color, fill, stroke, opacity, box-shadow; transition-duration: 220ms; transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
+  /* Radix Popper sets `transform` on its wrapper to position floating panels.
+     Globally transitioning `transform` makes every popover/dropdown/tooltip
+     slide from 0,0 to its final position. Explicitly disable transitions on
+     popper wrappers so they appear in-place. */
+  [data-radix-popper-content-wrapper] { transition: none !important; }
+
+  /* WhatsApp-style chat background — SVG doodle pattern + theme-aware tint.
+     Light theme: tinted ~card color, doodles dim. Dark: deeper card, brighter
+     doodles. One class shared by Dashboard live + WhatsApp chat panel. */
+  .chat-pattern {
+    background-color: hsl(var(--muted));
+    background-image:
+      linear-gradient(hsl(var(--muted) / 0.6), hsl(var(--muted) / 0.6)),
+      url('/pattern-11-themed.svg');
+    background-size: auto, 320px auto;
+    background-position: center, top left;
+    background-repeat: no-repeat, repeat;
+  }
+  .dark .chat-pattern {
+    background-color: hsl(var(--background));
+    background-image:
+      linear-gradient(hsl(var(--background) / 0.78), hsl(var(--background) / 0.78)),
+      url('/pattern-11-themed.svg');
+  }
   button, a, input, textarea, select { transition-duration: 180ms; }
   *::-webkit-scrollbar { width: 8px; height: 8px; }
   *::-webkit-scrollbar-thumb { background: #2a2a36; border-radius: 8px; }
@@ -24,6 +126,74 @@
 }
 
 @layer utilities {
+  /* Connector icons: re-fill every <path>/<polygon>/<rect>/<circle> inside
+     a FontAwesome SVG with the violet → blue brand gradient defined as
+     `#connector-icon-grad` at the page root. */
+  .connector-icon-grad svg path,
+  .connector-icon-grad svg polygon,
+  .connector-icon-grad svg rect,
+  .connector-icon-grad svg circle {
+    fill: url(#connector-icon-grad) !important;
+  }
+
+  /* contenteditable placeholder: rendered when the body is empty so the
+     composer shows a "Inserisci testo" hint like a native input. */
+  .mail-composer-body:empty::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground) / 0.5);
+    pointer-events: none;
+  }
+
+  /* The signature HTML the user typed in /connectors usually targets a
+     LIGHT canvas (color:#444 etc.). In dark mode the editor canvas is dark,
+     so that copy disappears. Override inline color/background just for the
+     EDITING view — the outbound `innerHTML` still keeps the user's
+     original styles so recipients see the design as intended. */
+  .dark .mail-composer-body,
+  .dark .mail-composer-body * {
+    color: hsl(var(--foreground)) !important;
+    background-color: transparent !important;
+  }
+  .dark .mail-composer-body a,
+  .dark .mail-composer-body a * {
+    color: hsl(var(--accent)) !important;
+  }
+
+  /* Force readable text inside rendered email HTML when the app theme is dark.
+     Email senders set their own inline color/background (light-mode assumption);
+     without overrides the body becomes a gray-on-black blob. We:
+       - force all text to the theme foreground (white-ish on dark)
+       - strip backgrounds so embedded white blocks vanish
+       - keep link color as the brand accent so CTAs stay clickable
+       - tame images width to fit the pane
+  */
+  .dark .mail-body,
+  .dark .mail-body * {
+    color: hsl(var(--foreground)) !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    border-color: hsl(var(--border)) !important;
+  }
+  .dark .mail-body a,
+  .dark .mail-body a * {
+    color: hsl(var(--accent)) !important;
+  }
+  .dark .mail-body img { max-width: 100%; height: auto; }
+  .dark .mail-body table,
+  .dark .mail-body td,
+  .dark .mail-body th { border-color: hsl(var(--border)) !important; }
+  /* Buttons that emails draw as colored boxes — keep the user able to spot them */
+  .dark .mail-body a[style*="background"],
+  .dark .mail-body a[style*="BACKGROUND"] {
+    background-color: hsl(var(--accent) / 0.18) !important;
+    color: hsl(var(--accent)) !important;
+    border: 1px solid hsl(var(--accent) / 0.4) !important;
+    border-radius: 6px !important;
+    padding: 6px 12px !important;
+    display: inline-block;
+    text-decoration: none !important;
+  }
+
   .glass {
     background: linear-gradient(180deg, rgba(27,27,37,0.6), rgba(19,19,26,0.6));
     backdrop-filter: blur(14px) saturate(140%);
@@ -51,3 +221,10 @@
     color: transparent;
   }
 }
+
+/* Thin scrollbar for sidebar nav. Mouse-over visible, idle near-transparent. */
+.sidebar-scroll::-webkit-scrollbar { width: 6px; }
+.sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+.sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
+.sidebar-scroll:hover::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); }
+.sidebar-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.12) transparent; }

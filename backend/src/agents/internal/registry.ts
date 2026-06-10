@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { query, listActiveUsers, getSetting } from '../../db/index.js';
+import { bus } from '../../bus.js';
 import { config } from '../../config.js';
 import type { InternalAgent, Lang } from './types.js';
 import brainClassifier from './brain_classifier.js';
@@ -8,9 +9,11 @@ import peopleAnalyzer from './people_analyzer.js';
 import vaultDreamer from './vault_dreamer.js';
 import vaultLibrarian from './vault_librarian.js';
 import vaultGardener from './vault_gardener.js';
+import selfieAgent from './selfie_agent.js';
+import thoughtDigest from './thought_digest.js';
 import { sendTelegram } from '../../telegram/bot.js';
 
-const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer, vaultDreamer, vaultLibrarian, vaultGardener];
+const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer, vaultDreamer, vaultLibrarian, vaultGardener, selfieAgent, thoughtDigest];
 
 export function listInternalAgents(): InternalAgent[] {
   return REGISTRY;
@@ -83,7 +86,10 @@ function appendFileLinks(msg: string, paths: string[], lang: Lang): string {
   // always clickable, regardless of client/parse-mode quirks.
   const base = (config.frontendOrigin ?? '').replace(/\/+$/, '') || 'http://localhost:5173';
   const lines = paths.slice(0, 15).map((p) => {
-    const enc = encodeURIComponent(p);
+    // Encode each segment but keep `/` raw — Telegram + frontend handle
+    // path-style URLs cleanly, `%2F` looks broken and some clients truncate
+    // links at the percent sign.
+    const enc = p.split('/').map(encodeURIComponent).join('/');
     const name = p.split('/').pop() ?? p;
     return `• ${name}\n  ${base}/brain?note=${enc}`;
   });
@@ -97,6 +103,7 @@ export async function runInternalAgent(userId: number, name: string) {
   if (!agent) throw new Error(`unknown agent: ${name}`);
   // Flip running=true so sidebar badge can show live activity
   await query(`UPDATE internal_agents SET running=true, updated_at=now() WHERE user_id=$1 AND name=$2`, [userId, name]);
+  bus.emit('internal_agent:event', { userId, name, kind: 'start' });
   let report: any;
   let status = 'ok';
   try {
@@ -111,6 +118,7 @@ export async function runInternalAgent(userId: number, name: string) {
      WHERE user_id=$1 AND name=$2`,
     [userId, name, status, JSON.stringify(report ?? {})]
   );
+  bus.emit('internal_agent:event', { userId, name, kind: 'done', status });
   // Telegram notify if enabled
   try {
     const rows = await query<{ notify_on_run: boolean }>(
@@ -150,8 +158,9 @@ export async function updateAgentSchedule(userId: number, name: string, p: { hou
   if (!fields.length) return;
   await query(
     `UPDATE internal_agents SET ${fields.join(', ')}, updated_at=now() WHERE user_id=$1 AND name=$2`,
-    [userId, name, ...vals]
+    [userId, name, ...vals],
   );
+  bus.emit('internal_agent:event', { userId, name, kind: 'updated' });
 }
 
 // Catch-up: if scheduled time today passed and last_run_at < that time → fire now.

@@ -124,10 +124,10 @@ export default function Network() {
     <div className="space-y-5">
       <div>
         <h1 className="text-2xl font-semibold text-gradient">Network</h1>
-        <p className="text-sm text-muted mt-1">Cervelli collegati. Per chiedere info al cervello di qualcuno, scrivi al tuo agente su Telegram — lui invierà la query.</p>
+        <p className="text-sm text-muted-foreground mt-1">Cervelli collegati. Per chiedere info al cervello di qualcuno, scrivi al tuo agente su Telegram — lui invierà la query.</p>
       </div>
 
-      <div className="flex gap-1 bg-surface2/70 border border-border rounded-full p-1 w-fit">
+      <div className="flex gap-1 bg-surface2/70 border border-border rounded-md p-1 w-fit">
         <Button size="sm" variant={tab === 'discover' ? 'primary' : 'ghost'} onClick={() => setTab('discover')}>Scopri</Button>
         <Button size="sm" variant={tab === 'requests' ? 'primary' : 'ghost'} onClick={() => setTab('requests')}>
           Richieste {requestsCount > 0 && <Chip tone="warn">{requestsCount}</Chip>}
@@ -141,7 +141,7 @@ export default function Network() {
         <>
           <Input placeholder="Cerca per nome, ruolo, azienda…" value={search} onChange={(e) => setSearch(e.target.value)} />
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.length === 0 && <Card><div className="text-muted text-sm">Nessun altro cervello disponibile.</div></Card>}
+            {filtered.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessun altro cervello disponibile.</div></Card>}
             {filtered.map((p) => <PersonCard key={p.id} p={p} onConnect={() => connect(p.email)} />)}
           </div>
         </>
@@ -151,8 +151,8 @@ export default function Network() {
         <div className="space-y-8">
           {/* Brain query requests — top priority */}
           <section>
-            <h2 className="text-sm uppercase tracking-wider text-muted mb-3">Richieste brain (peer chiedono al tuo cervello)</h2>
-            {pendingShareIn.length === 0 && <Card><div className="text-muted text-sm">Nessuna richiesta brain pendente.</div></Card>}
+            <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">Richieste brain (peer chiedono al tuo cervello)</h2>
+            {pendingShareIn.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessuna richiesta brain pendente.</div></Card>}
             <ul className="space-y-3">
               {pendingShareIn.map((r) => {
                 const cands: any[] = r.agent_review?.candidates ?? [];
@@ -169,7 +169,7 @@ export default function Network() {
                     </div>
                     {r.status === 'pending' && (
                       <div className="flex items-center justify-between gap-3 mt-3 flex-wrap">
-                        <div className="text-muted text-xs">
+                        <div className="text-muted-foreground text-xs">
                           {reviewing.has(r.id)
                             ? 'Il tuo agente sta esaminando il vault… (può richiedere 30s–2min)'
                             : 'Premi qui per far esaminare al tuo agente quali note potrebbero rispondere.'}
@@ -184,9 +184,9 @@ export default function Network() {
                     )}
                     {r.status === 'reviewed' && (
                       <>
-                        {summary && <div className="text-sm mb-3"><span className="text-muted">Sintesi del tuo agente: </span>{summary}</div>}
+                        {summary && <div className="text-sm mb-3"><span className="text-muted-foreground">Sintesi del tuo agente: </span>{summary}</div>}
                         {cands.length === 0 ? (
-                          <div className="text-muted text-sm">Niente di rilevante trovato nel tuo vault.</div>
+                          <div className="text-muted-foreground text-sm">Niente di rilevante trovato nel tuo vault.</div>
                         ) : (() => {
                           const allPaths = cands.map((c: any) => c.path);
                           const hasHigh = cands.some((c: any) => c.sensitivity === 'high');
@@ -195,7 +195,7 @@ export default function Network() {
                           return (
                             <>
                               <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-                                <div className="text-xs text-muted">{selectedCount}/{cands.length} selezionate</div>
+                                <div className="text-xs text-muted-foreground">{selectedCount}/{cands.length} selezionate</div>
                                 <div className="flex gap-1 flex-wrap">
                                   <Button size="sm" variant="ghost" onClick={() => pickAll(r.id, allPaths)}>Tutte</Button>
                                   {hasHigh && <Button size="sm" variant="ghost" onClick={() => pickSafeOnly(r.id, cands)}>Solo non sensibili</Button>}
@@ -225,8 +225,8 @@ export default function Network() {
                                             <span className="text-sm font-medium truncate">{c.title || c.path}</span>
                                             <Chip tone={sensTone}>{sensIcon} {sens === 'high' ? 'sensibile' : sens === 'medium' ? 'attenzione' : 'sicura'}</Chip>
                                           </div>
-                                          <div className="text-xs text-muted font-mono truncate">{c.path}</div>
-                                          {c.snippet && <div className="text-xs text-muted mt-1 line-clamp-2">{c.snippet}</div>}
+                                          <div className="text-xs text-muted-foreground font-mono truncate">{c.path}</div>
+                                          {c.snippet && <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{c.snippet}</div>}
                                           {c.why && <div className="text-xs text-accent2 mt-1">↳ {c.why}</div>}
                                           {c.sensitivity_reason && sens !== 'low' && (
                                             <div className={`text-xs mt-1 ${sens === 'high' ? 'text-err' : 'text-warn'}`}>{sensIcon} {c.sensitivity_reason}</div>
@@ -256,8 +256,8 @@ export default function Network() {
           </section>
 
           <section>
-            <h2 className="text-sm uppercase tracking-wider text-muted mb-3">Collegamenti — in arrivo</h2>
-            {incomingConn.length === 0 && <Card><div className="text-muted text-sm">Nessuna richiesta di collegamento.</div></Card>}
+            <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">Collegamenti — in arrivo</h2>
+            {incomingConn.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessuna richiesta di collegamento.</div></Card>}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {incomingConn.map((p) => (
                 <RequestCard key={p.connection_id} peer={p.peer} kind="incoming" onAccept={() => respond(p.connection_id, true)} onBlock={() => respond(p.connection_id, false)} />
@@ -266,8 +266,8 @@ export default function Network() {
           </section>
 
           <section>
-            <h2 className="text-sm uppercase tracking-wider text-muted mb-3">Collegamenti — in uscita</h2>
-            {outgoingConn.length === 0 && <Card><div className="text-muted text-sm">Nessuna richiesta in uscita.</div></Card>}
+            <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">Collegamenti — in uscita</h2>
+            {outgoingConn.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessuna richiesta in uscita.</div></Card>}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {outgoingConn.map((p) => <RequestCard key={p.connection_id} peer={p.peer} kind="outgoing" />)}
             </div>
@@ -276,7 +276,7 @@ export default function Network() {
           {/* Mie query in uscita (storico) */}
           {outgoingShare.length > 0 && (
             <section>
-              <h2 className="text-sm uppercase tracking-wider text-muted mb-3">Mie query brain (storico)</h2>
+              <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">Mie query brain (storico)</h2>
               <ul className="space-y-2">
                 {outgoingShare.map((r) => (
                   <li key={r.id} className="border border-border rounded-2xl p-3 bg-surface2/40 text-sm">
@@ -284,7 +284,7 @@ export default function Network() {
                       <span className="font-medium">{r.target?.name || r.target?.email}</span>
                       <Chip tone={r.status === 'delivered' ? 'on' : r.status === 'denied' ? 'err' : 'default'}>{r.status}</Chip>
                     </div>
-                    <div className="italic text-muted">"{r.query_text}"</div>
+                    <div className="italic text-muted-foreground">"{r.query_text}"</div>
                     {r.reason && <div className="text-xs text-err mt-1">{r.reason}</div>}
                   </li>
                 ))}
@@ -296,7 +296,7 @@ export default function Network() {
 
       {tab === 'connected' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {accepted.length === 0 && <Card><div className="text-muted text-sm">Nessun collegamento ancora.</div></Card>}
+          {accepted.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessun collegamento ancora.</div></Card>}
           {accepted.map((p) => <ConnectedCard key={p.connection_id} peer={p.peer} />)}
         </div>
       )}
@@ -325,13 +325,13 @@ function PersonCard({ p, onConnect }: { p: Person; onConnect: () => void }) {
         <Avatar seed={p.email} label={initials(p)} />
         <div className="min-w-0 flex-1">
           <div className="font-semibold truncate">{p.name || p.email.split('@')[0]}</div>
-          <div className="text-xs text-muted truncate">{p.email}</div>
+          <div className="text-xs text-muted-foreground truncate">{p.email}</div>
           {(p.role || p.company) && (
             <div className="text-xs text-accent2 mt-1 truncate">{[p.role, p.company].filter(Boolean).join(' · ')}</div>
           )}
         </div>
       </div>
-      {p.what && <p className="text-sm text-muted mt-3 line-clamp-3">{p.what}</p>}
+      {p.what && <p className="text-sm text-muted-foreground mt-3 line-clamp-3">{p.what}</p>}
       <div className="mt-4">
         {status === 'accepted' && <Chip tone="on">✓ Collegato</Chip>}
         {status === 'pending' && <Chip tone="warn">In attesa</Chip>}
@@ -352,7 +352,7 @@ function RequestCard({ peer, kind, onAccept, onBlock }: { peer: any; kind: 'inco
         <Avatar seed={peer.email} label={initials(peer)} />
         <div className="min-w-0 flex-1">
           <div className="font-semibold truncate">{peer.name || peer.email.split('@')[0]}</div>
-          <div className="text-xs text-muted truncate">{peer.email}</div>
+          <div className="text-xs text-muted-foreground truncate">{peer.email}</div>
         </div>
       </div>
       <div className="mt-4 flex gap-2">
@@ -377,11 +377,11 @@ function ConnectedCard({ peer }: { peer: any }) {
         <Avatar seed={peer.email} label={initials(peer)} />
         <div className="min-w-0 flex-1">
           <div className="font-semibold truncate">{peer.name || peer.email.split('@')[0]}</div>
-          <div className="text-xs text-muted truncate">{peer.email}</div>
+          <div className="text-xs text-muted-foreground truncate">{peer.email}</div>
           <div className="mt-2"><Chip tone="on">✓ Collegato</Chip></div>
         </div>
       </div>
-      <div className="text-xs text-muted mt-3">
+      <div className="text-xs text-muted-foreground mt-3">
         Per chiedere al suo cervello, scrivi al tuo agente su Telegram (es. "chiedi a {peer.name || peer.email} info su X").
       </div>
     </Card>

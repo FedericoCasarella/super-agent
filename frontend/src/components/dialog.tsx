@@ -106,7 +106,7 @@ function DialogOverlay({ req, onClose }: { req: DialogRequest; onClose: (v: any)
               <div className="text-sm text-text/90 whitespace-pre-wrap break-words">{req.message}</div>
             </div>
           </div>
-          <button onClick={() => onClose(req.kind === 'confirm' ? false : req.kind === 'prompt' ? null : undefined)} className="p-1.5 rounded-md hover:bg-surface2 text-muted hover:text-text shrink-0"><X size={16} /></button>
+          <button onClick={() => onClose(req.kind === 'confirm' ? false : req.kind === 'prompt' ? null : undefined)} className="p-1.5 rounded-md hover:bg-surface2 text-muted-foreground hover:text-text shrink-0"><X size={16} /></button>
         </div>
         {req.kind === 'prompt' && (
           <div className="px-5 py-4">

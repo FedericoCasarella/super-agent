@@ -62,35 +62,35 @@ export default function BrainOverview() {
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold">Il tuo cervello</h2>
-        <p className="text-xs text-muted mt-1">Panoramica · clicca un nodo nel grafo per leggere la nota</p>
+        <p className="text-xs text-muted-foreground mt-1">Panoramica · clicca un nodo nel grafo per leggere la nota</p>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
         <div className="border border-border rounded-2xl p-3 bg-surface2/40">
-          <div className="text-[10px] uppercase tracking-wide text-muted">Neuroni</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Neuroni</div>
           <div className="text-2xl font-semibold mt-1">{stats.totals.notes.toLocaleString()}</div>
-          <div className="text-xs text-muted mt-1">{stats.totals.files} file totali</div>
+          <div className="text-xs text-muted-foreground mt-1">{stats.totals.files} file totali</div>
         </div>
         <div className="border border-border rounded-2xl p-3 bg-surface2/40">
-          <div className="text-[10px] uppercase tracking-wide text-muted">Peso</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Peso</div>
           <div className="text-2xl font-semibold mt-1">{fmtBytes(stats.totals.bytes)}</div>
-          <div className="text-xs text-muted mt-1">{stats.totals.vaults} cervell{stats.totals.vaults === 1 ? 'o' : 'i'}</div>
+          <div className="text-xs text-muted-foreground mt-1">{stats.totals.vaults} cervell{stats.totals.vaults === 1 ? 'o' : 'i'}</div>
         </div>
         <div className="border border-border rounded-2xl p-3 bg-surface2/40">
-          <div className="text-[10px] uppercase tracking-wide text-muted">Attività 7gg</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Attività 7gg</div>
           <div className="text-2xl font-semibold mt-1">{stats.totals.updatedLast7Days}</div>
-          <div className="text-xs text-muted mt-1">note aggiornate</div>
+          <div className="text-xs text-muted-foreground mt-1">note aggiornate</div>
         </div>
         <div className="border border-border rounded-2xl p-3 bg-surface2/40">
-          <div className="text-[10px] uppercase tracking-wide text-muted">Ultimo update</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Ultimo update</div>
           <div className="text-2xl font-semibold mt-1">{fmtAgo(stats.totals.lastUpdate)}</div>
-          <div className="text-xs text-muted mt-1">{stats.totals.lastUpdate ? new Date(stats.totals.lastUpdate).toLocaleString() : '—'}</div>
+          <div className="text-xs text-muted-foreground mt-1">{stats.totals.lastUpdate ? new Date(stats.totals.lastUpdate).toLocaleString() : '—'}</div>
         </div>
       </div>
 
       {stats.vaults.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wide text-muted mb-2 font-semibold">Cervelli collegati</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2 font-semibold">Cervelli collegati</div>
           <ul className="space-y-1.5">
             {stats.vaults.map((v) => (
               <li key={v.name} className="flex items-center justify-between gap-3 text-sm border border-border rounded-xl px-3 py-2 bg-surface2/30">
@@ -98,7 +98,7 @@ export default function BrainOverview() {
                   <span className="text-xs">{v.is_primary ? '★' : '·'}</span>
                   <span className="font-medium truncate">{v.name}</span>
                 </div>
-                <div className="text-xs text-muted flex items-center gap-3 shrink-0">
+                <div className="text-xs text-muted-foreground flex items-center gap-3 shrink-0">
                   <span>{v.files} file</span>
                   <span className="font-mono">{fmtBytes(v.bytes)}</span>
                 </div>
@@ -110,7 +110,7 @@ export default function BrainOverview() {
 
       {stats.byKind.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wide text-muted mb-2 font-semibold">Per tipo</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2 font-semibold">Per tipo</div>
           <div className="flex h-2 rounded-full overflow-hidden border border-border bg-surface2/30">
             {stats.byKind.map((k) => (
               <div key={k.kind} style={{ width: `${(k.n / totalKind) * 100}%`, background: KIND_COLOR[k.kind] ?? '#c084fc' }} title={`${k.kind}: ${k.n}`} />
@@ -120,7 +120,7 @@ export default function BrainOverview() {
             {stats.byKind.map((k) => (
               <div key={k.kind} className="flex items-center gap-1.5">
                 <span className="inline-block w-2 h-2 rounded-full" style={{ background: KIND_COLOR[k.kind] ?? '#c084fc' }} />
-                <span className="text-muted">{k.kind}</span>
+                <span className="text-muted-foreground">{k.kind}</span>
                 <span className="font-mono">{k.n}</span>
               </div>
             ))}
@@ -130,7 +130,7 @@ export default function BrainOverview() {
 
       {stats.byVisibility.some((v) => v.visibility) && (
         <div>
-          <div className="text-[10px] uppercase tracking-wide text-muted mb-2 font-semibold">Visibilità</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2 font-semibold">Visibilità</div>
           <div className="flex flex-wrap gap-2 text-xs">
             {stats.byVisibility.map((v) => (
               <div key={String(v.visibility)} className="border border-border rounded-full px-2.5 py-1 bg-surface2/40">
@@ -143,20 +143,20 @@ export default function BrainOverview() {
 
       {stats.byOrigin.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wide text-muted mb-2 font-semibold">Note importate da peer</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2 font-semibold">Note importate da peer</div>
           <ul className="space-y-1 text-xs">
             {stats.byOrigin.map((o) => (
               <li key={o.origin_email ?? 'none'} className="flex items-center gap-2">
                 <span className="inline-block w-2 h-2 rounded-full" style={{ background: `hsl(${hashHue(o.origin_email ?? '')}, 70%, 62%)` }} />
                 <span className="truncate">{o.origin_email}</span>
-                <span className="font-mono text-muted ml-auto">{o.n}</span>
+                <span className="font-mono text-muted-foreground ml-auto">{o.n}</span>
               </li>
             ))}
           </ul>
         </div>
       )}
 
-      <div className="text-[10px] text-muted leading-relaxed pt-2 border-t border-border">
+      <div className="text-[10px] text-muted-foreground leading-relaxed pt-2 border-t border-border">
         ◇ cyan = pubblico · ◆ fuchsia = protetto (gestito dal Brain Classifier).<br />
         I particles tra nodi mostrano il flusso. Verde MRI = nodo letto dall'agente in tempo reale.
       </div>

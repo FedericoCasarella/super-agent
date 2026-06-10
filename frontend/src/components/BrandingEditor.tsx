@@ -64,9 +64,9 @@ export default function BrandingEditor({ onSaved }: { onSaved?: (result?: any) =
       </div>
       <Field label="Titolo app"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="super-agent" /></Field>
       <Field label="Sottotitolo (opz.)"><Input value={subtitle} onChange={(e) => setSubtitle(e.target.value)} placeholder="personal · brain" /></Field>
-      <label className="flex items-center gap-2 text-sm text-muted cursor-pointer">
+      <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
         <input type="checkbox" checked={syncTelegram} onChange={(e) => setSyncTelegram(e.target.checked)} className="w-4 h-4 accent-accent" />
-        <span>Sincronizza anche nome + descrizione del bot Telegram <span className="text-[11px] text-muted/70">(foto profilo bot: cambiabile solo da @BotFather)</span></span>
+        <span>Sincronizza anche nome + descrizione del bot Telegram <span className="text-[11px] text-muted-foreground/70">(foto profilo bot: cambiabile solo da @BotFather)</span></span>
       </label>
       <div className="flex justify-end">
         <Button onClick={save} disabled={saving || !title.trim()}>{saving ? 'Salvo…' : 'Salva branding'}</Button>

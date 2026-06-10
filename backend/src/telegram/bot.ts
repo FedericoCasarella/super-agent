@@ -17,13 +17,30 @@ function toTelegramHtml(raw: string): string {
     blocks.push(html);
     return `${SENTINEL}${blocks.length - 1}${SENTINEL}`;
   };
-  let s = raw.replace(/```([\s\S]*?)```/g, (_m, code) => wrap(`<pre>${escapeHtml(code)}</pre>`));
+  // Pre-pass: mask existing markdown links FIRST so the bare-URL autolinker
+  // doesn't double-wrap them. Without this, `[name](http://x)` becomes
+  // `[name]([http://x](http://x))` → garbage href + trailing `)` leaks.
+  let pre = raw.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url) => wrap(`<a href="${url}">${escapeHtml(label)}</a>`));
+  // Merge "filename + URL on next line" into a single markdown link.
+  pre = pre.replace(
+    /(^|\n)([ \t]*[-*•]?[ \t]*)([^\s\n][^\n]*?)\n[ \t]+(https?:\/\/\S+)/g,
+    (_m, lead, bullet, label, url) => `${lead}${bullet}` + wrap(`<a href="${url}">${escapeHtml(label.trim())}</a>`),
+  );
+  // Auto-link bare URLs (not inside an already-masked link block).
+  pre = pre.replace(/(^|[\s])(https?:\/\/[^\s<>]+)/g, (_m, lead, url) => `${lead}` + wrap(`<a href="${url}">${escapeHtml(url)}</a>`));
+  // Telegram aggressively autodetects bare `.md` strings as `.md` (Moldova
+  // TLD) domains. Wrap any leftover `*.md` filename in <code> so it stays
+  // inert. Skip ones already inside a sentinel block (already linked).
+  pre = pre.replace(/\b([A-Za-z0-9_-][A-Za-z0-9_./-]{2,})\.md\b/g, (m, _name) => {
+    if (m.includes(SENTINEL)) return m;
+    return wrap(`<code>${escapeHtml(m)}</code>`);
+  });
+  let s = pre.replace(/```([\s\S]*?)```/g, (_m, code) => wrap(`<pre>${escapeHtml(code)}</pre>`));
   s = s.replace(/`([^`\n]+)`/g, (_m, code) => wrap(`<code>${escapeHtml(code)}</code>`));
   s = escapeHtml(s);
   s = s.replace(/\*\*([^\n*]+)\*\*/g, '<b>$1</b>');
   s = s.replace(/(^|[\s(])\*([^\n*]+)\*/g, '$1<i>$2</i>');
   s = s.replace(/(^|[\s(])_([^\n_]+)_/g, '$1<i>$2</i>');
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
   const re = new RegExp(`${SENTINEL}(\\d+)${SENTINEL}`, 'g');
   s = s.replace(re, (_m, i) => blocks[Number(i)]);
   return s;
@@ -40,6 +57,173 @@ async function startBotForUser(userId: number) {
   // Explicit /start handler — Telegraf treats /start as a command and may
   // bypass generic on('message') depending on update type / entities.
   // /agents command — show active sub-agents
+  // Catalog of agent-supported slash commands. Single source of truth — used
+  // both to wire handlers and to populate Telegram's native /-menu via
+  // setMyCommands at launch.
+  const COMMAND_CATALOG: Array<{ command: string; description: string }> = [
+    { command: 'start',   description: 'Collega questa chat al tuo agent' },
+    { command: 'help',    description: 'Mostra i comandi disponibili' },
+    { command: 'agents',  description: 'Lista sub-agent in esecuzione' },
+    { command: 'status',  description: 'Stato agent: quota, agent attivi, ultima riflessione' },
+    { command: 'tasks',   description: 'Task schedulati attivi' },
+    { command: 'think',   description: 'Butta un pensiero: lo analizzo e lo collego al second brain' },
+    { command: 'thoughts',description: 'Pensieri di oggi · on/off per la modalità diario' },
+    { command: 'reset',   description: 'Pulisci la cronologia conversazione (ultimi 30 msg)' },
+    { command: 'stop',    description: 'Mette in pausa le risposte automatiche' },
+    { command: 'resume',  description: 'Riprende le risposte automatiche' },
+  ];
+
+  bot.command('help', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    const body = COMMAND_CATALOG.map((c) => `/${c.command} — ${c.description}`).join('\n');
+    await ctx.reply(`🤖 Comandi disponibili:\n\n${body}`);
+  });
+
+  // ── Thought Analyzer (sess.8266) ───────────────────────────────────────────
+  // Cattura DB-first (ack istantaneo), poi analisi leggera asincrona che non blocca.
+  const captureAndReply = async (ctx: any, text: string) => {
+    const { captureThought, analyzeThoughtLight, lightReplyLine } = await import('../brain/thoughts.js');
+    let id: number;
+    try {
+      ({ id } = await captureThought(userId, text, 'telegram'));
+    } catch (e: any) {
+      await ctx.reply(`⚠️ Non sono riuscito a salvare il pensiero: ${String(e?.message ?? e).slice(0, 120)}`).catch(() => {});
+      return;
+    }
+    await ctx.reply('🐙 Salvato.').catch(() => {});
+    // Analisi leggera in background — l'ack non aspetta mai l'LLM.
+    (async () => {
+      const stop = await startTyping(userId).catch(() => (() => {}));
+      try {
+        const r = await analyzeThoughtLight(userId, id, text);
+        if (r.ok && r.analysis) await sendTelegram(userId, lightReplyLine(r.analysis), 'thought');
+      } catch (e) { console.error('[thoughts] capture analyze failed', e); }
+      finally { try { stop(); } catch {} }
+    })();
+  };
+
+  bot.command('think', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    const text = ctx.message.text.replace(/^\/think(@\S+)?/, '').trim();
+    if (!text) { await ctx.reply('🐙 Scrivi il pensiero dopo /think, oppure /thoughts on per la modalità diario.'); return; }
+    await captureAndReply(ctx, text);
+  });
+
+  bot.command('thoughts', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    const arg = ctx.message.text.replace(/^\/thoughts(@\S+)?/, '').trim().toLowerCase();
+    if (arg === 'on' || arg === 'off') {
+      await setSetting(userId, 'thought_mode', arg === 'on');
+      await ctx.reply(arg === 'on'
+        ? '🐙 Thought-mode ON — ogni messaggio diventa un pensiero analizzato. /thoughts off per tornare alla chat.'
+        : '🐙 Thought-mode OFF — torno l\'agente conversazionale.');
+      return;
+    }
+    const { thoughtsToday } = await import('../brain/thoughts.js');
+    const list = await thoughtsToday(userId);
+    if (!list.length) { await ctx.reply('🐙 Nessun pensiero oggi. Buttane uno con /think, o /thoughts on per la modalità diario.'); return; }
+    const lines = list.map((t, i) => {
+      const hhmm = new Date(t.ts).toISOString().slice(11, 16);
+      const tag = t.themes?.length ? ` · ${t.themes.join('/')}` : (t.analyzed ? '' : ' · …');
+      return `${i + 1}. [${hhmm}] ${t.text.slice(0, 80)}${tag}`;
+    });
+    const mode = await getSetting<boolean>(userId, 'thought_mode');
+    await ctx.reply(`🐙 Pensieri di oggi (${list.length})${mode ? ' · mode ON' : ''}:\n\n${lines.join('\n')}`);
+  });
+
+  bot.command('status', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { isQuotaLocked } = await import('../quota.js');
+      const { listActive } = await import('../sub_agents/index.js');
+      const active = await listActive(userId);
+      const paused = (await getSetting<any>(userId, 'agent_paused'))?.value === true;
+      const lastReflection = (await getSetting<any>(userId, 'agent_next_reflection_at'))?.at;
+      const quotaIcon = isQuotaLocked() ? '🚫 lock' : '✅ ok';
+      const pauseIcon = paused ? '⏸ in pausa' : '▶️ attivo';
+      const lines = [
+        `Quota: ${quotaIcon}`,
+        `Stato: ${pauseIcon}`,
+        `Sub-agent attivi: ${active.length}`,
+        lastReflection ? `Prossima riflessione: ${new Date(lastReflection).toLocaleString('it-IT')}` : 'Riflessione: nessuna pianificata',
+      ];
+      await ctx.reply(`📊 Status\n\n${lines.join('\n')}`);
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 160)}`);
+    }
+  });
+
+  bot.command('tasks', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { query } = await import('../db/index.js');
+      const rows = await query<{ id: number; title: string; cron: string; next_run_at: string | null; enabled: boolean }>(
+        `SELECT id::int, title, cron, next_run_at, enabled
+           FROM scheduled_tasks WHERE user_id=$1 AND enabled=true
+          ORDER BY next_run_at NULLS LAST LIMIT 20`,
+        [userId],
+      );
+      if (!rows.length) { await ctx.reply('Nessun task schedulato attivo.'); return; }
+      const lines = rows.map((r, i) => {
+        const next = r.next_run_at ? new Date(r.next_run_at).toLocaleString('it-IT') : 'n/a';
+        return `${i + 1}. ${r.title}\n   ⏰ ${r.cron} · prox ${next}`;
+      });
+      await ctx.reply(`📅 Task attivi (${rows.length}):\n\n${lines.join('\n\n')}`);
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 160)}`);
+    }
+  });
+
+  bot.command('reset', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { query } = await import('../db/index.js');
+      const r = await query<{ n: number }>(
+        `WITH d AS (
+           DELETE FROM messages
+           WHERE id IN (
+             SELECT id FROM messages
+             WHERE user_id=$1 AND channel='telegram'
+             ORDER BY id DESC LIMIT 30
+           )
+           RETURNING 1
+         ) SELECT count(*)::int AS n FROM d`,
+        [userId],
+      );
+      await ctx.reply(`🧹 Cronologia cancellata (${r[0]?.n ?? 0} msg). Prossimo messaggio parte da contesto pulito.`);
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 160)}`);
+    }
+  });
+
+  bot.command('stop', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    await setSetting(userId, 'agent_paused', { value: true, at: new Date().toISOString() });
+    await ctx.reply('⏸ Risposte automatiche in pausa. Usa /resume per riprenderle.');
+  });
+
+  bot.command('resume', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    await setSetting(userId, 'agent_paused', { value: false, at: new Date().toISOString() });
+    await ctx.reply('▶️ Risposte automatiche riattivate.');
+  });
+
   bot.command('agents', async (ctx) => {
     const chatId = ctx.chat.id;
     const cur = await getSetting<any>(userId, 'telegram');
@@ -134,6 +318,12 @@ async function startBotForUser(userId: number) {
     if (text) {
       const messageId = (ctx.message as any).message_id;
       try { await setSetting(userId, 'telegram_last_incoming', { chatId, messageId, ts: Date.now() }); } catch {}
+      // Thought-mode: ogni messaggio (non-comando) è un pensiero da catturare+analizzare,
+      // NON un turno conversazionale. Default OFF → il bot resta l'agente di sempre.
+      if (!text.startsWith('/')) {
+        const tmode = await getSetting<boolean>(userId, 'thought_mode');
+        if (tmode) { await captureAndReply(ctx, text); return; }
+      }
       bus.emit('telegram:incoming', { userId, chatId, text, messageId });
       return;
     }
@@ -211,7 +401,7 @@ ${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a
       const { text: transcript } = await transcribeBuffer(userId, buf, `voice.${ext}`, mime, audioSeconds);
       if (!transcript) { await ctx.reply('🎙 (vuoto)'); return; }
       await ctx.reply(`🎙 "${transcript}"`).catch(() => {});
-      bus.emit('telegram:incoming', { userId, chatId, text: transcript });
+      bus.emit('telegram:incoming', { userId, chatId, text: transcript, voice: true });
     } catch (e: any) {
       console.error('[telegram] voice error', e);
       await ctx.reply(`⚠️ Voice transcription failed: ${String(e?.message ?? e).slice(0, 160)}`);
@@ -232,6 +422,14 @@ ${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a
     });
   };
   launchWithRetry();
+  // Register the slash-menu Telegram shows when user types `/`. Best-effort —
+  // failures don't block the bot from working.
+  bot.telegram.setMyCommands(COMMAND_CATALOG)
+    .then(() => console.log(`[telegram:${userId}] /-menu registered (${COMMAND_CATALOG.length} commands)`))
+    .catch((e: any) => console.warn(`[telegram:${userId}] setMyCommands failed`, e?.message ?? e));
+  // Persistent "Menu" button next to the input — opens the commands list.
+  bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } })
+    .catch((e: any) => console.warn(`[telegram:${userId}] setChatMenuButton failed`, e?.message ?? e));
   console.log(`[telegram:${userId}] started`);
 }
 
@@ -240,6 +438,14 @@ export async function stopBotForUser(userId: number) {
   if (!entry) return;
   try { entry.bot.stop(); } catch {}
   bots.delete(userId);
+}
+
+// Stop ALL Telegraf instances in parallel. Used by dev shutdown so each bot
+// gets a chance to ack its current update batch before the process exits,
+// preventing Telegram replay loops on respawn.
+export async function stopAllTelegramBots(): Promise<void> {
+  const ids = Array.from(bots.keys());
+  await Promise.all(ids.map((id) => stopBotForUser(id)));
 }
 
 export async function startAllTelegramBots() {
@@ -270,7 +476,32 @@ export async function sendTelegram(userId: number, text: string, origin: string 
     await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: text, origin, error: 'telegram bot init failed' });
     throw new Error(`telegram bot init failed for user ${userId}`);
   }
-  const parts = text.split('<<MSG>>').map((p) => p.trim()).filter(Boolean);
+  // Hard split by 4000 chars (Telegram limit 4096, leave headroom for HTML
+  // entity expansion). Long Claude outputs (SOPs, dossiers) hit 5–10k chars
+  // and Telegram rejected the call silently — orchestrator logged "sent" but
+  // user got nothing. Now split FIRST, then split by explicit <<MSG>> markers.
+  const MAX = 4000;
+  function chunkByLen(s: string): string[] {
+    if (s.length <= MAX) return [s];
+    const out: string[] = [];
+    let i = 0;
+    while (i < s.length) {
+      let end = Math.min(i + MAX, s.length);
+      if (end < s.length) {
+        const nl = s.lastIndexOf('\n', end);
+        if (nl > i + MAX / 2) end = nl;
+      }
+      out.push(s.slice(i, end));
+      i = end;
+    }
+    return out;
+  }
+  const parts = text
+    .split('<<MSG>>')
+    .flatMap((p) => chunkByLen(p))
+    .map((p) => p.trim())
+    .filter(Boolean);
+  console.log(`[telegram:${userId}] sending ${parts.length} parts (total ${text.length} chars)`);
   for (const p of parts) {
     let sentOk = true;
     let err: string | null = null;
@@ -294,8 +525,103 @@ export async function sendTelegram(userId: number, text: string, origin: string 
   }
 }
 
+// TTS reply path: synthesize via ElevenLabs (or any TTS provider configured)
+// and post as a Telegram voice note. Falls back silently to text via the
+// caller if TTS not configured or fails. Logs to outbound_log.
+export async function sendTelegramVoice(userId: number, text: string, origin: string = 'agent'): Promise<{ ok: boolean; fallback?: 'text'; error?: string }> {
+  const { logOutbound } = await import('../comm/outbound_log.js');
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return { ok: false, error: 'telegram not configured' };
+  const { synthesize } = await import('../connectors/builtin/tts/index.js');
+  const audio = await synthesize(userId, text);
+  if (!audio) {
+    // Fallback: send as text so the user still gets the reply.
+    try { await sendTelegram(userId, text, origin); }
+    catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
+    return { ok: true, fallback: 'text' };
+  }
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  try {
+    // Telegraf voice expects an audio source. For mp3 use sendAudio; for ogg
+    // sendVoice. Telegram voice notes appear as the WhatsApp-style waveform.
+    if (audio.ext === 'ogg') {
+      await entry.bot.telegram.sendVoice(cfg.chatId, { source: audio.buf });
+    } else {
+      await entry.bot.telegram.sendAudio(cfg.chatId, { source: audio.buf, filename: `voice.${audio.ext}` });
+    }
+    await logOutbound({ userId, channel: 'telegram', status: 'sent', recipient: String(cfg.chatId), body: text, origin, meta: { tts: true, ext: audio.ext, bytes: audio.buf.length } });
+    return { ok: true };
+  } catch (e: any) {
+    const err = String(e?.message ?? e).slice(0, 500);
+    await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: text, origin, error: err, meta: { tts: true } });
+    // Fallback to text on send failure
+    try { await sendTelegram(userId, text, origin); return { ok: true, fallback: 'text', error: err }; }
+    catch { return { ok: false, error: err }; }
+  }
+}
+
 // Allowed Telegram reaction emojis (free for bots, no premium)
 const TG_REACTIONS = new Set(['👍','👎','❤','🔥','🥰','👏','😁','🤔','🤯','😱','🤬','😢','🎉','🤩','🤮','💩','🙏','👌','🕊','🤡','🥱','🥴','😍','🐳','❤‍🔥','🌚','🌭','💯','🤣','⚡','🍌','🏆','💔','🤨','😐','🍓','🍾','💋','🖕','😈','😴','😭','🤓','👻','👨‍💻','👀','🎃','🙈','😇','😨','🤝','✍','🤗','🫡','🎅','🎄','☃','💅','🤪','🗿','🆒','💘','🙉','🦄','😘','💊','🙊','😎','👾','🤷‍♂','🤷','🤷‍♀','😡']);
+
+// Built-in Telegram emoji shortcodes for animated emoji ("custom emoji")
+// reachable from any bot. These use the standard Unicode glyphs but render
+// animated on Telegram clients. Useful for sparkly replies.
+export const TG_ANIMATED_EMOJI = ['🎲','🎯','🏀','⚽','🎰','🎳'] as const;
+
+// Send a sticker by file_id (preferred) OR by URL. file_id is reusable across
+// bots once obtained — see getStickerSet for popular packs.
+export async function sendTelegramSticker(userId: number, stickerRef: string, origin: string = 'agent'): Promise<{ ok: boolean; error?: string }> {
+  const { logOutbound } = await import('../comm/outbound_log.js');
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return { ok: false, error: 'telegram not configured' };
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  try {
+    await entry.bot.telegram.sendSticker(cfg.chatId, stickerRef);
+    await logOutbound({ userId, channel: 'telegram', status: 'sent', recipient: String(cfg.chatId), body: `[sticker] ${stickerRef.slice(0, 80)}`, origin });
+    return { ok: true };
+  } catch (e: any) {
+    const err = String(e?.message ?? e).slice(0, 400);
+    await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: `[sticker] ${stickerRef.slice(0, 80)}`, origin, error: err });
+    return { ok: false, error: err };
+  }
+}
+
+// Send an animated emoji (Telegram "dice" API — 🎲 🎯 🏀 ⚽ 🎰 🎳 only).
+// Each one returns a random outcome; great for playful one-shot reactions.
+export async function sendTelegramAnimatedEmoji(userId: number, emoji: string, origin: string = 'agent'): Promise<{ ok: boolean; value?: number; error?: string }> {
+  const { logOutbound } = await import('../comm/outbound_log.js');
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return { ok: false, error: 'telegram not configured' };
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  if (!(TG_ANIMATED_EMOJI as readonly string[]).includes(emoji)) return { ok: false, error: `emoji "${emoji}" non animata. Usa una di: ${TG_ANIMATED_EMOJI.join(' ')}` };
+  try {
+    const res: any = await entry.bot.telegram.sendDice(cfg.chatId, { emoji });
+    await logOutbound({ userId, channel: 'telegram', status: 'sent', recipient: String(cfg.chatId), body: `[animated ${emoji}] value=${res?.dice?.value}`, origin });
+    return { ok: true, value: res?.dice?.value };
+  } catch (e: any) {
+    const err = String(e?.message ?? e).slice(0, 400);
+    return { ok: false, error: err };
+  }
+}
+
+// List a public sticker set so the agent can browse + pick (returns file_ids).
+export async function listTelegramStickerSet(userId: number, name: string): Promise<{ ok: boolean; stickers?: { file_id: string; emoji?: string }[]; error?: string }> {
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  try {
+    const set: any = await entry.bot.telegram.getStickerSet(name);
+    return { ok: true, stickers: (set.stickers ?? []).map((s: any) => ({ file_id: s.file_id, emoji: s.emoji })) };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e).slice(0, 400) };
+  }
+}
 
 export async function updateBotProfile(userId: number, opts: { name?: string; shortDescription?: string }): Promise<{ ok: boolean; updated: string[]; error?: string }> {
   if (!bots.get(userId)) await startBotForUser(userId);

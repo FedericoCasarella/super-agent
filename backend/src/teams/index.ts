@@ -105,10 +105,11 @@ export type TeamMember = {
 };
 export type TeamWithMembers = Team & { members: (TeamMember & { agent?: CustomAgent | null })[] };
 
-export async function listTeams(userId: number): Promise<Team[]> {
-  return await query<Team>(
-    `SELECT id::int, user_id::int, name, description, archived, created_at, updated_at
-     FROM agent_teams WHERE user_id=$1 AND archived=false ORDER BY name`,
+export async function listTeams(userId: number): Promise<(Team & { members_count: number })[]> {
+  return await query<Team & { members_count: number }>(
+    `SELECT t.id::int, t.user_id::int, t.name, t.description, t.archived, t.created_at, t.updated_at,
+            COALESCE((SELECT count(*)::int FROM agent_team_members m WHERE m.team_id=t.id), 0) AS members_count
+     FROM agent_teams t WHERE t.user_id=$1 AND t.archived=false ORDER BY t.name`,
     [userId],
   );
 }

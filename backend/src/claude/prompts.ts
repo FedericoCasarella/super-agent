@@ -134,8 +134,15 @@ export async function buildSystemContext(userId: number): Promise<string> {
 
   const externals = listExternalMcps();
   if (externals.length) {
-    const lines = externals.map((e) => `- mcp__${e.serverName}__* — ${e.rawName} [${e.status}]${e.url ? ` (${e.url})` : ''}`).join('\n');
-    parts.push('EXTERNAL MCP SERVERS (user-global Claude Code):\n' + lines + '\n\n`needs_auth` = unusable until user authenticates.');
+    // Server prefix is normalize(rawName): "claude.ai flowspace" → "claude_ai_flowspace".
+    // Confirmed against `claude -p` inspection — this IS the real prefix Claude
+    // exposes. The wildcard `mcp__<server>__*` is allow-listed in runner.ts.
+    const lines = externals
+      .filter((e) => e.status === 'connected')
+      .map((e) => `- mcp__${e.serverName}__<tool> — ${e.rawName}`)
+      .join('\n');
+    const blocked = externals.filter((e) => e.status !== 'connected').map((e) => e.rawName);
+    parts.push('EXTERNAL MCP SERVERS (user-global Claude Code):\n' + lines + (blocked.length ? '\n\nNot connected (do not call): ' + blocked.join(', ') : ''));
   }
 
   parts.push(
@@ -200,7 +207,16 @@ export async function buildSystemContext(userId: number): Promise<string> {
   );
 
   parts.push(
-    'EMAIL REPLIES — Se ricevi una mail (via IMAP) o l\'utente chiede di rispondere a qualcuno, NON inviare mai direttamente. Usa `mcp__super_agent__imap_propose_reply` con account (label dell\'account email da cui inviare — usa lo STESSO account che ha ricevuto l\'email originale), to, subject, body (+ inReplyTo se hai il Message-ID per il threading). Il backend salva bozza + manda Telegram con keyboard ✅ Invia / ❌ Scarta. L\'utente decide. Firma sempre con il nome dell\'utente.'
+    'EMAIL REPLIES — Se ricevi una mail (via IMAP) o l\'utente chiede di rispondere a qualcuno, NON inviare mai direttamente. Usa `mcp__super_agent__imap_propose_reply` con account (label dell\'account email da cui inviare — usa lo STESSO account che ha ricevuto l\'email originale), to, subject, body (+ inReplyTo se hai il Message-ID per il threading). Il backend salva bozza + manda Telegram con keyboard ✅ Invia / ❌ Scarta. L\'utente decide. Firma sempre con il nome dell\'utente.\n\n' +
+    '═══ CHANNEL AWARENESS ═══\n' +
+    'Le tue risposte all\'utente arrivano via TELEGRAM. Sei consapevole di questo:\n' +
+    '• Telegram supporta HTML: **grassetto**, _corsivo_, `monospace`, [link](url). Usa moderatamente.\n' +
+    '• Emoji standard Unicode = perfetti. Mix tonale: 1-3 per messaggio max, scelti con intenzione (😊 ok per gentilezza, 🔥 per hype, 💀 per ironia nera, 🧠 per insight, ⚡️ per velocità, 🎯 per centrato, 👀 per "ti tengo d\'occhio", 🤝 per accordo, 💡 per idea, ☕ per quotidiano, 🌙 per notte/sogni, 📌 per pin/promemoria).\n' +
+    '• Stickers Telegram: hai `mcp__super_agent__agent_telegram_send_sticker(ref)` (ref = file_id riusabile o URL .webp). USA SOLO per momenti speciali (festa, milestone, gag autoironica, conforto). Mai >1 ogni 5 turni.\n' +
+    '• Emoji animati: `mcp__super_agent__agent_telegram_send_animated_emoji(emoji)` — solo 🎲 🎯 🏀 ⚽ 🎰 🎳 (risultato randomico). Usa per giocare ("tiriamo i dadi?"), sfida ("centro al 🎯?"), o leggerezza.\n' +
+    '• Esplora pack pubblici con `mcp__super_agent__agent_telegram_list_sticker_set(name)`. Pack utili: "HotCherry", "AnimatedEmojies", "BibendumPolite".\n' +
+    '• Splitting: usa `<<MSG>>` per inviare messaggi multipli (max 3 per turno). Stickers e emoji animati vanno in mezzo come messaggi propri, non in linea col testo.\n' +
+    '• MAI sticker/emoji su contenuti seri (notizie pesanti, errore, problema utente). Mood-read sempre.\n'
   );
 
   parts.push(
@@ -284,7 +300,7 @@ export async function buildTurnPrompt(userId: number, userMessage: string, recen
   const stuckBlock = stuck.length
     ? `\n🚫 REPETITION LOCK — these questions you keep asking with NO answer:\n${stuck.slice(0, 4).map((s) => `  • asked ${s.count}× → "${s.sample}"`).join('\n')}\nRULE: questions clustered above are STALE. If a cluster shows count ≥ 3, FORBIDDEN to re-ask the same thing this turn. Either DROP the topic (say once: "lascio andare per ora, riprendiamo quando vuoi") or rephrase fundamentally OR commit to acting without the info ("vado avanti assumendo X"). NEVER the same shape of question again.\n`
     : '';
-  return `${sys}\n\nRECENT CONVERSATION:\n${hist}${stuckBlock}\n\nNEW USER MESSAGE:\n${userMessage}\n\nINSTRUCTIONS (execute in order — NO skipping):\n0. 🕒 TIME CHECK. If the user message or your reply involves any time/date math (mancano X h, tra Y min, alle Z, oggi/domani), STOP and re-read the NOW block in the system prompt. Compute diff = target − NOW.LOCAL. Show the arithmetic if non-trivial. NEVER invent a time.\n1. 🧠 BRAIN FIRST. Call \`mcp__super_agent__agent_brain_search\` NOW with 1-3 queries from this message. Then \`Read\` the 2-3 most relevant hits. If a person is named → also call people_search + people_get. NO reply before this.\n2. Identify which roadmap item this message touches (Discovery / Strategy / Execution / Off-roadmap).\n3. If user answered a Discovery item → call \`mcp__super_agent__agent_roadmap_set_status\`.\n4. Save NEW meaningful facts to vault via Write (with proper \`related:\` links).\n5. Reply concisely, citing the notes you consulted ("vedo dalla nota X…"). End with the mandated roadmap-anchored question/commitment/closure. Output ONLY reply text. No preamble.\n6. ONE message default. Use \`<<MSG>>\` split ONLY for reply >600 chars + clear topic break. NEVER answer your own question in a second chunk.\n`;
+  return `${sys}\n\nRECENT CONVERSATION:\n${hist}${stuckBlock}\n\nNEW USER MESSAGE:\n${userMessage}\n\nINSTRUCTIONS (execute in order — NO skipping):\n0. 🕒 TIME CHECK. If the user message or your reply involves any time/date math (mancano X h, tra Y min, alle Z, oggi/domani), STOP and re-read the NOW block in the system prompt. Compute diff = target − NOW.LOCAL. Show the arithmetic if non-trivial. NEVER invent a time.\n1. 🧠 BRAIN FIRST. Call \`mcp__super_agent__agent_brain_search\` NOW with 1-3 queries from this message. Then \`Read\` the 2-3 most relevant hits. If a person is named → also call people_search + people_get. NO reply before this.\n1a. 💬 RAW MESSAGES. If user mentions a WhatsApp chat/group/message (es. "messaggio nel gruppo X", "mi ha scritto Y su WA") OR an Instagram DM and brain_search didn't find it → ALSO call \`mcp__super_agent__whatsapp_search_messages\` / \`whatsapp_list_chats\` / \`whatsapp_chat_messages\` (or \`instagram_*\`) BEFORE saying "non lo vedo". Messaggi raw sono in DB anche se non bonificati nel brain.\n2. Identify which roadmap item this message touches (Discovery / Strategy / Execution / Off-roadmap).\n3. If user answered a Discovery item → call \`mcp__super_agent__agent_roadmap_set_status\`.\n4. Save NEW meaningful facts to vault via Write (with proper \`related:\` links).\n5. Reply concisely, citing the notes you consulted ("vedo dalla nota X…"). End with the mandated roadmap-anchored question/commitment/closure. Output ONLY reply text. No preamble.\n6. ONE message default. Use \`<<MSG>>\` split ONLY for reply >600 chars + clear topic break. NEVER answer your own question in a second chunk.\n`;
 }
 
 export async function buildProactivePrompt(userId: number, trigger: string, payload: any): Promise<string> {

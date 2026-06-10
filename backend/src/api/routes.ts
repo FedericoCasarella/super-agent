@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { query, getSetting, setSetting } from '../db/index.js';
+import { quotaGuard } from '../quota.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
 import { buildGraph } from '../brain/graph.js';
 import { listConnectors, ensureUserConnectorRows } from '../connectors/registry.js';
@@ -41,6 +42,10 @@ router.post('/tools/:name', async (req, res) => {
 });
 
 // All routes below require auth
+// Liveness probe — no auth, used by the frontend to detect "backend down"
+// and show a blocking overlay until it comes back.
+router.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
 router.use(requireUser);
 
 router.get('/status', async (req, res) => {
@@ -89,6 +94,146 @@ router.get('/messages', async (req, res) => {
   res.json(rows.reverse());
 });
 
+// Live page KPIs — agents-now, agents-24h, people-touched-24h, upcoming
+// scheduled contacts (channel + modality). Single round-trip; client renders.
+router.get('/live/kpis', async (req, res) => {
+  try {
+    const u = req.user!.id;
+    // Active agents NOW: running sub_agents + running team_tasks
+    const nowAgg = await query<{ sub_now: number; team_now: number; internal_now: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND status='running') AS sub_now,
+         (SELECT count(*)::int FROM team_tasks WHERE user_id=$1 AND status='running') AS team_now,
+         (SELECT count(*)::int FROM internal_agents WHERE user_id=$1 AND status='running') AS internal_now`,
+      [u],
+    ).catch(() => [{ sub_now: 0, team_now: 0, internal_now: 0 }]);
+
+    // Agents activated in last 24h
+    const last24Agg = await query<{ sub_24h: number; team_24h: number; internal_24h: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS sub_24h,
+         (SELECT count(*)::int FROM team_tasks WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS team_24h,
+         (SELECT count(*)::int FROM internal_agents WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS internal_24h`,
+      [u],
+    ).catch(() => [{ sub_24h: 0, team_24h: 0, internal_24h: 0 }]);
+
+    // People involved in agentic work last 24h — distinct recipients from
+    // outbound_log filtered to agent / sub-agent / perk origins.
+    const peopleAgg = await query<{ c: number }>(
+      `SELECT count(DISTINCT recipient)::int AS c
+       FROM outbound_log
+       WHERE user_id=$1
+         AND status='sent'
+         AND ts > now() - INTERVAL '24 hours'
+         AND recipient IS NOT NULL
+         AND (origin = 'agent' OR origin LIKE 'subagent:%' OR origin LIKE 'perk:%' OR origin LIKE 'team:%')`,
+      [u],
+    ).catch(() => [{ c: 0 }]);
+
+    // Upcoming scheduled contacts — compute next_run_at from cron expression
+    // since scheduled_tasks doesn't materialize it.
+    const upcoming = await query<{ id: number; name: string; cron: string; action_type: string; action_payload: any }>(
+      `SELECT id, name, cron, action_type, action_payload
+       FROM scheduled_tasks
+       WHERE user_id=$1 AND enabled=true
+       LIMIT 50`,
+      [u],
+    ).catch(() => []);
+    function inferChannel(t: any): string {
+      const blob = (`${t.name ?? ''} ${JSON.stringify(t.action_payload ?? {})}`).toLowerCase();
+      if (/whatsapp|wa\b/.test(blob)) return 'whatsapp';
+      if (/instagram|\big\b/.test(blob)) return 'instagram';
+      if (/telegram|\btg\b/.test(blob)) return 'telegram';
+      if (/gmail|email|mail|imap|smtp/.test(blob)) return 'email';
+      return 'agent';
+    }
+    function inferModality(t: any): string {
+      const blob = (`${t.name ?? ''} ${JSON.stringify(t.action_payload ?? {})}`).toLowerCase();
+      if (/community|broadcast|gruppo|group|many/.test(blob)) return '1:many';
+      if (/thread|conversazione|conversation/.test(blob)) return 'thread';
+      return '1:1';
+    }
+    const { CronExpressionParser } = await import('cron-parser');
+    const upcomingMapped = upcoming
+      .map((t) => {
+        let next: string | null = null;
+        try { next = CronExpressionParser.parse(t.cron, { tz: 'Europe/Rome' }).next().toISOString(); } catch {}
+        return {
+          id: t.id, name: t.name, cron: t.cron, next_run_at: next,
+          channel: inferChannel(t), modality: inferModality(t),
+        };
+      })
+      .filter((t) => !!t.next_run_at)
+      .sort((a, b) => (a.next_run_at! < b.next_run_at! ? -1 : 1))
+      .slice(0, 12);
+
+    res.json({
+      agentsNow: (nowAgg[0]?.sub_now ?? 0) + (nowAgg[0]?.team_now ?? 0) + (nowAgg[0]?.internal_now ?? 0),
+      agents24h: (last24Agg[0]?.sub_24h ?? 0) + (last24Agg[0]?.team_24h ?? 0) + (last24Agg[0]?.internal_24h ?? 0),
+      peopleTouched24h: peopleAgg[0]?.c ?? 0,
+      upcoming: upcomingMapped,
+      breakdown: {
+        now: nowAgg[0] ?? {},
+        last24h: last24Agg[0] ?? {},
+      },
+    });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Message counts for KPI cards — backend computes from full table so values
+// don't cap at /messages?limit=100 (which was producing the "Msg 24h = 100"
+// constant on the live dashboard).
+router.get('/messages/counts', async (req, res) => {
+  try {
+    const r = await query<{ h24: number; d7: number; d30: number; total: number }>(
+      `SELECT
+         count(*) FILTER (WHERE ts > now() - INTERVAL '24 hours')::int AS h24,
+         count(*) FILTER (WHERE ts > now() - INTERVAL '7 days')::int  AS d7,
+         count(*) FILTER (WHERE ts > now() - INTERVAL '30 days')::int AS d30,
+         count(*)::int AS total
+       FROM messages WHERE user_id=$1`,
+      [req.user!.id],
+    );
+    res.json(r[0] ?? { h24: 0, d7: 0, d30: 0, total: 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// One-off test for the TTS connector: synthesizes a sample line via the
+// configured provider (ElevenLabs) and sends it as a Telegram voice note.
+// Surfaces the real failure reason so the user can debug API key / voice id.
+// List voices available on the ElevenLabs account tied to the saved apiKey.
+// Lets the UI / user know which voices actually work (owned vs library) without
+// digging through the dashboard. Free tier sees only premade — UI surfaces a
+// "Add a voice" hint when no owned voices exist.
+router.get('/connectors/tts/voices', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const { getTtsConfig } = await import('../connectors/builtin/tts/index.js');
+    const cfg = await getTtsConfig(userId);
+    if (!cfg.apiKey) return res.json({ ok: false, error: 'apiKey vuota' });
+    const apiKey = String(cfg.apiKey).replace(/\s/g, '');
+    const r = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': apiKey } });
+    if (!r.ok) return res.json({ ok: false, error: `elevenlabs ${r.status}: ${(await r.text()).slice(0, 200)}` });
+    const data: any = await r.json();
+    const voices = (data?.voices ?? []).map((v: any) => ({ voice_id: v.voice_id, name: v.name, category: v.category, labels: v.labels ?? {} }));
+    const owned = voices.filter((v: any) => v.category !== 'premade');
+    res.json({ ok: true, voices, owned_count: owned.length, total: voices.length });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+router.post('/connectors/tts/test', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const text = String(req.body?.text ?? 'Ciao Federico, questa è una prova per dimostrarti che funziona.');
+    const { synthesizeDetailed } = await import('../connectors/builtin/tts/index.js');
+    const { sendTelegramVoice } = await import('../telegram/bot.js');
+    const audio = await synthesizeDetailed(userId, text);
+    if (!audio.ok) return res.json({ ok: false, error: audio.error });
+    const r = await sendTelegramVoice(userId, text, 'test');
+    res.json({ ok: r.ok, fallback: r.fallback ?? null, error: r.error ?? null, bytes: audio.buf.length, ext: audio.ext });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
 router.get('/connectors', async (req, res) => {
   await ensureUserConnectorRows(req.user!.id);
   const rows = await query<{ name: string; enabled: boolean; config: any; state: any }>(
@@ -113,6 +258,26 @@ router.put('/connectors/:name', async (req, res) => {
     [req.user!.id, req.params.name, enabled ?? null, cfgJson]
   );
   bus.emit('connectors:changed');
+  // Fire connector's onConfigSaved hook so side-effects (e.g. registering
+  // external resources) run immediately.
+  try {
+    const { getConnector } = await import('../connectors/registry.js');
+    const conn = getConnector(req.params.name);
+    if (conn?.onConfigSaved) {
+      const rows = await query<{ config: any; state: any }>(
+        `SELECT config, state FROM connectors WHERE user_id=$1 AND name=$2`,
+        [req.user!.id, req.params.name],
+      );
+      const r = rows[0] ?? { config: {}, state: {} };
+      await conn.onConfigSaved({
+        userId: req.user!.id,
+        config: r.config ?? {},
+        state: r.state ?? {},
+        saveState: async () => {},
+        log: (msg, meta) => console.log(`[${req.params.name}:u${req.user!.id}] ${msg}`, meta ?? ''),
+      });
+    }
+  } catch (e) { console.error(`[connectors:${req.params.name}] onConfigSaved`, e); }
   res.json({ ok: true });
 });
 
@@ -207,6 +372,160 @@ router.get('/brain/note', async (req, res) => {
   res.json(note);
 });
 
+// Save edited note content. Supports `<vault>::<rel>` ids. Keeps existing
+// frontmatter (data passed back from FE) so `gray-matter` re-serializes.
+router.put('/brain/note', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.body?.path ?? '');
+    const content = String(req.body?.content ?? '');
+    const frontmatter = req.body?.data && typeof req.body.data === 'object' ? req.body.data : {};
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const matter = (await import('gray-matter')).default;
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    const full = path.join(vaultRoot, rel);
+    const md = matter.stringify(content, frontmatter);
+    await fs.mkdir(path.dirname(full), { recursive: true });
+    await fs.writeFile(full, md, 'utf8');
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Delete note from disk. Supports `<vault>::<rel>` ids.
+router.delete('/brain/note', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.query.path ?? '');
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    const full = path.join(vaultRoot, rel);
+    await fs.unlink(full);
+    // Also drop the row from brain_index if present.
+    try { await query(`DELETE FROM brain_index WHERE user_id=$1 AND path=$2`, [userId, rel]); } catch {}
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Reveal a vault path in the OS file manager (Finder on macOS, Explorer on
+// Windows, xdg-open on Linux). Accepts `<vault>::<rel>` or bare rel. If the
+// resolved path is a file, opens its PARENT folder with the file highlighted
+// when the platform supports it.
+router.post('/brain/reveal', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.body?.path ?? req.query?.path ?? '');
+    if (!raw) return res.status(400).json({ error: 'path missing' });
+    const path = await import('node:path');
+    const fs = await import('node:fs/promises');
+    const { spawn } = await import('node:child_process');
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    // Resolve + sandbox: must stay under vaultRoot
+    const full = path.resolve(vaultRoot, rel);
+    const rootResolved = path.resolve(vaultRoot);
+    if (full !== rootResolved && !full.startsWith(rootResolved + path.sep)) {
+      return res.status(400).json({ error: 'path escapes vault' });
+    }
+    let stat;
+    try { stat = await fs.stat(full); } catch { return res.status(404).json({ error: 'not found' }); }
+    if (process.platform === 'darwin') {
+      // -R reveals the item in its parent folder (file or dir); for the vault
+      // root itself we just `open` it directly.
+      const args = stat.isFile() ? ['-R', full] : [full];
+      spawn('open', args, { detached: true, stdio: 'ignore' }).unref();
+    } else if (process.platform === 'win32') {
+      const args = stat.isFile() ? ['/select,', full] : [full];
+      spawn('explorer', args, { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      const target = stat.isFile() ? path.dirname(full) : full;
+      spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref();
+    }
+    res.json({ ok: true, path: full });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Brain snapshots: nightly backups + manual trigger.
+router.get('/brain/snapshots', async (req, res) => {
+  try {
+    const { listSnapshots } = await import('../brain/snapshots.js');
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 25), 1), 200);
+    const offset = Math.max(Number(req.query.offset ?? 0), 0);
+    const vault = req.query.vault ? String(req.query.vault) : undefined;
+    res.json(await listSnapshots(req.user!.id, { vault, limit, offset }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/brain/snapshots/run', async (req, res) => {
+  try {
+    const { createSnapshots } = await import('../brain/snapshots.js');
+    res.json({ ok: true, snapshots: await createSnapshots(req.user!.id, 'manual') });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/brain/snapshots/:id/restore', async (req, res) => {
+  try {
+    const { restoreSnapshot } = await import('../brain/snapshots.js');
+    res.json(await restoreSnapshot(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/brain/snapshots/:id', async (req, res) => {
+  try {
+    const { deleteSnapshot } = await import('../brain/snapshots.js');
+    res.json(await deleteSnapshot(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/brain/snapshots/dir', async (req, res) => {
+  try {
+    const { getSnapshotRoot } = await import('../brain/snapshots.js');
+    res.json({ dir: await getSnapshotRoot(req.user!.id) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/brain/snapshots/dir', async (req, res) => {
+  try {
+    const { setSnapshotRoot, getSnapshotRoot } = await import('../brain/snapshots.js');
+    await setSnapshotRoot(req.user!.id, String(req.body?.dir ?? ''));
+    res.json({ ok: true, dir: await getSnapshotRoot(req.user!.id) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 router.get('/brain/stats', async (req, res) => {
   const userId = req.user!.id;
   const fs = await import('node:fs/promises');
@@ -279,6 +598,33 @@ router.get('/brain/stats', async (req, res) => {
   });
 });
 
+// Full vault tree (every .md path relative to vault root). Used by the
+// Brain file-explorer sidebar. Walks the filesystem so it doesn't depend on
+// brain_index staleness. Skips dot-folders + node_modules + .git.
+router.get('/brain/tree', async (req, res) => {
+  try {
+    // Reuse buildGraph which already walks every configured vault correctly.
+    // The 3D graph reads from it, so if the graph has nodes, so will the tree.
+    // Node id format: `<vaultName>::<relPath>` — split to get the rel path.
+    const g = await buildGraph(req.user!.id, {});
+    // Keep the `<vault>::<rel>` id format. /brain/note knows how to resolve it
+    // against multi-vault. Stripping the vault prefix made clicks 404 because
+    // readNote() only looks in the primary vault root.
+    const files = Array.from(
+      new Set(
+        (g.nodes as any[])
+          .map((n) => String(n.id ?? ''))
+          .filter((id) => id.endsWith('.md')),
+      ),
+    ).sort();
+    console.log(`[brain/tree] u${req.user!.id} from buildGraph: ${files.length} files`);
+    res.json({ root: null, files });
+  } catch (e: any) {
+    console.error('[brain/tree] error', e);
+    res.status(400).json({ error: String(e?.message ?? e) });
+  }
+});
+
 router.get('/brain/index', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
   const where = filter === 'all' ? '' : ' AND visibility=$2';
@@ -293,19 +639,27 @@ router.get('/brain/index', async (req, res) => {
 
 // Logs
 router.get('/logs', async (req, res) => {
-  const limit = Math.min(Number(req.query.limit ?? 100), 500);
-  const kind = req.query.kind ? String(req.query.kind) : null;
-  const where = kind ? 'WHERE user_id=$1 AND kind=$3' : 'WHERE user_id=$1';
-  const params: any[] = [req.user!.id, limit];
-  if (kind) params.push(kind);
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const kinds = String(req.query.kind ?? '').split(',').filter(Boolean);
+  const statuses = String(req.query.status ?? '').split(',').filter(Boolean);
+  const q = String(req.query.q ?? '').trim();
+  const where: string[] = ['user_id=$1'];
+  const params: any[] = [req.user!.id];
+  if (kinds.length) { params.push(kinds); where.push(`kind = ANY($${params.length}::text[])`); }
+  if (statuses.length) { params.push(statuses); where.push(`status = ANY($${params.length}::text[])`); }
+  if (q) { params.push(`%${q}%`); where.push(`(result ILIKE $${params.length} OR prompt ILIKE $${params.length} OR error ILIKE $${params.length})`); }
+  const totalRows = await query<{ c: number }>(`SELECT count(*)::int AS c FROM agent_runs WHERE ${where.join(' AND ')}`, params);
+  params.push(limit, offset);
   const rows = await query(
     `SELECT id::int, ts, kind, status, model, duration_ms, input_tokens, output_tokens,
             cache_creation_tokens, cache_read_tokens, cost_usd::float8, num_turns,
             LEFT(result, 240) AS preview, meta, error
-     FROM agent_runs ${where}
-     ORDER BY id DESC LIMIT $2`, params
+     FROM agent_runs WHERE ${where.join(' AND ')}
+     ORDER BY id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
   );
-  res.json(rows);
+  res.json({ rows, total: totalRows[0]?.c ?? 0 });
 });
 
 router.get('/logs/:id', async (req, res) => {
@@ -322,16 +676,19 @@ router.get('/logs/:id', async (req, res) => {
 // Outbound communications audit log
 router.get('/outbound', async (req, res) => {
   const userId = req.user!.id;
-  const limit = Math.min(Number(req.query.limit ?? 100), 500);
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
   const offset = Math.max(0, Number(req.query.offset ?? 0));
-  const channel = req.query.channel ? String(req.query.channel) : null;
-  const status = req.query.status ? String(req.query.status) : null;
+  const channels = String(req.query.channel ?? '').split(',').filter(Boolean);
+  const statuses = String(req.query.status ?? '').split(',').filter(Boolean);
   const q = req.query.q ? String(req.query.q).trim() : null;
   const where: string[] = ['user_id=$1'];
   const params: any[] = [userId];
-  if (channel && ['whatsapp','email','telegram'].includes(channel)) { where.push(`channel=$${params.length + 1}`); params.push(channel); }
-  if (status && ['sent','error'].includes(status)) { where.push(`status=$${params.length + 1}`); params.push(status); }
-  if (q) { where.push(`(lower(coalesce(recipient,'')) LIKE $${params.length + 1} OR lower(coalesce(recipient_name,'')) LIKE $${params.length + 1} OR lower(coalesce(subject,'')) LIKE $${params.length + 1} OR lower(coalesce(body,'')) LIKE $${params.length + 1})`); params.push(`%${q.toLowerCase()}%`); }
+  const validCh = channels.filter((c) => ['whatsapp','email','telegram','instagram'].includes(c));
+  const validSt = statuses.filter((s) => ['sent','error'].includes(s));
+  if (validCh.length) { params.push(validCh); where.push(`channel = ANY($${params.length}::text[])`); }
+  if (validSt.length) { params.push(validSt); where.push(`status = ANY($${params.length}::text[])`); }
+  if (q) { params.push(`%${q.toLowerCase()}%`); where.push(`(lower(coalesce(recipient,'')) LIKE $${params.length} OR lower(coalesce(recipient_name,'')) LIKE $${params.length} OR lower(coalesce(subject,'')) LIKE $${params.length} OR lower(coalesce(body,'')) LIKE $${params.length})`); }
+  const totalRows = await query<{ c: number }>(`SELECT count(*)::int AS c FROM outbound_log WHERE ${where.join(' AND ')}`, params);
   params.push(limit); params.push(offset);
   const rows = await query<any>(
     `SELECT id::int, ts, channel, status, recipient, recipient_name, subject,
@@ -345,11 +702,12 @@ router.get('/outbound', async (req, res) => {
             count(*) FILTER (WHERE status='error')::int AS errors,
             count(*) FILTER (WHERE channel='whatsapp')::int AS whatsapp,
             count(*) FILTER (WHERE channel='email')::int AS email,
-            count(*) FILTER (WHERE channel='telegram')::int AS telegram
+            count(*) FILTER (WHERE channel='telegram')::int AS telegram,
+            count(*) FILTER (WHERE channel='instagram')::int AS instagram
      FROM outbound_log WHERE user_id=$1`,
     [userId],
   );
-  res.json({ rows, totals: totals[0] ?? { total: 0 } });
+  res.json({ rows, total: totalRows[0]?.c ?? 0, totals: totals[0] ?? { total: 0 } });
 });
 router.get('/outbound/:id', async (req, res) => {
   const rows = await query(
@@ -636,6 +994,32 @@ router.get('/people/:slug/graph', async (req, res) => {
   res.json({ nodes, links, center: center.id });
 });
 
+router.delete('/people/:slug', async (req, res) => {
+  try {
+    const m = await import('../connectors/builtin/people/index.js');
+    const keepNote = req.query.keep_note === '1' || req.query.keep_note === 'true';
+    const keepRefs = req.query.keep_refs === '1' || req.query.keep_refs === 'true';
+    res.json(await m.deletePerson(req.user!.id, req.params.slug, { keep_note: keepNote, keep_refs: keepRefs }));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+router.post('/people/merge', async (req, res) => {
+  try {
+    const m = await import('../connectors/builtin/people/index.js');
+    const canonical_slug = String(req.body?.canonical_slug ?? '');
+    const dup_slugs = Array.isArray(req.body?.dup_slugs) ? req.body.dup_slugs.map(String) : [];
+    res.json(await m.mergePeople(req.user!.id, canonical_slug, dup_slugs));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+router.post('/people/resync', async (req, res) => {
+  try {
+    const m = await import('../connectors/builtin/people/index.js');
+    const prune = req.body?.prune === true || req.query.prune === '1';
+    res.json(await m.resyncPeopleFromVault(req.user!.id, { prune }));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
 router.post('/people/dedupe-agent', async (req, res) => {
   const { spawnSubAgent } = await import('../sub_agents/index.js');
   const userId = req.user!.id;
@@ -643,30 +1027,33 @@ router.post('/people/dedupe-agent', async (req, res) => {
 
 Compito: trova e unifica i duplicati nella tabella People del DB e nelle note del second brain.
 
+TOOL ATOMICI (USA QUESTI, non re-implementare a mano):
+- \`mcp__super_agent__people_list\` — paginato, restituisce name/slug/aliases/emails/phones/note_path.
+- \`mcp__super_agent__people_merge\` — input: \`{canonical_slug, dup_slugs: [...]}\`. UNICA call necessaria per fondere un gruppo. Esegue TUTTO: union arrays, append note bodies sotto "## merged from <slug>", repoint wa_contacts.linked_person_slug, DELETE righe DB dup, DELETE file .md dup, riscrive [[dup-slug]] refs nel vault → [[people/canonical|name]].
+- \`mcp__super_agent__people_delete\` — input: \`{slug}\`. Per record spuri da rimuovere senza merge.
+
 PROCEDURA:
-1. Leggi tutti i record People via tool \`mcp__super_agent__people_search\` (o query equivalente). Ottieni name, slug, aliases, emails, phones, note_path.
-2. Identifica gruppi di duplicati usando:
+1. Chiama \`people_list({limit: 200})\` (e pagina se total > 200).
+2. Identifica gruppi di duplicati (per ogni gruppo, ≥ 2 record):
    - Stesso normalized name (lowercase, trim, no accenti)
    - Email in comune (case-insensitive)
    - Telefono in comune (solo digits)
-   - Slug simili (Levenshtein ≤ 2)
-3. Per ogni gruppo di duplicati:
-   a. Scegli canonical = record con più dati popolati (più aliases/emails/phones/note size).
-   b. Merge: unisci aliases/emails/phones distinct nel canonical via \`mcp__super_agent__people_upsert\`.
-   c. Per le note brain dei NON-canonical (\`people/<slug>.md\`):
-      - Leggi contenuto via Read tool
-      - Append nel canonical (\`people/<canonical_slug>.md\`) sotto sezione "## Merged from <old_slug>" + data
-      - Elimina file vecchio
-   d. Update riferimenti in altre note del brain (Grep su [[old_slug]] o "people/old_slug.md" → sostituire con canonical).
-4. Aggiorna brain_index per riallineare i path (se necessario via tool dedicato).
-5. Log finale: quanti gruppi trovati, quanti merge fatti, file rimossi.
+   - Slug simili (Levenshtein ≤ 3)
+3. Per ogni gruppo: scegli canonical con questa PRIORITÀ STRICT (in ordine, prima che vince):
+   a. Record con ≥1 email O ≥1 phone → vince sempre su record senza contatti.
+   b. Se pari su (a): record con più aliases.
+   c. Se pari su (a)+(b): record con slug più corto / più "pulito" (es. \`mattia-calastri\` > \`mattia-calastri-autonomous-ai-business-governance\`).
+   d. Se ancora pari: il primo per updated_at DESC.
+   ESEMPIO: tra \`mattia-calastri\` (emails+phones) e \`mattia-calastri-autonomous-ai-business-governance\` (vuoto), canonical = \`mattia-calastri\`. SEMPRE.
+   Chiama UNA volta \`people_merge({canonical_slug, dup_slugs})\` con tutti i dup. NON usare upsert.
+4. Se sicuro che un record è 100% spurio (no merge utile, dati orfani), chiama \`people_delete({slug})\`.
 
 REGOLE:
 - NESSUNA conferma utente: agire deterministico.
-- Se gruppo ambiguo (es. 2 omonimi senza email/phone overlap) → NON unire, log come "ambiguous, skipped".
+- Se gruppo ambiguo (omonimi senza email/phone overlap) → skip, log "ambiguous".
 - Mai inviare msg Telegram.
-- VIETATO chiamare \`mcp__super_agent__people_dedupe_run\`: TU SEI già il dedupe runner. Chiamarlo = ricorsione infinita.
-- Output finale: 1 paragrafo riepilogo (gruppi, merge, skip, errori).`;
+- VIETATO chiamare \`people_dedupe_run\`: TU SEI già il dedupe runner.
+- Output finale: 1 paragrafo riepilogo (gruppi, merged, deleted, skipped).`;
 
   const sa = await spawnSubAgent(userId, {
     title: 'Bonifica duplicati People',
@@ -679,8 +1066,15 @@ REGOLE:
 // Sub-agents
 router.get('/sub-agents', async (req, res) => {
   const sa = await import('../sub_agents/index.js');
-  const status = req.query.status ? String(req.query.status) : undefined;
-  res.json(await sa.listSubAgents(req.user!.id, { status }));
+  const statuses = String(req.query.status ?? '').split(',').filter(Boolean);
+  const q = String(req.query.q ?? '').trim();
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  if (req.query.paginated === '1') {
+    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset, withTotal: true }));
+  } else {
+    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset }));
+  }
 });
 router.get('/sub-agents/stats', async (req, res) => {
   const userId = req.user!.id;
@@ -730,7 +1124,7 @@ router.get('/agent-proposals', async (req, res) => {
   );
   res.json(rows);
 });
-router.post('/agent-proposals/:id/approve', async (req, res) => {
+router.post('/agent-proposals/:id/approve', quotaGuard, async (req, res) => {
   const sa = await import('../sub_agents/index.js');
   try { res.json({ ok: true, spawned: await sa.approveProposal(req.user!.id, Number(req.params.id)) }); }
   catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
@@ -1025,12 +1419,12 @@ router.post('/whatsapp/chats/:jid/auto-bonify', async (req, res) => {
   try { res.json(await m.setChatAutoBonify(req.user!.id, req.params.jid, enabled)); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
-router.post('/whatsapp/chats/:jid/suggest', async (req, res) => {
+router.post('/whatsapp/chats/:jid/suggest', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   try { res.json(await m.suggestReply(req.user!.id, req.params.jid, { hint: req.body?.hint })); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
-router.post('/whatsapp/chats/:jid/send', async (req, res) => {
+router.post('/whatsapp/chats/:jid/send', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const text = String(req.body?.text ?? '');
   const source: 'user' | 'ai' = req.body?.source === 'ai' ? 'ai' : 'user';
@@ -1050,6 +1444,47 @@ router.post('/whatsapp/contacts/refresh', async (req, res) => {
   try { res.json(await m.refreshContactsAndGroups(req.user!.id)); }
   catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
+router.post('/whatsapp/pics/refresh', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.forceWaPicRefresh(req.user!.id)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/dedupe', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.dedupeChats(req.user!.id)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/ai-dedupe', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.aiDedupeChats(req.user!.id)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/wipe', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try { res.json(await m.wipeAllChats(req.user!.id)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/delete', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const jids = Array.isArray(req.body?.chat_jids) ? req.body.chat_jids.map(String) : [];
+  try { res.json(await m.deleteChats(req.user!.id, jids)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/:jid/display', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  try {
+    res.json(await m.setChatDisplayOverride(req.user!.id, req.params.jid, {
+      display_name: req.body?.display_name === undefined ? undefined : (req.body.display_name === null ? null : String(req.body.display_name)),
+      display_phone: req.body?.display_phone === undefined ? undefined : (req.body.display_phone === null ? null : String(req.body.display_phone)),
+    }));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/chats/:jid/link', async (req, res) => {
+  const m = await import('../connectors/builtin/whatsapp/index.js');
+  const slug = req.body?.slug === null ? null : (req.body?.slug ? String(req.body.slug) : null);
+  try { res.json(await m.linkChatToPerson(req.user!.id, req.params.jid, slug)); }
+  catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/sync', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   try { res.json(await m.syncWaForUser(req.user!.id)); }
@@ -1059,7 +1494,25 @@ router.get('/whatsapp/pending', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   res.json({ count: await m.pendingCount(req.user!.id) });
 });
-router.post('/whatsapp/bonify', async (req, res) => {
+router.get('/whatsapp/unread', async (req, res) => {
+  try {
+    const r = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM wa_messages
+       WHERE user_id=$1 AND from_me=false AND processed_at IS NULL
+         AND msg_id NOT LIKE 'chat:%' AND text <> ''`, [req.user!.id]);
+    res.json({ count: r[0]?.c ?? 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/instagram/unread', async (req, res) => {
+  try {
+    const r = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM ig_messages
+       WHERE user_id=$1 AND from_me=false AND processed_at IS NULL AND text <> ''`,
+      [req.user!.id]);
+    res.json({ count: r[0]?.c ?? 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/whatsapp/bonify', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const limit = Number(req.body?.limit ?? 100);
   const onlyChat = req.body?.onlyChat ?? undefined;
@@ -1071,11 +1524,100 @@ router.post('/whatsapp/bonify', async (req, res) => {
 });
 router.get('/whatsapp/chats', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
-  res.json(await m.listChats(req.user!.id));
+  const r = await m.listChats(req.user!.id);
+  // DEBUG: when ?debug_jid=X is passed, dump exactly what listChats resolved
+  // for that chat — name + linked_slug + display_name override.
+  const dbg = String(req.query.debug_jid ?? '');
+  if (dbg) {
+    const row = (r as any[]).find((x) => x.chat_jid === dbg);
+    console.log(`[wa:listChats] DEBUG jid=${dbg}`, row ? {
+      sender_name: row.sender_name, linked_person_slug: row.linked_person_slug,
+      display_name_override: row.display_name_override,
+    } : 'NOT FOUND');
+  }
+  res.json(r);
 });
 router.get('/whatsapp/chats/:jid/messages', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   res.json(await m.chatMessages(req.user!.id, req.params.jid, Math.min(Number(req.query.limit ?? 200), 500)));
+});
+
+// =====================================================================
+// Instagram DM routes — mirrors WhatsApp shape
+// =====================================================================
+router.get('/instagram/status', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  res.json(m.getIgStatus(req.user!.id));
+});
+router.post('/instagram/start', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { username, password } = req.body ?? {};
+  res.json(await m.startIgForUser(req.user!.id, { username, password }));
+});
+router.post('/instagram/2fa', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { code } = req.body ?? {};
+  if (!code) return res.status(400).json({ error: 'code required' });
+  res.json(await m.submitIgTwoFactor(req.user!.id, String(code)));
+});
+router.post('/instagram/checkpoint', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { code } = req.body ?? {};
+  if (!code) return res.status(400).json({ error: 'code required' });
+  res.json(await m.submitIgCheckpoint(req.user!.id, String(code)));
+});
+router.post('/instagram/logout', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  await m.logoutIgForUser(req.user!.id);
+  res.json({ ok: true });
+});
+router.get('/instagram/threads', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  res.json(await m.listThreads(req.user!.id));
+});
+router.get('/instagram/threads/:id/messages', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  res.json(await m.threadMessages(req.user!.id, req.params.id, Math.min(Number(req.query.limit ?? 200), 500)));
+});
+router.post('/instagram/threads/:id/send', quotaGuard, async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { text, source } = req.body ?? {};
+  if (!text) return res.status(400).json({ error: 'text required' });
+  res.json(await m.sendIgMessage(req.user!.id, req.params.id, String(text), 'user', source === 'ai' ? 'ai' : 'user'));
+});
+router.post('/instagram/threads/:id/suggest', quotaGuard, async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { hint } = req.body ?? {};
+  res.json(await m.suggestIgReply(req.user!.id, req.params.id, { hint }));
+});
+router.post('/instagram/threads/:id/auto-bonify', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { enabled } = req.body ?? {};
+  res.json(await m.setThreadAutoBonify(req.user!.id, req.params.id, !!enabled));
+});
+router.post('/instagram/threads/:id/auto-responder', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { enabled, goal } = req.body ?? {};
+  res.json(await m.setThreadAutoResponder(req.user!.id, req.params.id, !!enabled, goal ?? null));
+});
+router.post('/instagram/bonify', quotaGuard, async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const { limit, onlyThread } = req.body ?? {};
+  res.json(await m.bonifyIgMessages(req.user!.id, { limit, onlyThread }));
+});
+router.get('/instagram/pending', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  res.json({ pending: await m.pendingCount(req.user!.id) });
+});
+router.post('/instagram/sync', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const pages = Math.max(1, Math.min(Number(req.body?.pages ?? 3), 10));
+  res.json(await m.syncIgNow(req.user!.id, pages));
+});
+router.post('/instagram/threads/:id/sync', async (req, res) => {
+  const m = await import('../connectors/builtin/instagram/index.js');
+  const pages = Math.max(1, Math.min(Number(req.body?.pages ?? 5), 20));
+  res.json(await m.syncIgThread(req.user!.id, req.params.id, pages));
 });
 
 router.get('/tool-events', async (req, res) => {
@@ -1163,6 +1705,8 @@ router.get('/usage', async (req, res) => {
   }
   // Cache 5min — `/cost` PTY scrape is ~12s so we don't run it on every poll.
   if (usageCache && Date.now() - usageCache.ts < 300_000) {
+    const { recordUsage } = await import('../quota.js');
+    recordUsage(Number(usageCache.data?.sessionPct ?? 0), Number(usageCache.data?.weekPct ?? 0));
     return res.json({ plan, ...usageCache.data });
   }
   // Use ccusage CLI (https://github.com/ryoppippi/ccusage) as canonical data source.
@@ -1329,10 +1873,16 @@ router.get('/usage', async (req, res) => {
     plan = { ...plan, costBudgetUsd: Math.round(syntheticBudget * 100) / 100, autoCalibrated: true, source: 'claude /cost' };
     await setSetting(userId, 'claude_plan', plan);
   }
-  const data = { usedTokens, resetAt, costUsd, burnRate, breakdown, autoBudget, claudeCost };
+  const sessionPct = Number(claudeCost?.sessionPct ?? 0);
+  const weekPct = Number(claudeCost?.weekPct ?? 0);
+  const locked = sessionPct >= 95;
+  const data = { usedTokens, resetAt, costUsd, burnRate, breakdown, autoBudget, claudeCost, sessionPct, weekPct, locked };
   usageCache = { ts: Date.now(), data };
+  // Record into quota module so guards on other endpoints see fresh value.
+  const { recordUsage } = await import('../quota.js');
+  recordUsage(sessionPct, weekPct);
+  bus.emit('usage:update', { userId, ...data });
   res.json({ plan, ...data });
-  void userId;
 });
 router.put('/usage/plan', async (req, res) => {
   const userId = req.user!.id;
@@ -1362,6 +1912,549 @@ router.get('/settings', async (req, res) => {
   res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message });
 });
 // Branding (per-user customizable title + logo)
+// ---------------------------------------------------------------------------
+// MAIL — full email client backed by mail_messages + mail_attachments.
+// ---------------------------------------------------------------------------
+// Per-account auto-sync preference. Stored in user settings under
+// `mail.autoSync.<accountLabel>`. When ON, the scheduler runs an
+// incremental sync + bonifica every cycle (so new mail lands in the
+// brain + people are linked without manual button presses).
+router.get('/mail/accounts/:label/auto-sync', async (req, res) => {
+  try {
+    const v = await getSetting<{ enabled: boolean }>(req.user!.id, `mail.autoSync.${req.params.label}`);
+    res.json({ enabled: !!v?.enabled });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+// Per-account HTML signature. Primary source = IMAP connector account config
+// (accounts[i].signature). Legacy fallback = settings key set by the older
+// dialog. Composer hits this at open time.
+router.get('/mail/accounts/:label/signature', async (req, res) => {
+  try {
+    const { listAccounts } = await import('../mail/service.js');
+    const accs = await listAccounts(req.user!.id);
+    const acc = accs.find((a) => a.label === req.params.label);
+    let html = (acc?.signature ?? '').trim();
+    let source = 'connector';
+    if (!html) {
+      const legacy = await getSetting<{ html: string }>(req.user!.id, `mail.signature.${req.params.label}`);
+      if (legacy?.html) { html = legacy.html; source = 'settings:legacy'; }
+    }
+    console.log(`[mail:sig:u${req.user!.id}] label="${req.params.label}" len=${html.length} source=${source}`);
+    res.json({ html });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.put('/mail/accounts/:label/auto-sync', async (req, res) => {
+  try {
+    await setSetting(req.user!.id, `mail.autoSync.${req.params.label}`, { enabled: !!req.body?.enabled });
+    res.json({ ok: true, enabled: !!req.body?.enabled });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Lookup person row by email address. Used by the mail UI to know whether
+// a sender is already linked to a brain person (and show the chip).
+router.get('/people/by-email', async (req, res) => {
+  try {
+    const addr = String(req.query.addr ?? '').toLowerCase().trim();
+    if (!addr) return res.json({ person: null });
+    const rows = await query<any>(
+      `SELECT id::int, slug, name, emails, phones, note_path
+       FROM people
+       WHERE user_id=$1 AND $2 = ANY(emails)
+       LIMIT 1`,
+      [req.user!.id, addr],
+    );
+    res.json({ person: rows[0] ?? null });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Bind an email address to an existing person. Adds it to people.emails[] if
+// not already there. Re-runs brain note write so "related" reflects the new
+// email mapping for downstream people_search lookups.
+router.post('/people/:slug/bind-email', async (req, res) => {
+  try {
+    const addr = String(req.body?.email ?? '').toLowerCase().trim();
+    if (!addr || !addr.includes('@')) return res.status(400).json({ error: 'email mancante o invalida' });
+    const { upsertPerson } = await import('../connectors/builtin/people/index.js');
+    // upsertPerson dedupes by email + name. We pass the existing slug as alias
+    // hint so the engine picks the right person; in practice just adding the
+    // email and letting downstream merge handle conflicts.
+    const slug = String(req.params.slug);
+    // Fetch existing person row
+    const rows = await query<{ id: number; emails: string[]; name: string }>(
+      `SELECT id::int, emails, name FROM people WHERE user_id=$1 AND slug=$2`,
+      [req.user!.id, slug],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'persona non trovata' });
+    const existing = new Set((rows[0].emails ?? []).map((e) => e.toLowerCase()));
+    if (!existing.has(addr)) {
+      const newEmails = [...(rows[0].emails ?? []), addr];
+      await query(`UPDATE people SET emails=$1, updated_at=now() WHERE id=$2`, [newEmails, rows[0].id]);
+      // Refresh the brain note for this person so the agent sees the new mapping.
+      try { await upsertPerson(req.user!.id, { name: rows[0].name, emails: [addr], note: `Email manualmente collegata via UI` }); } catch {}
+    }
+    res.json({ ok: true, slug, email: addr });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/accounts', async (req, res) => {
+  try {
+    const { listAccounts } = await import('../mail/service.js');
+    const accs = await listAccounts(req.user!.id);
+    // Diagnostic block when empty so the UI can guide the user without
+    // making the user crack open backend logs.
+    let diag: any = undefined;
+    if (!accs.length) {
+      const rows = await query<{ config: any; enabled: boolean }>(
+        `SELECT config, enabled FROM connectors WHERE user_id=$1 AND name='imap'`,
+        [req.user!.id],
+      );
+      const r = rows[0];
+      const rawAccs = (r?.config?.accounts ?? []) as any[];
+      diag = {
+        connectorRow: !!r,
+        enabled: r?.enabled ?? null,
+        rawCount: rawAccs.length,
+        firstMissing: rawAccs[0]
+          ? ['label', 'host', 'user', 'pass'].filter((k) => !rawAccs[0]?.[k])
+          : null,
+      };
+    }
+    res.json({
+      accounts: accs.map((a) => ({ label: a.label, address: a.user, host: a.host, mailbox: a.mailbox ?? 'INBOX' })),
+      diag,
+    });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/messages', async (req, res) => {
+  try {
+    const { listMessages } = await import('../mail/service.js');
+    const r = await listMessages(req.user!.id, {
+      account: req.query.account ? String(req.query.account) : undefined,
+      folder: req.query.folder ? String(req.query.folder) : undefined,
+      q: req.query.q ? String(req.query.q) : undefined,
+      unread: req.query.unread === 'true',
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      offset: req.query.offset ? Number(req.query.offset) : undefined,
+    });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/threads/:key', async (req, res) => {
+  try {
+    const { getThread } = await import('../mail/service.js');
+    const r = await getThread(req.user!.id, String(req.params.key));
+    res.json({ messages: r });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/messages/:id', async (req, res) => {
+  try {
+    const { getMessage } = await import('../mail/service.js');
+    const r = await getMessage(req.user!.id, Number(req.params.id));
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.patch('/mail/messages/:id', async (req, res) => {
+  try {
+    const { setFlags } = await import('../mail/service.js');
+    await setFlags(req.user!.id, Number(req.params.id), {
+      seen: typeof req.body?.seen === 'boolean' ? req.body.seen : undefined,
+      flagged: typeof req.body?.flagged === 'boolean' ? req.body.flagged : undefined,
+      starred: typeof req.body?.starred === 'boolean' ? req.body.starred : undefined,
+    });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.delete('/mail/messages/:id', async (req, res) => {
+  try {
+    const { trashMessage } = await import('../mail/service.js');
+    await trashMessage(req.user!.id, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/attachments/:id', async (req, res) => {
+  try {
+    const { getAttachment } = await import('../mail/service.js');
+    const a = await getAttachment(req.user!.id, Number(req.params.id));
+    if (!a) return res.status(404).json({ error: 'not found' });
+    if (a.content_type) res.type(a.content_type);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(a.filename)}"`);
+    const fs = await import('node:fs');
+    fs.createReadStream(a.path).pipe(res);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/sync', async (req, res) => {
+  try {
+    const { syncAccount, syncAccountAllFolders } = await import('../mail/service.js');
+    const account = String(req.body?.account ?? '');
+    // If a specific folder is requested, sync just that. Otherwise iterate all.
+    if (req.body?.folder) {
+      const r = await syncAccount(req.user!.id, account, { limit: req.body?.limit ?? 1000, folder: String(req.body.folder) });
+      res.json(r);
+    } else {
+      const r = await syncAccountAllFolders(req.user!.id, account, { limit: req.body?.limit ?? 1000 });
+      res.json({
+        ok: r.ok,
+        fetched: r.totals.fetched,
+        skipped: r.totals.skipped,
+        scanned: r.totals.scanned,
+        diag: { perFolder: r.perFolder },
+      });
+    }
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/folders', async (req, res) => {
+  try {
+    const { listFolders } = await import('../mail/service.js');
+    const r = await listFolders(req.user!.id, String(req.query.account ?? ''));
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/bonify', async (req, res) => {
+  try {
+    const { bonifyAll } = await import('../mail/service.js');
+    const r = await bonifyAll(req.user!.id, {
+      account: req.body?.account ? String(req.body.account) : undefined,
+      force: !!req.body?.force,
+      limit: req.body?.limit ? Number(req.body.limit) : undefined,
+    });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/messages/:id/bonify', async (req, res) => {
+  try {
+    const { bonifyOne } = await import('../mail/service.js');
+    const r = await bonifyOne(req.user!.id, Number(req.params.id), !!req.body?.force);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/send', upload.array('attachments', 10), async (req, res) => {
+  try {
+    const { sendMail } = await import('../mail/service.js');
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const b = req.body ?? {};
+    const refs: string[] = Array.isArray(b.references) ? b.references
+      : typeof b.references === 'string' && b.references.length ? b.references.split(',').map((x: string) => x.trim()).filter(Boolean)
+      : [];
+    const r = await sendMail(req.user!.id, {
+      accountLabel: String(b.account ?? ''),
+      to: String(b.to ?? ''),
+      cc: b.cc ? String(b.cc) : undefined,
+      bcc: b.bcc ? String(b.bcc) : undefined,
+      subject: String(b.subject ?? '(no subject)'),
+      body: String(b.body ?? ''),
+      html: b.html ? String(b.html) : undefined,
+      inReplyTo: b.inReplyTo ? String(b.inReplyTo) : undefined,
+      references: refs,
+      attachments: files.map((f) => ({ filename: f.originalname, content: f.buffer, contentType: f.mimetype })),
+    });
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// AI-drafted reply — same pattern as WA suggestReply.
+router.post('/mail/messages/:id/suggest', quotaGuard, async (req, res) => {
+  try {
+    const { getMessage } = await import('../mail/service.js');
+    const m = await getMessage(req.user!.id, Number(req.params.id));
+    if (!m) return res.status(404).json({ error: 'not found' });
+    const hint = String(req.body?.hint ?? '').slice(0, 400);
+    const { runClaude } = await import('../claude/runner.js');
+    const prompt = [
+      `Sei l'assistente personale dell'utente. Scrivi una bozza di risposta a questa email.`,
+      `Lingua: stessa dell'email originale (default italiano).`,
+      `Tono: professionale ma diretto. Niente filler. Vai al punto.`,
+      hint ? `Direttiva utente: ${hint}` : ``,
+      ``,
+      `--- EMAIL ORIGINALE ---`,
+      `From: ${m.from_name ?? ''} <${m.from_addr ?? ''}>`,
+      `Subject: ${m.subject ?? ''}`,
+      ``,
+      String(m.body_text ?? '').slice(0, 4000),
+      `--- FINE EMAIL ---`,
+      ``,
+      `Restituisci SOLO il corpo della risposta, niente subject né intestazioni.`,
+    ].join('\n');
+    const r = await runClaude(req.user!.id, prompt, { timeoutMs: 60_000, kind: 'mail_suggest', meta: { mailId: m.id } });
+    if (!r.ok) return res.status(400).json({ ok: false, error: r.stderr || 'agent error' });
+    res.json({ ok: true, draft: r.text.trim() });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+// ---------------------------------------------------------------------------
+// REPORT — time saved aggregates + PRIMA vs ADESSO radar.
+// PRIMA = cold-start vector [0,1,0,0] (Comunicazione, Brain, CRM, Memoria).
+// ADESSO = derived from real usage in the selected window.
+// Time-saved minutes are estimates (per-channel), not measured wall-clock.
+// ---------------------------------------------------------------------------
+const REPORT_MIN = {
+  reply_whatsapp: 3,
+  reply_telegram: 2,
+  reply_email: 8,
+  reply_instagram: 2,
+  brain_search: 4,            // every vault/people lookup
+  ingest_per_msg: 0.3,         // bulk sync overhead per ingested message
+  voice_baseline_min: 1,       // typing/edit overhead on top of clip length
+  // Email "read" = an email landed in the mail client and was either
+  // bonificata (filed in brain + people linked) or sorted by the agent.
+  // Estimated 2 min you would have spent opening / scanning / triaging it.
+  mail_read: 2,
+};
+
+router.get('/report', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const range = String(req.query.range ?? '30d');
+    const interval = range === '7d' ? "7 days"
+                   : range === '30d' ? "30 days"
+                   : range === '90d' ? "90 days"
+                   : null; // all-time
+    const sinceClause = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    // Outbound by channel (sent only) — drives reply time saved + Comunicazione score
+    const outbound = await query<{ channel: string; c: number }>(
+      `SELECT channel, count(*)::int AS c FROM outbound_log
+       WHERE user_id=$1 AND status='sent' ${sinceClause}
+       GROUP BY channel`, [userId],
+    );
+    const outboundBy: Record<string, number> = {};
+    let outboundTotal = 0;
+    for (const r of outbound) { outboundBy[r.channel] = r.c; outboundTotal += r.c; }
+
+    // Brain/people searches via tool_events
+    const sinceClauseTool = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const brainSearches = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM tool_events
+       WHERE user_id=$1 AND name IN ('brain_search','people_search','people_get','agent_brain_search') ${sinceClauseTool}`,
+      [userId],
+    );
+    const searchCount = brainSearches[0]?.c ?? 0;
+
+    // Ingestion: count of inbound messages stored in window (WA/IG/Telegram inbound)
+    const sinceClauseMsg = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const waIngest = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM wa_messages WHERE user_id=$1 AND from_me=false ${sinceClauseMsg}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0 }]; });
+    const igIngest = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM ig_messages WHERE user_id=$1 AND from_me=false ${sinceClauseMsg}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0 }]; });
+    const ingestCount = (waIngest[0]?.c ?? 0) + (igIngest[0]?.c ?? 0);
+
+    // Email ingested via mail_messages (inbound only, not trashed).
+    // Subset that was auto/manual bonificata is counted separately so the
+    // user sees both "email lette" and "delle quali nel brain".
+    const sinceClauseMail = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const mailRead = await query<{ c: number; bonified: number }>(
+      `SELECT count(*)::int AS c,
+              count(*) FILTER (WHERE bonified_at IS NOT NULL)::int AS bonified
+       FROM mail_messages
+       WHERE user_id=$1 AND direction='in' AND trashed_at IS NULL ${sinceClauseMail}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0, bonified: 0 }]; });
+    const mailReadCount = mailRead[0]?.c ?? 0;
+    const mailBonifiedCount = mailRead[0]?.bonified ?? 0;
+
+    // Voice transcribe runs — duration + baseline typing overhead
+    const sinceClauseRun = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const voice = await query<{ c: number; total_dur: string | number }>(
+      `SELECT count(*)::int AS c, COALESCE(sum(duration_ms),0)::bigint AS total_dur
+       FROM agent_runs WHERE user_id=$1 AND kind='voice_transcribe' AND status='ok' ${sinceClauseRun}`,
+      [userId],
+    );
+    const voiceCount = voice[0]?.c ?? 0;
+    const voiceDurMin = Number(voice[0]?.total_dur ?? 0) / 60000;
+
+    // === Time saved (minutes) ===
+    const tReplies =
+      (outboundBy.whatsapp ?? 0) * REPORT_MIN.reply_whatsapp
+    + (outboundBy.telegram ?? 0) * REPORT_MIN.reply_telegram
+    + (outboundBy.email ?? 0) * REPORT_MIN.reply_email
+    + (outboundBy.instagram ?? 0) * REPORT_MIN.reply_instagram;
+    const tSearches = searchCount * REPORT_MIN.brain_search;
+    const tIngest = ingestCount * REPORT_MIN.ingest_per_msg;
+    const tVoice = voiceCount * REPORT_MIN.voice_baseline_min + voiceDurMin;
+    const tMailRead = mailReadCount * REPORT_MIN.mail_read;
+    const totalMin = Math.round(tReplies + tSearches + tIngest + tVoice + tMailRead);
+
+    // === Radar (0-10) ===
+    // Comunicazione: log-scale of total outbound, capped
+    const commScore = outboundTotal === 0 ? 0
+                    : Math.min(10, Math.round(Math.log10(1 + outboundTotal) * 4 * 10) / 10);
+    // Brain: notes count + link density (filtered by range via updated_at)
+    const sinceClauseBrain = interval ? `AND updated_at >= now() - INTERVAL '${interval}'` : '';
+    const brainAgg = await query<{ notes: number; refs_with_data: number }>(
+      `SELECT count(*)::int AS notes,
+              count(*) FILTER (WHERE jsonb_typeof(refs) = 'object' AND refs <> '{}'::jsonb)::int AS refs_with_data
+       FROM brain_index WHERE user_id=$1 ${sinceClauseBrain}`, [userId],
+    ).catch(() => [{ notes: 0, refs_with_data: 0 }]);
+    const notes = brainAgg[0]?.notes ?? 0;
+    const linkedRatio = notes === 0 ? 0 : (brainAgg[0].refs_with_data ?? 0) / notes;
+    const brainScore = notes === 0 ? 0
+                     : Math.min(10, Math.round((Math.log10(1 + notes) * 3 + linkedRatio * 4) * 10) / 10);
+    // CRM: coverage (people with note) + psy-profile share
+    // has_psy lives in brain_index (file `people/<slug>.psy-profile.md`), not in
+    // people.meta. Compute via EXISTS join, same as /people route.
+    const sinceClauseCrm = interval ? `AND p.updated_at >= now() - INTERVAL '${interval}'` : '';
+    const crmAgg = await query<{ total: number; with_note: number; with_psy: number }>(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE p.note_path IS NOT NULL)::int AS with_note,
+              count(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM brain_index bi
+                WHERE bi.user_id = p.user_id
+                  AND bi.path = 'people/' || p.slug || '.psy-profile.md'
+              ))::int AS with_psy
+       FROM people p WHERE p.user_id=$1 ${sinceClauseCrm}`, [userId],
+    ).catch(() => [{ total: 0, with_note: 0, with_psy: 0 }]);
+    const peopleTotal = crmAgg[0]?.total ?? 0;
+    const crmScore = peopleTotal === 0 ? 0 : Math.min(10, Math.round((
+      ((crmAgg[0].with_note / peopleTotal) * 6) +
+      ((crmAgg[0].with_psy / peopleTotal) * 4)
+    ) * 10) / 10);
+    // Memoria: reflection runs + tool_use brain accesses
+    const sinceClauseMem = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const memAgg = await query<{ refl: number; access: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND kind='reflection' AND status='ok' ${sinceClauseMem}) AS refl,
+         (SELECT count(*)::int FROM tool_events WHERE user_id=$1 AND name IN ('brain_search','agent_brain_search','people_get','people_search') ${sinceClauseMem}) AS access`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ refl: 0, access: 0 }]; });
+    const reflCount = memAgg[0]?.refl ?? 0;
+    const accessCount = memAgg[0]?.access ?? 0;
+    const memScore = (reflCount === 0 && accessCount === 0) ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + reflCount) * 3 + Math.log10(1 + accessCount) * 3) * 10) / 10);
+
+    // Automazione: flows + scheduled_tasks attivi (enabled, filtrati per range)
+    const sinceClauseAuto = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
+    const autoAgg = await query<{ flows: number; tasks: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM flows WHERE user_id=$1 AND enabled=true ${sinceClauseAuto}) AS flows,
+         (SELECT count(*)::int FROM scheduled_tasks WHERE user_id=$1 AND enabled=true ${sinceClauseAuto}) AS tasks`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ flows: 0, tasks: 0 }]; });
+    const flowsCount = autoAgg[0]?.flows ?? 0;
+    const tasksCount = autoAgg[0]?.tasks ?? 0;
+    const autoScore = (flowsCount + tasksCount) === 0 ? 0
+                    : Math.min(10, Math.round(((flowsCount * 1.5) + (tasksCount * 1.2)) * 10) / 10);
+
+    // Triage messaggi: % wa+ig elaborati (processed_at IS NOT NULL)
+    const sinceClauseTri = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const triageAgg = await query<{ wa_tot: number; wa_proc: number; ig_tot: number; ig_proc: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false ${sinceClauseTri}) AS wa_tot,
+         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL ${sinceClauseTri}) AS wa_proc,
+         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false ${sinceClauseTri}) AS ig_tot,
+         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL ${sinceClauseTri}) AS ig_proc`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ wa_tot: 0, wa_proc: 0, ig_tot: 0, ig_proc: 0 }]; });
+    const triageTot = (triageAgg[0]?.wa_tot ?? 0) + (triageAgg[0]?.ig_tot ?? 0);
+    const triageProc = (triageAgg[0]?.wa_proc ?? 0) + (triageAgg[0]?.ig_proc ?? 0);
+    const triageScore = triageTot === 0 ? 0
+                      : Math.min(10, Math.round((triageProc / triageTot) * 10 * 10) / 10);
+
+    // Sub-agenti: numero di sub_agents completati con successo + custom agents/teams attivi
+    const sinceClauseSub = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
+    const subAgg = await query<{ subs: number; teams: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND status='completed' ${sinceClauseSub}) AS subs,
+         (SELECT count(*)::int FROM custom_agents WHERE user_id=$1 ${sinceClauseSub}) AS teams`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ subs: 0, teams: 0 }]; });
+    const subsCount = subAgg[0]?.subs ?? 0;
+    const customAgents = subAgg[0]?.teams ?? 0;
+    const subScore = (subsCount + customAgents) === 0 ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + subsCount) * 4 + customAgents * 1) * 10) / 10);
+
+    // Documentazione: snapshot count + log run total (storia preservata)
+    const sinceClauseDocSnap = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
+    const sinceClauseDocRun = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const docAgg = await query<{ snaps: number; runs: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM brain_snapshots WHERE user_id=$1 AND status='ok' ${sinceClauseDocSnap}) AS snaps,
+         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND status='ok' ${sinceClauseDocRun}) AS runs`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ snaps: 0, runs: 0 }]; });
+    const snapsCount = docAgg[0]?.snaps ?? 0;
+    const runsCount = docAgg[0]?.runs ?? 0;
+    const docScore = (snapsCount + runsCount) === 0 ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + snapsCount) * 5 + Math.log10(1 + runsCount) * 2) * 10) / 10);
+
+    res.json({
+      range,
+      timeSaved: {
+        totalMin,
+        breakdown: {
+          replies: { min: Math.round(tReplies), count: outboundTotal, byChannel: outboundBy },
+          brain_searches: { min: Math.round(tSearches), count: searchCount },
+          ingestion: { min: Math.round(tIngest), count: ingestCount },
+          voice: { min: Math.round(tVoice), count: voiceCount, dur_min: Math.round(voiceDurMin) },
+          mail_read: { min: Math.round(tMailRead), count: mailReadCount, bonified: mailBonifiedCount },
+        },
+      },
+      radar: {
+        axes: [
+          'Comunicazione',
+          'Brain',
+          'CRM / People',
+          'Memoria',
+          'Automazione',
+          'Triage messaggi',
+          'Sub-agenti',
+          'Documentazione',
+        ],
+        prima: [0, 1, 0, 0, 0, 0, 0, 1],
+        adesso: [commScore, brainScore, crmScore, memScore, autoScore, triageScore, subScore, docScore],
+        metrics: {
+          comunicazione: { outbound: outboundTotal },
+          brain: { notes, linked_ratio: Math.round(linkedRatio * 100) / 100 },
+          crm: { total: peopleTotal, with_note: crmAgg[0]?.with_note ?? 0, with_psy: crmAgg[0]?.with_psy ?? 0 },
+          memoria: { reflections: reflCount, brain_accesses: accessCount },
+          automazione: { flows: flowsCount, tasks: tasksCount },
+          triage: { total: triageTot, processed: triageProc },
+          sub_agenti: { completed: subsCount, custom: customAgents },
+          documentazione: { snapshots: snapsCount, runs: runsCount },
+        },
+      },
+    });
+  } catch (e: any) {
+    console.error('[report] outer fail', e);
+    // Never 500 — surface a zero-shape so the page renders + the user sees the
+    // structure. error string included for diagnosis.
+    res.json({
+      range: String(req.query.range ?? '30d'),
+      error: String(e?.message ?? e),
+      timeSaved: {
+        totalMin: 0,
+        breakdown: {
+          replies: { min: 0, count: 0, byChannel: {} },
+          brain_searches: { min: 0, count: 0 },
+          ingestion: { min: 0, count: 0 },
+          voice: { min: 0, count: 0, dur_min: 0 },
+        },
+      },
+      radar: {
+        axes: ['Comunicazione clienti', 'Organizzazione second brain', 'CRM / People', 'Memoria contestuale'],
+        prima: [0, 1, 0, 0],
+        adesso: [0, 0, 0, 0],
+        metrics: {},
+      },
+    });
+  }
+});
+
 router.get('/branding', async (req, res) => {
   const b = (await getSetting<any>(req.user!.id, 'branding')) ?? null;
   res.json(b ?? { title: 'super-agent', subtitle: 'personal · brain', logoDataUrl: null });

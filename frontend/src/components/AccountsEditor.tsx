@@ -16,6 +16,7 @@ export type Account = {
   smtpUser?: string;
   smtpPass?: string;
   smtpFromName?: string;
+  signature?: string;            // HTML signature appended to every outbound message
 };
 
 type Props = { value: Account[]; onChange: (next: Account[]) => void };
@@ -81,8 +82,8 @@ export default function AccountsEditor({ value, onChange }: Props) {
         <div key={i} className="border border-border rounded-xl bg-surface2/40">
           <div className="flex items-center justify-between px-4 py-3">
             <button className="text-left flex-1" onClick={() => setOpen(open === i ? null : i)}>
-              <div className="font-medium">{a.label || '(no label)'} <span className="text-muted text-xs ml-2">{a.user}</span></div>
-              <div className="text-xs text-muted">{a.host}:{a.port ?? 993} · {a.mailbox || 'INBOX'}</div>
+              <div className="font-medium">{a.label || '(no label)'} <span className="text-muted-foreground text-xs ml-2">{a.user}</span></div>
+              <div className="text-xs text-muted-foreground">{a.host}:{a.port ?? 993} · {a.mailbox || 'INBOX'}</div>
             </button>
             <Button variant="danger" size="sm" onClick={() => remove(i)}>Remove</Button>
           </div>
@@ -105,9 +106,21 @@ export default function AccountsEditor({ value, onChange }: Props) {
                 <input type="checkbox" checked={!!a.smtpSecure} onChange={(e) => update(i, { smtpSecure: e.target.checked })} className="w-4 h-4 rounded border-border bg-surface2 accent-accent" />
               </Field>
               <Field label="From name (opz.)"><Input value={a.smtpFromName ?? ''} onChange={(e) => update(i, { smtpFromName: e.target.value })} placeholder="Federico Casarella" /></Field>
-              <div className="col-span-2 text-[11px] text-muted">SMTP user/pass = IMAP user/pass. Lascia vuoti se uguali.</div>
+              <div className="col-span-2 text-[11px] text-muted-foreground">SMTP user/pass = IMAP user/pass. Lascia vuoti se uguali.</div>
               <Field label="SMTP user (override)"><Input value={a.smtpUser ?? ''} onChange={(e) => update(i, { smtpUser: e.target.value })} placeholder="(usa IMAP user)" /></Field>
               <Field label="SMTP pass (override)"><Input type="password" value={a.smtpPass ?? ''} onChange={(e) => update(i, { smtpPass: e.target.value })} placeholder="(usa IMAP pass)" /></Field>
+
+              <div className="col-span-2 mt-3">
+                <div className="text-xs uppercase tracking-wider text-accent2 mb-2 font-semibold">Firma HTML</div>
+                <textarea
+                  value={a.signature ?? ''}
+                  onChange={(e) => update(i, { signature: e.target.value })}
+                  placeholder='<p style="color:#444">— Federico Casarella<br>+39 ...</p>'
+                  rows={6}
+                  className="w-full bg-surface2 border border-border rounded-md p-2 text-xs font-mono outline-none focus:border-accent resize-y"
+                />
+                <div className="text-[10px] text-muted-foreground mt-1">Appesa al fondo di ogni email in HTML inviata da questo account.</div>
+              </div>
 
               <div className="col-span-2 flex items-center justify-between gap-3 flex-wrap pt-2">
                 <div>{testResult[i] && <Chip tone={testResult[i].ok ? 'on' : 'err'}>{testResult[i].msg}</Chip>}</div>

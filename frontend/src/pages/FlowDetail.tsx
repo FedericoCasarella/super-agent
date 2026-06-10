@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
+import { useSetBreadcrumb } from '../components/Breadcrumbs';
 import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
 import SearchSelect from '../components/SearchSelect';
-import { fetchClaudeModels, fetchCustomAgents, fetchEmailAccounts, fetchPerks, fetchScheduledTasks, fetchTeams, fetchWaChats } from '../components/searchSources';
+import { fetchClaudeModels, fetchCustomAgents, fetchEmailAccounts, fetchPerks, fetchScheduledTasks, fetchTeams, fetchWaChats, fetchIgThreads } from '../components/searchSources';
 import VariableTextarea from '../components/VariableTextarea';
 import { varsForTriggers, type VarDef } from '../components/flowVariables';
 import { useWS } from '../ws';
-import { ArrowLeft, Bell, Bot, ClipboardList, Mail, MessageCircle, MessageSquare, Mic, Plus, Save, Trash2, Workflow, Play, Settings as Cog, Brain, ListChecks, Sparkles, Users as UsersIcon, Globe, Clock, X } from 'lucide-react';
+import { ArrowLeft, Bell, Bot, ClipboardList, Mail, MessageCircle, MessageSquare, Mic, Plus, Save, Trash2, Workflow, Play, Settings as Cog, Brain, ListChecks, Sparkles, Users as UsersIcon, Globe, Clock, X, Camera as IgIcon } from 'lucide-react';
 
 type Trigger = { type: string; config: any };
 type Step = { type: string; name?: string | null; config: any };
@@ -16,6 +17,7 @@ type Flow = { id: number; name: string; description: string | null; enabled: boo
 
 const TRIGGER_TYPES: { type: string; label: string; icon: any; color: string }[] = [
   { type: 'whatsapp.received',  label: 'WhatsApp ricevuto',     icon: MessageCircle,  color: '#25D366' },
+  { type: 'instagram.received', label: 'Instagram DM ricevuto', icon: IgIcon,         color: '#E1306C' },
   { type: 'telegram.received',  label: 'Telegram ricevuto',     icon: MessageSquare,  color: '#26A5E4' },
   { type: 'email.received',     label: 'Email ricevuta',        icon: Mail,           color: '#EA4335' },
   { type: 'voice.received',     label: 'Voce ricevuta',         icon: Mic,            color: '#a78bfa' },
@@ -34,6 +36,7 @@ const STEP_TYPES: { type: string; label: string; icon: any; color: string }[] = 
   { type: 'team.run',         label: 'Attiva team',               icon: UsersIcon,      color: '#c084fc' },
   { type: 'email.send',       label: 'Invia email',               icon: Mail,           color: '#EA4335' },
   { type: 'whatsapp.send',    label: 'Invia WhatsApp',            icon: MessageCircle,  color: '#25D366' },
+  { type: 'instagram.send',   label: 'Invia Instagram DM',        icon: IgIcon,         color: '#E1306C' },
   { type: 'brain.write_note', label: 'Scrivi nota nel brain',     icon: Brain,          color: '#a78bfa' },
   { type: 'delay',            label: 'Attesa (ms)',               icon: Clock,          color: '#fbbf24' },
   { type: 'webhook',          label: 'Webhook HTTP',              icon: Globe,          color: '#94a3b8' },
@@ -50,7 +53,7 @@ function ConfigDrawer({ open, onClose, title, children, footer }: { open: boolea
       <div onClick={(e) => e.stopPropagation()} className="bg-surface border-l border-border h-full w-full max-w-md shadow-2xl flex flex-col">
         <div className="flex items-center justify-between px-5 py-3 border-b border-border">
           <div className="font-semibold">{title}</div>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface2 text-muted hover:text-text"><X size={16} /></button>
+          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface2 text-muted-foreground hover:text-text"><X size={16} /></button>
         </div>
         <div className="overflow-y-auto p-5 flex-1 space-y-3">{children}</div>
         {footer && <div className="px-5 py-3 border-t border-border bg-surface2/30 flex justify-end gap-2">{footer}</div>}
@@ -68,6 +71,8 @@ function TriggerConfigForm({ trigger, onChange }: { trigger: Trigger; onChange: 
   switch (trigger.type) {
     case 'whatsapp.received':
       return <Field label="Chat (opzionale, filtra)"><SearchSelect value={c.chat_jid} initialLabel={c._chat_jid_label ?? undefined} onChange={(v, opt) => setRef('chat_jid', v, opt)} fetchOptions={fetchWaChats} placeholder="Tutte le chat" /></Field>;
+    case 'instagram.received':
+      return <Field label="Thread (opzionale, filtra)"><SearchSelect value={c.thread_id} initialLabel={c._thread_id_label ?? undefined} onChange={(v, opt) => setRef('thread_id', v, opt)} fetchOptions={fetchIgThreads} placeholder="Tutti i thread" /></Field>;
     case 'telegram.received':
       return <Field label="Contiene testo (opzionale)"><Input value={c.contains ?? ''} onChange={(e) => set('contains', e.target.value || null)} placeholder="es. 'urgente'" /></Field>;
     case 'email.received':
@@ -87,7 +92,7 @@ function TriggerConfigForm({ trigger, onChange }: { trigger: Trigger; onChange: 
     case 'team.fired':
       return <Field label="Team (opzionale)"><SearchSelect value={c.team_id} initialLabel={c._team_id_label ?? undefined} onChange={(v, opt) => setRef('team_id', v ? Number(v) : null, opt)} fetchOptions={fetchTeams} placeholder="Qualsiasi team" /></Field>;
     default:
-      return <div className="text-xs text-muted">Nessuna configurazione richiesta.</div>;
+      return <div className="text-xs text-muted-foreground">Nessuna configurazione richiesta.</div>;
   }
 }
 
@@ -127,6 +132,11 @@ function StepConfigForm({ step, onChange, vars }: { step: Step; onChange: (s: St
     case 'whatsapp.send':
       return <>
         <Field label="Chat"><SearchSelect value={c.chat_jid} initialLabel={c._chat_jid_label ?? undefined} onChange={(v, opt) => setRef('chat_jid', v, opt)} fetchOptions={fetchWaChats} placeholder="Scegli chat" /></Field>
+        <Field label="Testo"><VariableTextarea value={c.text ?? ''} onChange={(v) => set('text', v)} vars={vars} /></Field>
+      </>;
+    case 'instagram.send':
+      return <>
+        <Field label="Thread"><SearchSelect value={c.thread_id} initialLabel={c._thread_id_label ?? undefined} onChange={(v, opt) => setRef('thread_id', v, opt)} fetchOptions={fetchIgThreads} placeholder="Scegli thread" /></Field>
         <Field label="Testo"><VariableTextarea value={c.text ?? ''} onChange={(v) => set('text', v)} vars={vars} /></Field>
       </>;
     case 'brain.write_note':
@@ -176,6 +186,7 @@ function stepConfigPreview(s: Step): string {
     case 'team.run':        return c.title ? `→ ${c.title}` : (c.prompt ? String(c.prompt).slice(0, 40) : '');
     case 'email.send':      return [c._account_label ?? c.account, c.to, c.subject].filter(Boolean).join(' · ').slice(0, 60);
     case 'whatsapp.send':   return [c._chat_jid_label ?? c.chat_jid, String(c.text ?? '').slice(0, 30)].filter(Boolean).join(' · ');
+    case 'instagram.send':  return [c._thread_id_label ?? c.thread_id, String(c.text ?? '').slice(0, 30)].filter(Boolean).join(' · ');
     case 'brain.write_note':return c.path ?? '';
     case 'webhook':         return [c.method ?? 'POST', c.url].filter(Boolean).join(' ').slice(0, 60);
     case 'condition':       return String(c.expr ?? '').slice(0, 50);
@@ -260,9 +271,9 @@ function FlowDiagram({
               <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60">
                 <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{ background: M.color + '22', border: `1px solid ${M.color}55` }}><I size={14} style={{ color: M.color }} /></div>
                 <div className="font-medium text-sm truncate flex-1">{M.label}</div>
-                <button onClick={() => onDelTrigger(i)} className="text-muted hover:text-red-300 p-1"><Trash2 size={12} /></button>
+                <button onClick={() => onDelTrigger(i)} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={12} /></button>
               </div>
-              <div className="px-3 py-2 text-xs text-muted">
+              <div className="px-3 py-2 text-xs text-muted-foreground">
                 {Object.keys(t.config ?? {}).filter((k) => !k.startsWith('_')).map((k) => {
                   const label = t.config[`_${k}_label`];
                   const val = String(t.config[k]).slice(0, 24);
@@ -303,14 +314,14 @@ function FlowDiagram({
                     <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{ background: M.color + '22', border: `1px solid ${M.color}55` }}><I size={14} style={{ color: M.color }} /></div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm truncate">{s.name || M.label}</div>
-                      <div className="text-[10px] text-muted font-mono truncate">{s.type}</div>
+                      <div className="text-[10px] text-muted-foreground font-mono truncate">{s.type}</div>
                     </div>
-                    <button onClick={() => onMoveStep(i, -1)} className="text-muted hover:text-text p-0.5 text-xs">↑</button>
-                    <button onClick={() => onMoveStep(i, 1)} className="text-muted hover:text-text p-0.5 text-xs">↓</button>
-                    <button onClick={() => onDelStep(i)} className="text-muted hover:text-red-300 p-1"><Trash2 size={12} /></button>
+                    <button onClick={() => onMoveStep(i, -1)} className="text-muted-foreground hover:text-text p-0.5 text-xs">↑</button>
+                    <button onClick={() => onMoveStep(i, 1)} className="text-muted-foreground hover:text-text p-0.5 text-xs">↓</button>
+                    <button onClick={() => onDelStep(i)} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={12} /></button>
                   </div>
                   {(() => { const p = stepConfigPreview(s); return p ? (
-                    <div className="px-3 py-2 text-xs text-muted whitespace-pre-wrap break-words">{p}</div>
+                    <div className="px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap break-words">{p}</div>
                   ) : null; })()}
                   <button onClick={() => onEditStep(i)} className="w-full text-[10px] text-accent2 border-t border-border/60 py-1.5 hover:bg-surface2 transition uppercase tracking-wider font-semibold">configura</button>
                 </div>
@@ -339,6 +350,10 @@ export default function FlowDetail() {
   const toast = useToast();
   const [flow, setFlow] = useState<Flow | null>(null);
   const [tab, setTab] = useState<'builder' | 'runs'>('builder');
+  useSetBreadcrumb(flow ? [
+    { label: 'Flows', to: '/flows' },
+    { label: flow.name || `#${flow.id}` },
+  ] : null);
   const [runs, setRuns] = useState<any[]>([]);
   const [openRun, setOpenRun] = useState<any | null>(null);
   // Drawers
@@ -420,22 +435,24 @@ export default function FlowDetail() {
     setZoom((z) => Math.max(0.4, Math.min(2, z + delta)));
   }
 
-  if (!flow) return <div className="text-muted p-6">Caricamento…</div>;
+  if (!flow) return <div className="text-muted-foreground p-6">Caricamento…</div>;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={() => nav('/flows')} className="text-muted hover:text-text"><ArrowLeft size={16} /></button>
+      <div className="flex items-center gap-3 flex-wrap h-9">
+        <button onClick={() => nav('/flows')} className="text-muted-foreground hover:text-text"><ArrowLeft size={16} /></button>
         <Input value={flow.name} onChange={(e) => setFlow({ ...flow, name: e.target.value })} className="text-lg font-semibold !bg-transparent !border-transparent hover:!border-border focus:!border-accent max-w-xs" />
-        <Chip tone={flow.enabled ? 'on' : 'warn'}>{flow.enabled ? 'attivo' : 'spento'}</Chip>
-        <Toggle checked={flow.enabled} onChange={(v) => setFlow({ ...flow, enabled: v })} />
-        <div className="ml-auto flex gap-2">
-          <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
+        <div className="ml-auto flex items-center gap-2">
+          <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1">
             <Button size="sm" variant={tab === 'builder' ? 'primary' : 'ghost'} onClick={() => setTab('builder')}><Workflow size={13} className="inline mr-1 -mt-0.5" />Builder</Button>
             <Button size="sm" variant={tab === 'runs' ? 'primary' : 'ghost'} onClick={() => setTab('runs')}><ClipboardList size={13} className="inline mr-1 -mt-0.5" />Execution logs</Button>
           </div>
           <Button size="sm" variant="ghost" onClick={runNow}><Play size={13} className="inline mr-1 -mt-0.5" />Run now</Button>
           <Button size="sm" onClick={saveAll}><Save size={13} className="inline mr-1 -mt-0.5" />Salva</Button>
+          <div className="flex items-center gap-2 pl-2 ml-2 border-l border-border h-7">
+            <Toggle checked={flow.enabled} onChange={(v) => setFlow({ ...flow, enabled: v })} />
+            <span className="text-xs text-muted-foreground">{flow.enabled ? 'attivo' : 'spento'}</span>
+          </div>
         </div>
       </div>
 
@@ -472,7 +489,6 @@ export default function FlowDetail() {
               <button onClick={() => setZoom((z) => Math.min(2, z + 0.1))} className="w-7 h-7 rounded-md hover:bg-surface2 text-sm">+</button>
               <button onClick={() => setZoom(1)} className="w-7 h-7 rounded-md hover:bg-surface2 text-[10px]">1:1</button>
               <button onClick={() => setZoom((z) => Math.max(0.4, z - 0.1))} className="w-7 h-7 rounded-md hover:bg-surface2 text-sm">−</button>
-              <button onClick={() => setPan({ x: 0, y: 0 })} className="w-7 h-7 rounded-md hover:bg-surface2 text-[10px]" title="Reset pan">⌂</button>
             </div>
           </div>
         </Card>
@@ -480,13 +496,13 @@ export default function FlowDetail() {
 
       {tab === 'runs' && (
         <Card className="space-y-2">
-          {runs.length === 0 && <div className="text-muted text-sm">Nessuna esecuzione ancora.</div>}
+          {runs.length === 0 && <div className="text-muted-foreground text-sm">Nessuna esecuzione ancora.</div>}
           {runs.map((r) => (
             <button key={r.id} onClick={async () => setOpenRun(await api.flowRunGet(r.id))} className="w-full text-left p-3 rounded-xl border border-border/60 hover:border-accent/40 hover:bg-surface2/40 transition flex items-center gap-3">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${r.status === 'done' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/30' : r.status === 'error' ? 'bg-red-500/15 text-red-300 border border-red-400/30' : r.status === 'running' ? 'bg-accent/15 text-accent border border-accent/30 animate-pulse' : 'bg-surface2 text-muted border border-border'}`}>{r.status}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${r.status === 'done' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/30' : r.status === 'error' ? 'bg-red-500/15 text-red-300 border border-red-400/30' : r.status === 'running' ? 'bg-accent/15 text-accent border border-accent/30 animate-pulse' : 'bg-surface2 text-muted-foreground border border-border'}`}>{r.status}</span>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{r.trigger_type ?? '—'} · #{r.id}</div>
-                <div className="text-[10px] text-muted font-mono">{new Date(r.created_at).toLocaleString('it-IT')}{r.duration_ms ? ` · ${r.duration_ms}ms` : ''}</div>
+                <div className="text-[10px] text-muted-foreground font-mono">{new Date(r.created_at).toLocaleString('it-IT')}{r.duration_ms ? ` · ${r.duration_ms}ms` : ''}</div>
               </div>
             </button>
           ))}
@@ -503,7 +519,7 @@ export default function FlowDetail() {
                 <div className="w-8 h-8 rounded-md flex items-center justify-center" style={{ background: m.color + '22', border: `1px solid ${m.color}55` }}><I size={15} style={{ color: m.color }} /></div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium">{m.label}</div>
-                  <div className="text-[10px] text-muted font-mono">{m.type}</div>
+                  <div className="text-[10px] text-muted-foreground font-mono">{m.type}</div>
                 </div>
               </button>
             );
@@ -518,7 +534,7 @@ export default function FlowDetail() {
         title="Configura trigger"
         footer={<>
           <Button variant="ghost" onClick={() => setEditTrigger(null)}>Annulla</Button>
-          <Button onClick={() => { setEditTrigger(null); toast.push('Trigger aggiornato', 'on'); }}>Salva</Button>
+          <Button onClick={async () => { await saveAll(); setEditTrigger(null); }}>Salva</Button>
         </>}
       >
         {editTrigger != null && flow?.triggers[editTrigger] && (
@@ -533,7 +549,7 @@ export default function FlowDetail() {
         title="Configura step"
         footer={<>
           <Button variant="ghost" onClick={() => setEditStep(null)}>Annulla</Button>
-          <Button onClick={() => { setEditStep(null); toast.push('Step aggiornato', 'on'); }}>Salva</Button>
+          <Button onClick={async () => { await saveAll(); setEditStep(null); }}>Salva</Button>
         </>}
       >
         {editStep != null && flow?.steps[editStep] && (
@@ -550,18 +566,18 @@ export default function FlowDetail() {
             <div className="px-5 py-3 border-b border-border flex items-center justify-between">
               <div>
                 <div className="font-semibold text-sm">Run #{openRun.id}</div>
-                <div className="text-[10px] text-muted">{openRun.trigger_type} · {openRun.status}</div>
+                <div className="text-[10px] text-muted-foreground">{openRun.trigger_type} · {openRun.status}</div>
               </div>
-              <button onClick={() => setOpenRun(null)} className="p-1.5 rounded-md hover:bg-surface2 text-muted"><X size={16} /></button>
+              <button onClick={() => setOpenRun(null)} className="p-1.5 rounded-md hover:bg-surface2 text-muted-foreground"><X size={16} /></button>
             </div>
             <div className="overflow-y-auto p-5 flex-1 space-y-2">
               {openRun.events?.map((e: any) => (
                 <div key={e.id} className="text-xs border border-border/60 rounded-lg p-2 bg-surface2/30">
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-mono text-[10px] uppercase text-accent">{e.kind}</span>
-                    <span className="text-[10px] text-muted font-mono">{new Date(e.ts).toLocaleTimeString('it-IT')}</span>
+                    <span className="text-[10px] text-muted-foreground font-mono">{new Date(e.ts).toLocaleTimeString('it-IT')}</span>
                   </div>
-                  {e.content && <pre className="whitespace-pre-wrap break-all text-[11px] text-muted font-mono">{e.content.slice(0, 800)}</pre>}
+                  {e.content && <pre className="whitespace-pre-wrap break-all text-[11px] text-muted-foreground font-mono">{e.content.slice(0, 800)}</pre>}
                 </div>
               ))}
             </div>

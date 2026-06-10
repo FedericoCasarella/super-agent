@@ -149,11 +149,13 @@ export async function createDraft(userId: number, accountLabel: string, draft: {
   if (!accs.find((a) => a.label === accountLabel)) throw new Error(`account ${accountLabel} not found`);
   // Store the resolved real paths so send-time reads exactly what was validated.
   const safePaths = draft.attachments?.length ? await safeAttachmentPaths(draft.attachments) : [];
-  const meta = safePaths.length ? { attachments: safePaths } : null;
+  // meta column is JSONB NOT NULL — never pass null. Always serialize an
+  // object (empty when there are no attachments).
+  const meta = safePaths.length ? { attachments: safePaths } : {};
   const rows = await query<EmailDraft>(
     `INSERT INTO email_drafts(user_id, account_label, to_addr, cc_addr, bcc_addr, subject, body, in_reply_to, references_ids, status, meta)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10) RETURNING *`,
-    [userId, accountLabel, draft.to, draft.cc ?? null, draft.bcc ?? null, draft.subject, draft.body, draft.inReplyTo ?? null, draft.references ?? null, meta],
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10::jsonb) RETURNING *`,
+    [userId, accountLabel, draft.to, draft.cc ?? null, draft.bcc ?? null, draft.subject, draft.body, draft.inReplyTo ?? null, draft.references ?? null, JSON.stringify(meta)],
   );
   const d = rows[0];
   bus.emit('email_draft:created', { userId, draft: d });
@@ -266,14 +268,21 @@ const connector: Connector = {
         await client.connect();
         const lock = await client.getMailboxLock(acc.mailbox || 'INBOX');
         try {
+          // Strict servers (Aruba, privateemail) return BAD "Invalid messageset"
+          // when the FETCH range is past UIDNEXT (no new msgs) instead of empty.
+          // Resolve UIDNEXT first and bail out cleanly when there's nothing new.
+          const status = await client.status(acc.mailbox || 'INBOX', { messages: true, uidNext: true });
+          const uidNext = (status.uidNext ?? 1) as number;
+          const totalMsgs = (status.messages ?? 0) as number;
           let range: string;
           if (lastUid > 0) {
+            if (lastUid + 1 >= uidNext) { /* nothing new */ continue; }
             range = `${lastUid + 1}:*`;
           } else {
-            const status = await client.status(acc.mailbox || 'INBOX', { messages: true, uidNext: true });
-            const uidNext = (status.uidNext ?? 1) as number;
+            if (totalMsgs === 0) continue;
             const backlog = Math.max(0, acc.initialBacklog ?? 0);
             const from = backlog > 0 ? Math.max(1, uidNext - backlog) : uidNext;
+            if (from >= uidNext) { maxUid = uidNext - 1; continue; }
             range = `${from}:*`;
             maxUid = from - 1;
           }
@@ -281,6 +290,18 @@ const connector: Connector = {
             if (msg.uid <= maxUid) continue;
             try {
               const parsed = await simpleParser(msg.source as Buffer);
+              // (1) Persist to mail_messages + mail_attachments for the mail UI
+              try {
+                const { persistInbound } = await import('../../../mail/service.js');
+                await persistInbound({
+                  userId: ctx.userId, accountLabel: acc.label, uid: msg.uid, parsed,
+                  folder: acc.mailbox || 'INBOX',
+                  rawSize: (msg.source as Buffer)?.length ?? 0,
+                });
+              } catch (persistErr) {
+                ctx.log('mail-persist-failed', { uid: msg.uid, err: String(persistErr) });
+              }
+              // (2) Index as brain note (existing behavior — used by agent)
               const ev = await ingestEmail({ userId: ctx.userId, accountLabel: acc.label, uid: msg.uid, parsed });
               bus.emit('connector:event', {
                 userId: ctx.userId,
@@ -295,8 +316,32 @@ const connector: Connector = {
             maxUid = Math.max(maxUid, msg.uid);
           }
         } finally { lock.release(); }
-      } catch (e) {
-        ctx.log('account-error', { account: acc.label, err: String(e) });
+      } catch (e: any) {
+        // "Command failed" is ImapFlow's default Error message — surface the
+        // real server response so the user can act (wrong app password, 2FA,
+        // mailbox missing, IP blocked, etc.).
+        // Dig the human-readable BAD/NO text out of ImapFlow's response shape:
+        // response = { tag, command, attributes: [{ type, section?, value? }] }
+        let detail = '';
+        try {
+          const attrs = e?.response?.attributes ?? [];
+          detail = JSON.stringify(attrs);
+          for (const a of attrs) {
+            if (a?.value && typeof a.value === 'string') detail = a.value;
+            else if (Array.isArray(a)) detail = a.map((x: any) => x?.value ?? x).join(' ');
+          }
+        } catch {}
+        ctx.log('account-error', {
+          account: acc.label,
+          host: acc.host,
+          user: acc.user,
+          err: String(e?.message ?? e),
+          code: e?.code ?? null,
+          response_command: e?.response?.command ?? null,
+          response_detail: detail || null,
+          response_raw: JSON.stringify(e?.response ?? null),
+          authenticationFailed: !!e?.authenticationFailed,
+        });
       } finally {
         await client.logout().catch(() => {});
       }
@@ -392,6 +437,15 @@ const connector: Connector = {
             const msg = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true });
             if (!msg) return null;
             const parsed = await simpleParser(msg.source as Buffer);
+            // Build attachment manifest — sized metadata only, no buffers, so
+            // the agent can decide what to download via `download_attachment`.
+            const attachments = (parsed.attachments ?? []).map((a, i) => ({
+              index: i,
+              filename: a.filename ?? `attachment-${i}`,
+              content_type: a.contentType ?? 'application/octet-stream',
+              size: a.size ?? (a.content ? a.content.length : 0),
+              cid: a.cid ?? null,
+            }));
             return {
               uid,
               subject: parsed.subject ?? '',
@@ -399,6 +453,67 @@ const connector: Connector = {
               to: parsed.to ? (Array.isArray(parsed.to) ? parsed.to.map((t) => t.text).join('; ') : parsed.to.text) : '',
               date: (parsed.date ?? new Date()).toISOString(),
               body: emailBodyText(parsed),
+              attachments,
+            };
+          } finally { lock.release(); }
+        } finally { await client.logout().catch(() => {}); }
+      },
+    },
+    {
+      name: 'download_attachment',
+      description: 'Scarica un allegato di un\'email su disco (vault attachments folder) e ritorna il path assoluto. Usa `get_by_uid` prima per scoprire `index` dell\'allegato che vuoi.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          account: { type: 'string' },
+          uid: { type: 'number' },
+          mailbox: { type: 'string' },
+          index: { type: 'number', description: 'Indice 0-based dell\'allegato come ritornato da get_by_uid.attachments[]' },
+        },
+        required: ['uid', 'index'],
+        additionalProperties: false,
+      },
+      handler: async (ctx, { account, uid, mailbox, index }) => {
+        const accs: Account[] = ctx.config.accounts ?? [];
+        const acc = pickAccount(accs, account);
+        const client = await openClient(acc);
+        try {
+          const box = mailbox || acc.mailbox || 'INBOX';
+          const lock = await client.getMailboxLock(box);
+          try {
+            const msg = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true });
+            if (!msg) throw new Error('email not found');
+            const parsed = await simpleParser(msg.source as Buffer);
+            const atts = parsed.attachments ?? [];
+            const idx = Number(index);
+            if (idx < 0 || idx >= atts.length) throw new Error(`attachment index ${idx} out of range (have ${atts.length})`);
+            const a = atts[idx];
+            const buf = a.content;
+            if (!buf) throw new Error('attachment has no content buffer');
+
+            // Resolve target dir: <vault>/attachments/<YYYY>/<MM>/<uid>-<sanitized-filename>
+            const path = await import('node:path');
+            const fs = await import('node:fs/promises');
+            const os = await import('node:os');
+            const { getVaultRoot } = await import('../../../brain/vault.js');
+            const vault = await getVaultRoot(ctx.userId);
+            const baseDir = vault ?? path.join(os.homedir(), 'super-agent-attachments');
+            const date = parsed.date ?? new Date();
+            const yyyy = String(date.getFullYear());
+            const mm = String(date.getMonth() + 1).padStart(2, '0');
+            const safeName = (a.filename ?? `attachment-${idx}`)
+              .replace(/[^A-Za-z0-9._\- ]+/g, '_')
+              .slice(0, 120);
+            const dir = path.join(baseDir, 'attachments', yyyy, mm);
+            await fs.mkdir(dir, { recursive: true });
+            const outPath = path.join(dir, `uid${uid}-${safeName}`);
+            await fs.writeFile(outPath, buf);
+            return {
+              ok: true,
+              path: outPath,
+              filename: a.filename ?? safeName,
+              content_type: a.contentType ?? 'application/octet-stream',
+              size: buf.length,
             };
           } finally { lock.release(); }
         } finally { await client.logout().catch(() => {}); }
@@ -436,15 +551,19 @@ const connector: Connector = {
             const uids = await client.search(q, { uid: true });
             const slice = (uids as number[]).slice(-Math.min(limit, 50));
             const out: any[] = [];
+            if (slice.length === 0) return out;
             for await (const msg of client.fetch(slice, { uid: true, source: true }, { uid: true })) {
               const parsed = await simpleParser(msg.source as Buffer);
               const body = emailBodyText(parsed);
+              const attCount = (parsed.attachments ?? []).length;
               out.push({
                 uid: msg.uid,
                 subject: parsed.subject ?? '',
                 from: parsed.from?.text ?? '',
                 date: (parsed.date ?? new Date()).toISOString(),
                 snippet: body.slice(0, 400),
+                attachment_count: attCount,
+                attachment_names: (parsed.attachments ?? []).map((a) => a.filename ?? '(unnamed)'),
               });
             }
             return out.reverse();

@@ -136,7 +136,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'agents.duration': 'Durata',
     // Tasks
     'tasks.title': 'Task pianificati',
-    'tasks.new': '+ Nuovo task',
+    'tasks.new': 'Nuovo task',
     'tasks.none': 'Nessun task ancora.',
     'tasks.edit': 'Modifica',
     'tasks.runNow': 'Esegui ora',
@@ -374,7 +374,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'agents.duration': 'Duration',
     // Tasks
     'tasks.title': 'Scheduled Tasks',
-    'tasks.new': '+ New task',
+    'tasks.new': 'New task',
     'tasks.none': 'No tasks yet.',
     'tasks.edit': 'Edit',
     'tasks.runNow': 'Run now',

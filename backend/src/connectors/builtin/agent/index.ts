@@ -569,7 +569,8 @@ const connector: Connector = {
       },
       handler: async (ctx, { status }) => {
         const list = await subAgents.listSubAgents(ctx.userId, { status, limit: 50 });
-        return list.map((s) => ({ id: s.id, title: s.title, brief: s.brief, status: s.status, started_at: s.started_at, ended_at: s.ended_at }));
+        const arr = Array.isArray(list) ? list : list.rows;
+        return arr.map((s: any) => ({ id: s.id, title: s.title, brief: s.brief, status: s.status, started_at: s.started_at, ended_at: s.ended_at }));
       },
     },
     {
@@ -730,6 +731,50 @@ const connector: Connector = {
         required: ['id'], additionalProperties: false,
       },
       handler: async (ctx, { id }) => roadmapV2.deleteKpi(ctx.userId, id),
+    },
+    // =====================================================================
+    // Telegram playful tools — let the agent send stickers, animated emojis,
+    // browse public sticker packs. Use sparingly: 1 sticker / 1 emoji every
+    // ~5 turns max so the chat doesn't turn into a meme dump.
+    // =====================================================================
+    {
+      name: 'telegram_send_sticker',
+      description: 'Manda uno sticker su Telegram. `ref` = file_id sticker (preferito, riusabile) o URL .webp pubblico. Usa SOLO se il momento è giusto (festa, frustrazione che meriti meme, vittoria). Non spammare.',
+      inputSchema: {
+        type: 'object',
+        properties: { ref: { type: 'string', description: 'file_id Telegram dello sticker, o URL .webp pubblico' } },
+        required: ['ref'], additionalProperties: false,
+      },
+      handler: async (ctx, { ref }) => {
+        const { sendTelegramSticker } = await import('../../../telegram/bot.js');
+        return sendTelegramSticker(ctx.userId, String(ref));
+      },
+    },
+    {
+      name: 'telegram_send_animated_emoji',
+      description: 'Manda un emoji animato Telegram. Solo: 🎲 (dado 1-6), 🎯 (freccia bersaglio 1-6), 🏀 (basket 1-5), ⚽ (calcio 1-5), 🎰 (slot 1-64), 🎳 (bowling 1-6). Ritorna il valore casuale uscito. Usa per momenti di leggerezza o sfida.',
+      inputSchema: {
+        type: 'object',
+        properties: { emoji: { type: 'string', enum: ['🎲','🎯','🏀','⚽','🎰','🎳'] } },
+        required: ['emoji'], additionalProperties: false,
+      },
+      handler: async (ctx, { emoji }) => {
+        const { sendTelegramAnimatedEmoji } = await import('../../../telegram/bot.js');
+        return sendTelegramAnimatedEmoji(ctx.userId, String(emoji));
+      },
+    },
+    {
+      name: 'telegram_list_sticker_set',
+      description: 'Esplora una sticker pack pubblica Telegram (per scoprire file_id da riusare). `name` = nome pack (es. "HotCherry", "AnimatedEmojies"). Ritorna lista sticker + emoji associato.',
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'], additionalProperties: false,
+      },
+      handler: async (ctx, { name }) => {
+        const { listTelegramStickerSet } = await import('../../../telegram/bot.js');
+        return listTelegramStickerSet(ctx.userId, String(name));
+      },
     },
   ],
 };

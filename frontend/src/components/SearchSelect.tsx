@@ -68,21 +68,21 @@ export default function SearchSelect({ value, onChange, fetchOptions, placeholde
         onClick={() => { setOpen((o) => !o); setTimeout(() => inputRef.current?.focus(), 30); }}
         className="w-full flex items-center gap-2 bg-surface2 border border-border focus:border-accent rounded-lg px-3 py-2 text-sm hover:border-border/80 transition"
       >
-        <span className={`flex-1 text-left truncate ${display ? '' : 'text-muted'}`}>{display || placeholder}</span>
+        <span className={`flex-1 text-left truncate ${display ? '' : 'text-muted-foreground'}`}>{display || placeholder}</span>
         {allowClear && display && (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onChange(null, null); setLabelCache(null); }}
-            className="text-muted hover:text-red-300 p-0.5"
+            className="text-muted-foreground hover:text-red-300 p-0.5"
           ><X size={13} /></button>
         )}
-        <ChevronDown size={14} className={`text-muted transition ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-muted-foreground transition ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
         <div className="absolute z-50 mt-1 left-0 right-0 bg-surface border border-border rounded-xl shadow-2xl overflow-hidden">
           <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
-            <Search size={14} className="text-muted shrink-0" />
+            <Search size={14} className="text-muted-foreground shrink-0" />
             <input
               ref={inputRef}
               value={q}
@@ -91,11 +91,11 @@ export default function SearchSelect({ value, onChange, fetchOptions, placeholde
               className="flex-1 bg-transparent outline-none text-sm"
               autoFocus
             />
-            {loading && <Loader2 size={13} className="text-muted animate-spin shrink-0" />}
+            {loading && <Loader2 size={13} className="text-muted-foreground animate-spin shrink-0" />}
           </div>
           <div className="max-h-64 overflow-y-auto">
             {!loading && items.length === 0 && (
-              <div className="px-3 py-4 text-xs text-muted text-center">Nessun risultato.</div>
+              <div className="px-3 py-4 text-xs text-muted-foreground text-center">Nessun risultato.</div>
             )}
             {items.map((o) => {
               const selected = String(value) === String(o.value);
@@ -108,7 +108,7 @@ export default function SearchSelect({ value, onChange, fetchOptions, placeholde
                 >
                   <div className="flex-1 min-w-0">
                     <div className="truncate">{o.label}</div>
-                    {o.sublabel && <div className="text-[10px] text-muted font-mono truncate">{o.sublabel}</div>}
+                    {o.sublabel && <div className="text-[10px] text-muted-foreground font-mono truncate">{o.sublabel}</div>}
                   </div>
                   {selected && <Check size={13} className="text-accent shrink-0 mt-0.5" />}
                 </button>
