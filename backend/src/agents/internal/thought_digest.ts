@@ -40,10 +40,10 @@ async function run(userId: number): Promise<AgentReport> {
   const weekCtx = week.filter((t) => !todayIds.has(t.id));
 
   const prompt = [
-    'Sei l\'analista del diario cognitivo di Mattia. Ricevi i pensieri di OGGI piu il contesto',
+    'Sei l\'analista del diario cognitivo dell\'utente. Ricevi i pensieri di OGGI piu il contesto',
     'degli ultimi 7 giorni. Trova il PATTERN che nei singoli pensieri non si vede.',
     'Rispondi SOLO con JSON valido in questo schema (niente altro testo):',
-    '{"dominant_emotion":"<emozione dominante di oggi>","loop":"<il loop ricorrente: il tema su cui Mattia torna piu volte, 1-2 frasi>","contradiction":"<opzionale: due pensieri che si tirano contro, altrimenti ometti>","question":"<UNA domanda secca e utile per domani>","summary":"<1 frase di sintesi della giornata>"}',
+    '{"dominant_emotion":"<emozione dominante di oggi>","loop":"<il loop ricorrente: il tema su cui l\'utente torna piu volte, 1-2 frasi>","contradiction":"<opzionale: due pensieri che si tirano contro, altrimenti ometti>","question":"<UNA domanda secca e utile per domani>","summary":"<1 frase di sintesi della giornata>"}',
     '',
     `PENSIERI DI OGGI (${today.length}):`,
     today.map(fmtThought).join('\n'),
