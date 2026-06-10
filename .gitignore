@@ -5,3 +5,11 @@ dist
 *.log
 .DS_Store
 backend/data
+
+# build artifacts
+*.tsbuildinfo
+
+# local working notes — private specs/plans, never push to shared repo
+docs/superpowers/
+docs/ground-truth-and-positioning.md
+*sess[0-9]*

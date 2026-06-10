@@ -1,4 +1,5 @@
 import { Telegraf } from 'telegraf';
+import { createReadStream } from 'node:fs';
 import { getSetting, setSetting, query } from '../db/index.js';
 import { bus } from '../bus.js';
 
@@ -81,7 +82,7 @@ async function startBotForUser(userId: number) {
     await ctx.reply(`🤖 Comandi disponibili:\n\n${body}`);
   });
 
-  // ── Thought Analyzer (sess.8266) ───────────────────────────────────────────
+  // ── Thought Analyzer ───────────────────────────────────────────────────────
   // Cattura DB-first (ack istantaneo), poi analisi leggera asincrona che non blocca.
   const captureAndReply = async (ctx: any, text: string) => {
     const { captureThought, analyzeThoughtLight, lightReplyLine } = await import('../brain/thoughts.js');
@@ -559,6 +560,50 @@ export async function sendTelegramVoice(userId: number, text: string, origin: st
     // Fallback to text on send failure
     try { await sendTelegram(userId, text, origin); return { ok: true, fallback: 'text', error: err }; }
     catch { return { ok: false, error: err }; }
+  }
+}
+
+export type TelegramMediaKind = 'photo' | 'video' | 'document';
+
+// Strip any leaked Telegram bot token (api.telegram.org/bot<id>:<secret>) from
+// error strings before they touch the vault / DB / logs. The token controls the
+// bot — it must never be persisted in plaintext.
+function redactTgSecret(s: string): string {
+  return s.replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot***REDACTED***');
+}
+
+// Send media (photo / video / document) to the user's Telegram. `source` may be
+// a public https URL (preferred — Telegram fetches it server-side, avoiding
+// fragile multipart uploads / "socket hang up") OR a local file path (streamed).
+// Mirrors sendTelegramSticker's lazy-start + outbound-log pattern.
+export async function sendTelegramMedia(
+  userId: number,
+  kind: TelegramMediaKind,
+  source: string,
+  opts: { caption?: string; origin?: string } = {},
+): Promise<{ ok: boolean; error?: string }> {
+  const origin = opts.origin ?? 'agent';
+  const { logOutbound } = await import('../comm/outbound_log.js');
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return { ok: false, error: 'telegram not configured' };
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  const caption = opts.caption ? toTelegramHtml(opts.caption.slice(0, 1024)) : undefined;
+  const extra: any = caption ? { caption, parse_mode: 'HTML' } : {};
+  const isUrl = /^https?:\/\//i.test(source);
+  const media: any = isUrl ? source : { source: createReadStream(source) };
+  const bodyTag = `[${kind}] ${source.split('/').pop()}${opts.caption ? ` — ${opts.caption.slice(0, 120)}` : ''}`;
+  try {
+    if (kind === 'photo') await entry.bot.telegram.sendPhoto(cfg.chatId, media, extra);
+    else if (kind === 'video') await entry.bot.telegram.sendVideo(cfg.chatId, media, extra);
+    else await entry.bot.telegram.sendDocument(cfg.chatId, media, extra);
+    await logOutbound({ userId, channel: 'telegram', status: 'sent', recipient: String(cfg.chatId), body: bodyTag, origin });
+    return { ok: true };
+  } catch (e: any) {
+    const err = redactTgSecret(String(e?.message ?? e)).slice(0, 400);
+    await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: bodyTag, origin, error: err });
+    return { ok: false, error: err };
   }
 }
 

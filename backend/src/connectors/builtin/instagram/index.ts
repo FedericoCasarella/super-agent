@@ -18,7 +18,9 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import pw from 'playwright';
+const { chromium } = pw;
+import type { Browser, BrowserContext, Page } from 'playwright';
 import type { Connector } from '../../types.js';
 import { bus } from '../../../bus.js';
 import { query } from '../../../db/index.js';

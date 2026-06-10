@@ -4,8 +4,13 @@ import url from 'node:url';
 import { query } from '../db/index.js';
 import type { Connector, ConnectorContext } from './types.js';
 
-const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+const __filename = url.fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const BUILTIN_DIR = path.join(__dirname, 'builtin');
+// In dev (tsx) questo file è .ts e i connettori sono index.ts; in prod (node dist)
+// è .js e i connettori sono index.js. Deriviamo l'estensione dal runtime stesso
+// così il loader funziona in entrambi.
+const MOD_EXT = path.extname(__filename) || '.js';
 
 const registry = new Map<string, Connector>();
 
@@ -13,7 +18,7 @@ export async function loadConnectors() {
   const entries = await fs.readdir(BUILTIN_DIR, { withFileTypes: true });
   for (const e of entries) {
     if (!e.isDirectory()) continue;
-    const modPath = path.join(BUILTIN_DIR, e.name, 'index.ts');
+    const modPath = path.join(BUILTIN_DIR, e.name, `index${MOD_EXT}`);
     try {
       const mod = await import(url.pathToFileURL(modPath).href);
       const conn: Connector = mod.default ?? mod.connector;

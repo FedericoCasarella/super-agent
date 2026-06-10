@@ -1,4 +1,4 @@
-// Thought Analyzer core (sess.8266).
+// Thought Analyzer core.
 // A+C: ogni pensiero viene (A) analizzato — tema, emozione, loop — e (C) trasformato
 // in un nodo connesso nel vault con backlink alle sinapsi esistenti.
 //
@@ -100,8 +100,30 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'pensiero';
 }
 
+// Data LOCALE (YYYY-MM-DD) — coerente con lo scheduler (getHours locale) e con
+// Postgres now()::date in TZ di sistema. toISOString() darebbe la data UTC, che
+// vicino a mezzanotte non combacia con l'ora locale del filename.
+function localDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// ── Serializzazione per-utente ────────────────────────────────────────────────
+// L'analisi leggera fa spawn di `claude` (pesante). Sotto burst (thought-mode ON +
+// piu messaggi rapidi) N spawn paralleli stresserebbero la macchina. Catena 1-per-utente:
+// le analisi si accodano, i follow-up arrivano in ordine, la pressione resta limitata.
+const analyzeChain = new Map<number, Promise<any>>();
+
+export function analyzeThoughtLight(userId: number, id: number, text: string): Promise<{ ok: boolean; analysis?: LightAnalysis; vaultPath?: string; error?: string }> {
+  const prev = analyzeChain.get(userId) ?? Promise.resolve();
+  const next = prev.catch(() => {}).then(() => analyzeThoughtCore(userId, id, text));
+  analyzeChain.set(userId, next.catch(() => {}).finally(() => {
+    if (analyzeChain.get(userId) === next) analyzeChain.delete(userId);
+  }) as Promise<any>);
+  return next;
+}
+
 // ── Analisi leggera real-time (1 runClaude, no MCP, degrada con grazia) ───────
-export async function analyzeThoughtLight(userId: number, id: number, text: string): Promise<{ ok: boolean; analysis?: LightAnalysis; vaultPath?: string; error?: string }> {
+async function analyzeThoughtCore(userId: number, id: number, text: string): Promise<{ ok: boolean; analysis?: LightAnalysis; vaultPath?: string; error?: string }> {
   let candidates: string[] = [];
   try { candidates = await candidateBacklinks(userId, text); } catch (e) { console.error('[thoughts] candidates failed', e); }
 
@@ -141,7 +163,7 @@ export async function analyzeThoughtLight(userId: number, id: number, text: stri
   try {
     const now = new Date();
     const hhmm = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-    const day = now.toISOString().slice(0, 10);
+    const day = localDay(now);
     const rel = `thoughts/${day}-${hhmm}-${slugify(themes[0] ?? text)}.md`;
     const related = backlinks.map((b) => `[[${b}]]`);
     const body = [

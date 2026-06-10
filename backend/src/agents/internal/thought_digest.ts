@@ -1,4 +1,4 @@
-// Thought Digest — internal agent (sess.8266).
+// Thought Digest — internal agent.
 // Il livello 3 del Thought Analyzer: la sera aggrega i pensieri del giorno e trova
 // il pattern che nei singoli pensieri non si vede (emozione dominante, loop ricorrente,
 // contraddizione viva, una domanda per domani). Scrive un nodo digest nel vault e
@@ -34,18 +34,22 @@ async function run(userId: number): Promise<AgentReport> {
   if (!today.length) return { skipped: 1, scanned: 0, durationMs: Date.now() - started };
 
   const week = await thoughtsLastDays(userId, 7);
+  // Escludi i pensieri di oggi dal contesto storico: sono gia elencati per intero
+  // sopra; ri-includerli raddoppia i token e confonde "ritorno" con "oggi stesso".
+  const todayIds = new Set(today.map((t) => t.id));
+  const weekCtx = week.filter((t) => !todayIds.has(t.id));
 
   const prompt = [
-    'Sei l\'analista del diario cognitivo di Mattia. Ricevi i pensieri di OGGI piu il contesto',
+    'Sei l\'analista del diario cognitivo dell\'utente. Ricevi i pensieri di OGGI piu il contesto',
     'degli ultimi 7 giorni. Trova il PATTERN che nei singoli pensieri non si vede.',
     'Rispondi SOLO con JSON valido in questo schema (niente altro testo):',
-    '{"dominant_emotion":"<emozione dominante di oggi>","loop":"<il loop ricorrente: il tema su cui Mattia torna piu volte, 1-2 frasi>","contradiction":"<opzionale: due pensieri che si tirano contro, altrimenti ometti>","question":"<UNA domanda secca e utile per domani>","summary":"<1 frase di sintesi della giornata>"}',
+    '{"dominant_emotion":"<emozione dominante di oggi>","loop":"<il loop ricorrente: il tema su cui l\'utente torna piu volte, 1-2 frasi>","contradiction":"<opzionale: due pensieri che si tirano contro, altrimenti ometti>","question":"<UNA domanda secca e utile per domani>","summary":"<1 frase di sintesi della giornata>"}',
     '',
     `PENSIERI DI OGGI (${today.length}):`,
     today.map(fmtThought).join('\n'),
     '',
-    `CONTESTO ULTIMI 7 GIORNI (${week.length}, per vedere i ritorni):`,
-    week.map(fmtThought).join('\n'),
+    `CONTESTO GIORNI PRECEDENTI (${weekCtx.length}, per vedere i ritorni):`,
+    weekCtx.map(fmtThought).join('\n'),
   ].join('\n');
 
   let d: DigestJson | null = null;
@@ -64,7 +68,10 @@ async function run(userId: number): Promise<AgentReport> {
   if (!d) return { error: 'digest: unparseable', rawTail, durationMs: Date.now() - started };
 
   // Nodo digest nel vault, collegato ai pensieri del giorno + ai loro backlink.
-  const day = new Date().toISOString().slice(0, 10);
+  // Data LOCALE: coerente con thoughtsToday (now()::date in TZ Postgres) e con
+  // lo scheduler che fa scattare l'agente alle 21:00 ora locale.
+  const nowD = new Date();
+  const day = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}-${String(nowD.getDate()).padStart(2, '0')}`;
   const rel = `thoughts/digests/${day}.md`;
   const dayLinks = today.map((t) => (t.vault_path ? `[[${t.vault_path.replace(/^thoughts\//, '').replace(/\.md$/, '')}]]` : null)).filter(Boolean) as string[];
   const backlinkSet = new Set<string>();
