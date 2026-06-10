@@ -6,6 +6,11 @@ import { useDialog } from '../components/dialog';
 import { useI18n } from '../i18n';
 import { useWS } from '../ws';
 import ConnectorIcon from '../components/ConnectorIcon';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
+  DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel,
+} from '@/components/ui/dropdown-menu';
+import { MoreHorizontal, Settings as SettingsIcon, Play, Smartphone, Volume2, RefreshCw, Link as LinkIcon, Cpu } from 'lucide-react';
 
 export default function Connectors() {
   const [items, setItems] = useState<any[]>([]);
@@ -75,107 +80,147 @@ export default function Connectors() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      {/* SVG defs consumed by `.connector-icon-grad svg path` so every
+          ConnectorIcon paints with the violet → blue brand gradient. */}
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden>
+        <defs>
+          <linearGradient id="connector-icon-grad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="hsl(var(--primary))" />
+            <stop offset="100%" stopColor="hsl(var(--accent-2))" />
+          </linearGradient>
+        </defs>
+      </svg>
       <h1 className="text-2xl font-semibold text-gradient">{t('connectors.title')}</h1>
-      <p className="text-muted-foreground text-sm">{t('connectors.intro')} <code className="font-mono text-text">backend/src/connectors/builtin/</code> {t('connectors.intro2')}</p>
-      <h2 className="text-sm uppercase text-muted-foreground tracking-wider mt-2">{t('connectors.native')}</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {items.map((c) => (
-          <Card key={c.manifest.name}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-start gap-3 flex-1 min-w-0">
-                <ConnectorIcon name={c.manifest.name} title={c.manifest.title} size={28} className="shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-lg font-semibold">{c.manifest.title}</h3>
-                  {c.manifest.name === 'imap' ? (
-                    <>
-                      <Chip tone="accent2">imap</Chip>
-                      <Chip tone="accent">smtp</Chip>
-                    </>
-                  ) : (
-                    <Chip>{c.manifest.name}</Chip>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground mt-1">{c.manifest.description}</p>
-                {c.manifest.schedule && <div className="text-xs text-muted-foreground mt-2">{t('connectors.schedule')}: <span className="font-mono">{c.manifest.schedule}</span></div>}
-                </div>
-              </div>
-              <Toggle checked={c.enabled} onChange={(v) => toggle(c.manifest.name, v)} />
-            </div>
 
-            {editing === c.manifest.name ? (
-              <div className="mt-4 space-y-3">
-                {c.manifest.configSchema.map((f: any) => (
-                  <Field key={f.key} label={f.label}>
-                    {f.type === 'accounts' ? (
-                      <AccountsEditor value={draft[f.key] ?? []} onChange={(v) => setDraft({ ...draft, [f.key]: v })} />
-                    ) : f.type === 'boolean' ? (
-                      <input
-                        type="checkbox"
-                        checked={!!draft[f.key]}
-                        onChange={(e) => setDraft({ ...draft, [f.key]: e.target.checked })}
-                        className="w-4 h-4 rounded border-border bg-surface2 accent-accent"
-                      />
-                    ) : (
-                      <Input
-                        type={f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}
-                        placeholder={f.placeholder}
-                        value={draft[f.key] ?? ''}
-                        onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
-                      />
-                    )}
-                  </Field>
-                ))}
-                <div className="flex gap-2 justify-end">
-                  <Button variant="ghost" onClick={() => setEditing(null)}>{t('connectors.cancel')}</Button>
-                  <Button onClick={() => save(c.manifest.name)}>{t('connectors.save')}</Button>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4 flex gap-2">
-                {c.manifest.configSchema.length > 0 && (
-                  <Button variant="ghost" onClick={() => { setEditing(c.manifest.name); setDraft(c.config ?? {}); }}>{t('connectors.configure')}</Button>
-                )}
-                <Button variant="ghost" onClick={() => run(c.manifest.name)}>{t('connectors.runNowBtn')}</Button>
-                {c.manifest.name === 'whatsapp' && (
-                  <Button onClick={() => setWaOpen(true)}>📱 Apri WhatsApp</Button>
-                )}
-                {c.manifest.name === 'tts' && (
-                  <Button onClick={() => testTts()}>🎙 Invia audio di prova</Button>
-                )}
-              </div>
-            )}
-          </Card>
-        ))}
-      </div>
-
-      <div className="flex items-center justify-between mt-8">
-        <div>
-          <h2 className="text-sm uppercase text-muted-foreground tracking-wider">{t('connectors.externalTitle')}</h2>
-          <p className="text-xs text-muted-foreground">{t('connectors.externalDesc')}</p>
+      {/* === NATIVE === */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Cpu size={14} className="text-accent" />
+          <h2 className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">Nativi · super-agent</h2>
+          <span className="text-[10px] text-muted-foreground/60">({items.length})</span>
         </div>
-        <Button variant="ghost" size="sm" onClick={refreshExt}>{t('connectors.refresh')}</Button>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {externals.length === 0 && <Card><div className="text-muted-foreground text-sm">{t('connectors.noneDetected')}</div></Card>}
-        {externals.map((e) => (
-          <Card key={e.serverName}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3 min-w-0">
-                <ConnectorIcon name={e.rawName} title={e.serverName} size={24} className="shrink-0" />
-                <div className="min-w-0">
-                  <div className="font-semibold">{e.rawName}</div>
-                  <div className="text-xs text-muted-foreground font-mono truncate max-w-[26rem]">{e.url}</div>
+        <div className="grid grid-cols-1 gap-2">
+          {items.map((c) => {
+            const isOpen = editing === c.manifest.name;
+            return (
+              <Card key={c.manifest.name} className="p-3">
+                <div className="flex items-center gap-5">
+                  <ConnectorIcon name={c.manifest.name} title={c.manifest.title} size={18} className="shrink-0 connector-icon-grad" />
+                  <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-semibold truncate">{c.manifest.title}</h3>
+                    {c.manifest.name === 'imap' ? (
+                      <>
+                        <Chip tone="accent2">imap</Chip>
+                        <Chip tone="accent">smtp</Chip>
+                      </>
+                    ) : (
+                      <Chip>{c.manifest.name}</Chip>
+                    )}
+                    {c.manifest.schedule && (
+                      <span className="text-[10px] text-muted-foreground font-mono ml-2">cron: {c.manifest.schedule}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Toggle checked={c.enabled} onChange={(v) => toggle(c.manifest.name, v)} />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-surface2 text-muted-foreground hover:text-foreground transition" aria-label="Azioni">
+                          <MoreHorizontal size={16} />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-56">
+                        <DropdownMenuLabel>{c.manifest.title}</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {c.manifest.configSchema.length > 0 && (
+                          <DropdownMenuItem onSelect={() => { setEditing(isOpen ? null : c.manifest.name); setDraft(c.config ?? {}); }}>
+                            <SettingsIcon size={14} /> {isOpen ? 'Chiudi configurazione' : 'Configura'}
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem onSelect={() => run(c.manifest.name)}>
+                          <Play size={14} /> Esegui ora
+                        </DropdownMenuItem>
+                        {c.manifest.name === 'whatsapp' && (
+                          <DropdownMenuItem onSelect={() => setWaOpen(true)}>
+                            <Smartphone size={14} /> Apri WhatsApp
+                          </DropdownMenuItem>
+                        )}
+                        {c.manifest.name === 'tts' && (
+                          <DropdownMenuItem onSelect={() => testTts()}>
+                            <Volume2 size={14} /> Invia audio di prova
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </div>
+
+                {isOpen && (
+                  <div className="mt-4 pt-4 border-t border-border/60 space-y-3">
+                    {c.manifest.configSchema.map((f: any) => (
+                      <Field key={f.key} label={f.label}>
+                        {f.type === 'accounts' ? (
+                          <AccountsEditor value={draft[f.key] ?? []} onChange={(v) => setDraft({ ...draft, [f.key]: v })} />
+                        ) : f.type === 'boolean' ? (
+                          <input
+                            type="checkbox"
+                            checked={!!draft[f.key]}
+                            onChange={(e) => setDraft({ ...draft, [f.key]: e.target.checked })}
+                            className="w-4 h-4 rounded border-border bg-surface2 accent-accent"
+                          />
+                        ) : (
+                          <Input
+                            type={f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}
+                            placeholder={f.placeholder}
+                            value={draft[f.key] ?? ''}
+                            onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+                          />
+                        )}
+                      </Field>
+                    ))}
+                    <div className="flex gap-2 justify-end">
+                      <Button variant="ghost" onClick={() => setEditing(null)}>{t('connectors.cancel')}</Button>
+                      <Button onClick={() => save(c.manifest.name)}>{t('connectors.save')}</Button>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* === EXTERNAL === */}
+      <div className="border-t border-border/40 pt-5">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <LinkIcon size={14} className="text-accent2" />
+            <h2 className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">Esterni · MCP Claude Code</h2>
+            <span className="text-[10px] text-muted-foreground/60">({externals.length})</span>
+          </div>
+          <button onClick={refreshExt} className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-md hover:bg-surface2 text-muted-foreground transition">
+            <RefreshCw size={12} /> {t('connectors.refresh')}
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          {externals.length === 0 && (
+            <Card className="p-3"><div className="text-muted-foreground text-sm">{t('connectors.noneDetected')}</div></Card>
+          )}
+          {externals.map((e) => (
+            <Card key={e.serverName} className="p-3">
+              <div className="flex items-center gap-5">
+                <ConnectorIcon name={e.rawName} title={e.serverName} size={18} className="shrink-0 connector-icon-grad" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold truncate">{e.rawName}</div>
+                  <div className="text-[11px] text-muted-foreground font-mono truncate">mcp__{e.serverName}__*</div>
+                </div>
+                <Chip tone={e.status === 'connected' ? 'on' : e.status === 'needs_auth' ? 'warn' : 'err'}>
+                  {e.status === 'connected' ? t('connectors.connected') : e.status === 'needs_auth' ? t('connectors.needsAuth') : t('connectors.error')}
+                </Chip>
               </div>
-              <Chip tone={e.status === 'connected' ? 'on' : e.status === 'needs_auth' ? 'warn' : 'err'}>
-                {e.status === 'connected' ? t('connectors.connected') : e.status === 'needs_auth' ? t('connectors.needsAuth') : t('connectors.error')}
-              </Chip>
-            </div>
-            <div className="text-xs text-muted-foreground mt-2 font-mono">mcp__{e.serverName}__*</div>
-          </Card>
-        ))}
+            </Card>
+          ))}
+        </div>
       </div>
 
       <Modal open={waOpen} onClose={() => setWaOpen(false)} title="WhatsApp">

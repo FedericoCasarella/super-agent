@@ -126,6 +126,16 @@
 }
 
 @layer utilities {
+  /* Connector icons: re-fill every <path>/<polygon>/<rect>/<circle> inside
+     a FontAwesome SVG with the violet → blue brand gradient defined as
+     `#connector-icon-grad` at the page root. */
+  .connector-icon-grad svg path,
+  .connector-icon-grad svg polygon,
+  .connector-icon-grad svg rect,
+  .connector-icon-grad svg circle {
+    fill: url(#connector-icon-grad) !important;
+  }
+
   /* contenteditable placeholder: rendered when the body is empty so the
      composer shows a "Inserisci testo" hint like a native input. */
   .mail-composer-body:empty::before {
