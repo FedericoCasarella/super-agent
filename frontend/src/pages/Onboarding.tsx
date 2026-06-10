@@ -77,8 +77,8 @@ export default function Onboarding({ status, onDone }: Props) {
           <div className="flex items-center gap-2 sm:gap-3 min-w-max">
             {steps.map((s, i) => (
               <div key={s} className="flex items-center gap-2">
-                <div className={`h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs border ${i <= step ? 'bg-accent text-bg border-accent' : 'border-border text-muted'}`}>{i + 1}</div>
-                <div className={`text-xs sm:text-sm whitespace-nowrap ${i === step ? 'text-text' : 'text-muted'}`}>{s}</div>
+                <div className={`h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs border ${i <= step ? 'bg-accent text-bg border-accent' : 'border-border text-muted-foreground'}`}>{i + 1}</div>
+                <div className={`text-xs sm:text-sm whitespace-nowrap ${i === step ? 'text-text' : 'text-muted-foreground'}`}>{s}</div>
                 {i < steps.length - 1 && <div className="w-6 sm:w-8 h-px bg-border" />}
               </div>
             ))}
@@ -89,7 +89,7 @@ export default function Onboarding({ status, onDone }: Props) {
           {step === 0 && (
             <div className="space-y-4">
               <h2 className="text-lg sm:text-xl font-semibold">Personalizza l'app</h2>
-              <p className="text-sm text-muted">Dai un nome e un logo alla tua istanza. Puoi cambiarli in qualsiasi momento dalle impostazioni.</p>
+              <p className="text-sm text-muted-foreground">Dai un nome e un logo alla tua istanza. Puoi cambiarli in qualsiasi momento dalle impostazioni.</p>
               <BrandingEditor />
             </div>
           )}
@@ -113,14 +113,14 @@ export default function Onboarding({ status, onDone }: Props) {
           {step === 3 && (
             <div className="space-y-4">
               <h2 className="text-lg sm:text-xl font-semibold">Second-brain vault</h2>
-              <p className="text-muted text-sm">Absolute path. Created if missing. Standard subfolders seeded (inbox, people, projects, daily, meta).</p>
+              <p className="text-muted-foreground text-sm">Absolute path. Created if missing. Standard subfolders seeded (inbox, people, projects, daily, meta).</p>
               <Field label="Vault folder"><Input className="font-mono" value={vaultPath} onChange={(e) => setVaultPath(e.target.value)} placeholder="/Users/you/Documents/brain" /></Field>
             </div>
           )}
           {step === 4 && (
             <div className="space-y-4">
               <h2 className="text-lg sm:text-xl font-semibold">Link Telegram</h2>
-              <ol className="text-sm text-muted space-y-1 list-decimal list-inside">
+              <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
                 <li>Open Telegram → <span className="text-text">@BotFather</span>.</li>
                 <li>Send <span className="font-mono text-text">/newbot</span>, follow prompts.</li>
                 <li>Paste token below.</li>

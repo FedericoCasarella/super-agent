@@ -5,6 +5,7 @@ import { api } from '../api';
 import { Button, Card, Chip, Field, Input, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { Plus, Bot, Trash2 } from 'lucide-react';
+import DataTable, { Column } from '../components/DataTable';
 
 type Agent = {
   id: number; name: string; role: string | null; description: string | null;
@@ -51,38 +52,73 @@ export function CustomAgentsPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end gap-2">
-        <Chip>{items.length}</Chip>
-        <Button variant="ghost" size="sm" onClick={() => nav('/teams')}>Teams</Button>
-        <Button size="sm" onClick={() => { setCreating(true); setOpen({ id: 0 as any, name: '', role: '', description: '', system_prompt: '', skills: [], model: null, icon: null, color: null }); }}>
-          <Plus size={14} className="inline mr-1 -mt-0.5" />Nuovo custom agent
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {items.map((a) => (
-          <div key={a.id} onClick={() => { setCreating(false); setOpen(a); }} className="cursor-pointer hover:translate-y-[-2px] transition"><Card>
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-start gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0" style={{ background: (a.color ?? '#c084fc') + '22', border: `1px solid ${a.color ?? '#c084fc'}55` }}>
+      <DataTable<Agent>
+        persistKey="custom-agents"
+        refreshKey={items.length}
+        fetcher={async ({ q, page, pageSize, sort }) => {
+          let rows = items;
+          if (q) {
+            const n = q.toLowerCase();
+            rows = rows.filter((r) =>
+              r.name.toLowerCase().includes(n) ||
+              (r.role ?? '').toLowerCase().includes(n) ||
+              (r.description ?? '').toLowerCase().includes(n)
+            );
+          }
+          if (sort) {
+            rows = [...rows].sort((a: any, b: any) => {
+              const av = a[sort.key]; const bv = b[sort.key];
+              if (av == null) return 1; if (bv == null) return -1;
+              return sort.dir === 'asc' ? (av > bv ? 1 : -1) : (av > bv ? -1 : 1);
+            });
+          }
+          const total = rows.length;
+          const start = page * pageSize;
+          return { rows: rows.slice(start, start + pageSize), total };
+        }}
+        rowKey={(a) => a.id}
+        searchPlaceholder="Cerca per nome, ruolo, descrizione…"
+        onRowClick={(a) => { setCreating(false); setOpen(a); }}
+        columns={[
+          {
+            key: 'name', header: 'Nome', sortable: true,
+            render: (a) => (
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-md flex items-center justify-center text-sm shrink-0" style={{ background: (a.color ?? '#c084fc') + '22', border: `1px solid ${a.color ?? '#c084fc'}55` }}>
                   {a.icon || '🤖'}
                 </div>
                 <div className="min-w-0">
-                  <div className="font-semibold truncate">{a.name}</div>
-                  {a.role && <div className="text-xs text-muted truncate">{a.role}</div>}
+                  <div className="font-medium truncate">{a.name}</div>
+                  {a.role && <div className="text-[11px] text-muted-foreground truncate">{a.role}</div>}
                 </div>
               </div>
-              <button onClick={(e) => { e.stopPropagation(); del(a); }} className="text-muted hover:text-red-300 p-1"><Trash2 size={13} /></button>
-            </div>
-            {a.description && <p className="text-xs text-muted mt-2 line-clamp-2">{a.description}</p>}
-            <div className="mt-2 flex flex-wrap gap-1">
-              {(a.skills ?? []).slice(0, 4).map((s) => <span key={s} className="text-[9px] px-1.5 py-0.5 rounded-full bg-surface2 border border-border text-muted font-mono">{s.replace(/^mcp__super_agent__/, '')}</span>)}
-              {(a.skills?.length ?? 0) > 4 && <span className="text-[9px] text-muted">+{a.skills.length - 4}</span>}
-            </div>
-          </Card></div>
-        ))}
-        {items.length === 0 && <Card><div className="text-muted text-sm">Nessun agente. Crea il primo.</div></Card>}
-      </div>
+            ),
+          },
+          { key: 'description', header: 'Descrizione', render: (a) => <span className="text-xs text-muted-foreground line-clamp-2">{a.description ?? '—'}</span> },
+          { key: 'model', header: 'Model', sortable: true, width: 'w-44', render: (a) => <span className="font-mono text-xs">{a.model ?? 'default'}</span> },
+          {
+            key: 'skills', header: 'Skills', width: 'w-64',
+            render: (a) => (
+              <div className="flex flex-wrap gap-1">
+                {(a.skills ?? []).slice(0, 3).map((s) => <span key={s} className="text-[9px] px-1.5 py-0.5 rounded-full bg-surface2 border border-border text-muted-foreground font-mono">{s.replace(/^mcp__super_agent__/, '')}</span>)}
+                {(a.skills?.length ?? 0) > 3 && <span className="text-[9px] text-muted-foreground">+{a.skills.length - 3}</span>}
+              </div>
+            ),
+          },
+          {
+            key: 'actions', header: '', width: 'w-12', align: 'right',
+            render: (a) => (
+              <button onClick={(e) => { e.stopPropagation(); del(a); }} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
+            ),
+          },
+        ] as Column<Agent>[]}
+        emptyText="Nessun agente. Crea il primo."
+        toolbar={
+          <Button size="sm" onClick={() => { setCreating(true); setOpen({ id: 0 as any, name: '', role: '', description: '', system_prompt: '', skills: [], model: null, icon: null, color: null }); }}>
+            <Plus size={14} /> Nuovo custom agent
+          </Button>
+        }
+      />
 
       {open && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md p-4" onClick={() => { setOpen(null); setCreating(false); }}>
@@ -110,7 +146,7 @@ export function CustomAgentsPanel() {
                   {COMMON_SKILLS.map((s) => {
                     const active = (open.skills ?? []).includes(s);
                     return (
-                      <button key={s} onClick={() => setOpen({ ...open, skills: active ? open.skills.filter((x) => x !== s) : [...(open.skills ?? []), s] })} className={`text-[10px] px-2 py-1 rounded-full font-mono ${active ? 'bg-accent/20 text-accent border border-accent/40' : 'bg-surface border border-border text-muted'}`}>
+                      <button key={s} onClick={() => setOpen({ ...open, skills: active ? open.skills.filter((x) => x !== s) : [...(open.skills ?? []), s] })} className={`text-[10px] px-2 py-1 rounded-full font-mono ${active ? 'bg-accent/20 text-accent border border-accent/40' : 'bg-surface border border-border text-muted-foreground'}`}>
                         {s.replace(/^mcp__super_agent__/, '')}
                       </button>
                     );

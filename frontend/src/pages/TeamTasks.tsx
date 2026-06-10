@@ -5,6 +5,7 @@ import { api } from '../api';
 import { useLiveData } from '../ws';
 import { Button, Card, Chip, Field, Input, useToast } from '../components/ui';
 import { Plus } from 'lucide-react';
+import DataTable, { Column } from '../components/DataTable';
 
 type Task = { id: number; team_id: number | null; agent_id: number | null; title: string; status: string; created_at: string };
 
@@ -44,13 +45,6 @@ export function TeamTasksPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end gap-2">
-        <Chip>{tasks.length}</Chip>
-        <Button variant="ghost" size="sm" onClick={() => nav('/custom-agents')}>Agents</Button>
-        <Button variant="ghost" size="sm" onClick={() => nav('/teams')}>Teams</Button>
-        <Button size="sm" onClick={() => setCreating(true)}><Plus size={14} className="inline mr-1 -mt-0.5" />Nuovo team task</Button>
-      </div>
-
       {creating && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md p-4" onClick={() => setCreating(false)}>
           <div onClick={(e) => e.stopPropagation()} className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -84,18 +78,65 @@ export function TeamTasksPanel() {
         document.body,
       )}
 
-      <div className="space-y-2">
-        {tasks.map((t) => (
-          <button key={t.id} onClick={() => nav(`/team-tasks/${t.id}`)} className="w-full text-left p-3 rounded-xl border border-border/60 hover:border-accent/40 hover:bg-surface2/40 transition flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <div className="font-medium truncate">{t.title}</div>
-              <div className="text-[10px] text-muted font-mono">#{t.id} · {new Date(t.created_at).toLocaleString('it-IT')}</div>
-            </div>
-            {statusChip(t.status)}
-          </button>
-        ))}
-        {tasks.length === 0 && <Card><div className="text-muted text-sm">Nessun task ancora.</div></Card>}
-      </div>
+      <DataTable<Task>
+        persistKey="tasks.team"
+        fetcher={async ({ q, page, pageSize, filters, sort }) => {
+          let rows = tasks;
+          const states: string[] = filters.status ?? [];
+          if (states.length) rows = rows.filter((r) => states.includes(r.status));
+          if (q) {
+            const n = q.toLowerCase();
+            rows = rows.filter((r) => r.title.toLowerCase().includes(n) || String(r.id).includes(n));
+          }
+          if (sort) {
+            rows = [...rows].sort((a: any, b: any) => {
+              const av = a[sort.key]; const bv = b[sort.key];
+              if (av == null) return 1; if (bv == null) return -1;
+              return sort.dir === 'asc' ? (av > bv ? 1 : -1) : (av > bv ? -1 : 1);
+            });
+          }
+          const total = rows.length;
+          const start = page * pageSize;
+          return { rows: rows.slice(start, start + pageSize), total };
+        }}
+        refreshKey={tasks.length}
+        rowKey={(r) => r.id}
+        searchPlaceholder="Cerca per titolo o #id…"
+        onRowClick={(r) => nav(`/team-tasks/${r.id}`)}
+        chipFilters={[
+          {
+            key: 'status', label: 'Stato', multi: true,
+            options: [
+              { value: 'running',   label: 'In corso',  tone: 'accent' },
+              { value: 'done',      label: 'Completi',  tone: 'on' },
+              { value: 'error',     label: 'Errori',    tone: 'err' },
+              { value: 'cancelled', label: 'Annullati', tone: 'warn' },
+              { value: 'pending',   label: 'In attesa', tone: 'default' },
+            ],
+          },
+        ]}
+        columns={[
+          {
+            key: 'title', header: 'Titolo', sortable: true,
+            render: (r) => (
+              <div className="min-w-0">
+                <div className="font-medium truncate">{r.title}</div>
+                <div className="text-[10px] text-muted-foreground font-mono">#{r.id}</div>
+              </div>
+            ),
+          },
+          {
+            key: 'status', header: 'Stato', sortable: true, width: 'w-32',
+            render: (r) => statusChip(r.status),
+          },
+          {
+            key: 'created_at', header: 'Avviato', sortable: true, width: 'w-44',
+            render: (r) => <span className="text-xs text-muted-foreground font-mono">{new Date(r.created_at).toLocaleString('it-IT')}</span>,
+          },
+        ] as Column<Task>[]}
+        emptyText="Nessun task ancora."
+        toolbar={<Button size="sm" onClick={() => setCreating(true)}><Plus size={14} /> Nuovo team task</Button>}
+      />
     </div>
   );
 }

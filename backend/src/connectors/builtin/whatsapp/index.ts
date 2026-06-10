@@ -11,6 +11,13 @@ import { bus } from '../../../bus.js';
 import { upsertPerson, findPersonByPhone } from '../people/index.js';
 import { query } from '../../../db/index.js';
 
+// Debug logs gated behind SUPER_AGENT_WA_DEBUG=1. Default off so the console
+// isn't drowned in connection.update spam, history-sync chatter, pic-loop
+// status, etc. Real errors still log via console.error.
+const DBG = process.env.SUPER_AGENT_WA_DEBUG === '1';
+const dlog = (...args: any[]) => { if (DBG) console.log(...args); };
+const dwarn = (...args: any[]) => { if (DBG) console.warn(...args); };
+
 type Session = {
   sock: WASocket;
   status: 'starting' | 'qr' | 'connected' | 'closed';
@@ -85,7 +92,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
       if (entries.some((e) => e.endsWith('.json'))) needsWipe = true;
     }
     if (needsWipe) {
-      console.log(`[wa:u${userId}] partial/orphan creds detected, wiping ${dir}`);
+      dlog(`[wa:u${userId}] partial/orphan creds detected, wiping ${dir}`);
       await fs.rm(dir, { recursive: true, force: true });
       await fs.mkdir(dir, { recursive: true });
     }
@@ -93,14 +100,14 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
   // 60s cooldown between rapid pairing attempts — WA rate-limits and returns 401
   await new Promise((r) => setTimeout(r, 1500));
   const { state, saveCreds } = await useMultiFileAuthState(dir);
-  console.log(`[wa:u${userId}] auth state loaded, registered=${(state.creds as any)?.registered ?? false}`);
+  dlog(`[wa:u${userId}] auth state loaded, registered=${(state.creds as any)?.registered ?? false}`);
   // Pull latest supported WA Web protocol version
   let version: [number, number, number] | undefined;
   try {
     const v = await fetchLatestBaileysVersion();
     version = v.version as any;
-    console.log(`[wa:u${userId}] using WA version ${version?.join('.')}`);
-  } catch (e) { console.warn(`[wa:u${userId}] could not fetch latest WA version`, e); }
+    dlog(`[wa:u${userId}] using WA version ${version?.join('.')}`);
+  } catch (e) { dwarn(`[wa:u${userId}] could not fetch latest WA version`, e); }
   const sock = makeWASocket({
     auth: state,
     logger,
@@ -123,7 +130,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
   const isFreshPair = !credsAny.me?.id && !credsAny.noiseKey;
   const session: Session = { sock, status: 'starting', startedAt: Date.now(), needsHistoryWipe: isFreshPair };
   sessions.set(userId, session);
-  if (isFreshPair) console.log(`[wa:u${userId}] fresh pair detected — will wipe stale rows on first history batch`);
+  if (isFreshPair) dlog(`[wa:u${userId}] fresh pair detected — will wipe stale rows on first history batch`);
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -135,7 +142,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
     const errMsg = (lastDisconnect?.error as any)?.message ?? '';
     const isConflict = /conflict|replaced/i.test(errMsg);
     if ((connection || qr || lastDisconnect?.error) && !isConflict) {
-      console.log(`[wa:u${userId}] connection.update`, { connection, hasQr: !!qr, errMsg });
+      dlog(`[wa:u${userId}] connection.update`, { connection, hasQr: !!qr, errMsg });
     }
     if (qr) {
       session.status = 'qr';
@@ -144,17 +151,17 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
         session.qrDataUrl = await QR.toDataURL(qr, { width: 320, margin: 1 });
       } catch {}
       bus.emit('wa:qr', { userId, qr: session.qrDataUrl });
-      console.log(`[wa:u${userId}] QR ready`);
+      dlog(`[wa:u${userId}] QR ready`);
     }
     if (connection === 'open') {
       session.status = 'connected';
       session.me = { jid: sock.user?.id ?? '', name: sock.user?.name };
       bus.emit('wa:connected', { userId, jid: session.me.jid });
-      console.log(`[wa:u${userId}] connected as ${session.me.jid}`);
+      dlog(`[wa:u${userId}] connected as ${session.me.jid}`);
       // Kick the avatar refresher in the background — fills cached profile
       // pics for every contact and refreshes URLs older than 7 days. Throttled
       // to avoid 429s from WA.
-      void refreshProfilePicsLoop(userId, sock).catch((e) => console.warn(`[wa:u${userId}] pic loop`, e?.message));
+      void refreshProfilePicsLoop(userId, sock).catch((e) => dwarn(`[wa:u${userId}] pic loop`, e?.message));
     }
     if (connection === 'close') {
       session.status = 'closed';
@@ -162,7 +169,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
       const shouldRetry = code !== DisconnectReason.loggedOut;
       bus.emit('wa:closed', { userId, code });
       // 440 = conflict (another client). Mute — Baileys auto-reconnects.
-      if (code !== 440) console.log(`[wa:u${userId}] closed (code=${code}, retry=${shouldRetry})`);
+      if (code !== 440) dlog(`[wa:u${userId}] closed (code=${code}, retry=${shouldRetry})`);
       sessions.delete(userId);
       // Explicit logout = user disconnected from phone or pressed Reset.
       // Wipe local rows so next pair starts clean (no @lid duplicate stacking).
@@ -170,7 +177,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
         try {
           const dm = await query<{ c: number }>(`WITH d AS (DELETE FROM wa_messages WHERE user_id=$1 RETURNING 1) SELECT count(*)::int AS c FROM d`, [userId]);
           const dc = await query<{ c: number }>(`WITH d AS (DELETE FROM wa_contacts WHERE user_id=$1 RETURNING 1) SELECT count(*)::int AS c FROM d`, [userId]);
-          console.log(`[wa:u${userId}] loggedOut wipe: ${dm[0]?.c ?? 0} messages, ${dc[0]?.c ?? 0} contacts removed`);
+          dlog(`[wa:u${userId}] loggedOut wipe: ${dm[0]?.c ?? 0} messages, ${dc[0]?.c ?? 0} contacts removed`);
         } catch (e) { console.error(`[wa:u${userId}] loggedOut wipe failed`, e); }
       }
       if (shouldRetry) setTimeout(() => startWaForUser(userId).catch(() => {}), 3000);
@@ -179,7 +186,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
 
   sock.ev.on('messages.upsert', async (m: any) => {
     // Accept notify / append / others; dedup at DB level
-    console.log(`[wa:u${userId}] messages.upsert type=${m.type} n=${m.messages?.length ?? 0}`);
+    dlog(`[wa:u${userId}] messages.upsert type=${m.type} n=${m.messages?.length ?? 0}`);
     // Defensive: if Baileys never emitted a clean `connection: 'open'` event
     // (some builds skip it) but messages are flowing, treat the session as
     // alive and start the avatar loop. Idempotent — guarded by picLoopRunning.
@@ -187,10 +194,10 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
       session.status = 'connected';
       if (!session.me?.jid && sock.user?.id) session.me = { jid: sock.user.id, name: sock.user.name };
       bus.emit('wa:connected', { userId, jid: session.me?.jid ?? '' });
-      console.log(`[wa:u${userId}] connected (inferred from messages.upsert) as ${session.me?.jid ?? '?'}`);
+      dlog(`[wa:u${userId}] connected (inferred from messages.upsert) as ${session.me?.jid ?? '?'}`);
     }
     if (!picLoopRunning.has(userId)) {
-      void refreshProfilePicsLoop(userId, sock).catch((e) => console.warn(`[wa:u${userId}] pic loop`, e?.message));
+      void refreshProfilePicsLoop(userId, sock).catch((e) => dwarn(`[wa:u${userId}] pic loop`, e?.message));
     }
     for (const msg of m.messages ?? []) {
       if (!msg.message) continue;
@@ -211,7 +218,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
       try {
         const dm = await query<{ c: number }>(`WITH d AS (DELETE FROM wa_messages WHERE user_id=$1 RETURNING 1) SELECT count(*)::int AS c FROM d`, [userId]);
         const dc = await query<{ c: number }>(`WITH d AS (DELETE FROM wa_contacts WHERE user_id=$1 RETURNING 1) SELECT count(*)::int AS c FROM d`, [userId]);
-        console.log(`[wa:u${userId}] pre-sync wipe: ${dm[0]?.c ?? 0} messages, ${dc[0]?.c ?? 0} contacts removed`);
+        dlog(`[wa:u${userId}] pre-sync wipe: ${dm[0]?.c ?? 0} messages, ${dc[0]?.c ?? 0} contacts removed`);
       } catch (e) { console.error(`[wa:u${userId}] pre-sync wipe failed`, e); }
     }
     if (contacts?.length) await upsertContacts(contacts);
@@ -224,7 +231,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
       if (!msg?.message) continue;
       try { await ingestMessage(userId, msg); n++; } catch {}
     }
-    console.log(`[wa:u${userId}] history sync: ${chats.length} chats, ${n} messages persisted`);
+    dlog(`[wa:u${userId}] history sync: ${chats.length} chats, ${n} messages persisted`);
     bus.emit('wa:synced', { userId, count: n, chats: chats.length });
   });
 
@@ -371,7 +378,7 @@ async function ingestMessage(userId: number, msg: proto.IWebMessageInfo) {
 
   // Skip downstream side-effects if message was already in DB (duplicate)
   if (!inserted) return;
-  console.log(`[wa:u${userId}] new msg ${id} from ${senderJid} chat=${fromJid}`);
+  dlog(`[wa:u${userId}] new msg ${id} from ${senderJid} chat=${fromJid}`);
 
   bus.emit('wa:message', {
     userId,
@@ -524,11 +531,13 @@ export async function suggestReply(userId: number, chatJid: string, opts: { hint
 
 export async function sendWaMessage(userId: number, chatJid: string, text: string, origin: string = 'user', source: 'user' | 'ai' = 'user'): Promise<{ ok: boolean; error?: string }> {
   const { logOutbound } = await import('../../../comm/outbound_log.js');
-  const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') {
-    await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, body: text, origin, error: 'WhatsApp non connesso' });
-    return { ok: false, error: 'WhatsApp non connesso' };
+  if (!(await ensureWaConnected(userId))) {
+    const cur = sessions.get(userId);
+    const err = cur?.status === 'qr' ? 'WhatsApp in attesa di pairing (QR)' : `WhatsApp non connesso (status=${cur?.status ?? 'none'})`;
+    await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, body: text, origin, error: err });
+    return { ok: false, error: err };
   }
+  const s = sessions.get(userId)!;
   if (!text || !text.trim()) {
     await logOutbound({ userId, channel: 'whatsapp', status: 'error', recipient: chatJid, body: text, origin, error: 'empty text' });
     return { ok: false, error: 'empty text' };
@@ -719,7 +728,7 @@ export async function chatMessages(userId: number, chatJid: string, limit = 200)
 // Manual merge: rewrite all messages of dupJids[] to canonJid.
 export async function mergeChats(userId: number, canonJid: string, dupJids: string[]): Promise<{ ok: boolean; touched: number; updatedChat: number; updatedSender: number; deletedCollisions: number }> {
   if (!dupJids.length) return { ok: true, touched: 0, updatedChat: 0, updatedSender: 0, deletedCollisions: 0 };
-  console.log(`[wa:u${userId}] mergeChats canon=${canonJid} dups=${dupJids.join(',')}`);
+  dlog(`[wa:u${userId}] mergeChats canon=${canonJid} dups=${dupJids.join(',')}`);
   // Delete collisions on (user_id, msg_id)
   const del = await query<{ id: number }>(
     `DELETE FROM wa_messages a USING wa_messages b
@@ -745,7 +754,7 @@ export async function mergeChats(userId: number, canonJid: string, dupJids: stri
     [userId],
   );
   const touched = r1.length + r2.length;
-  console.log(`[wa:u${userId}] merge done: deleted=${del.length} updated_chat=${r1.length} updated_sender=${r2.length}`);
+  dlog(`[wa:u${userId}] merge done: deleted=${del.length} updated_chat=${r1.length} updated_sender=${r2.length}`);
   return { ok: true, touched, updatedChat: r1.length, updatedSender: r2.length, deletedCollisions: del.length };
 }
 
@@ -782,7 +791,7 @@ export async function setChatDisplayOverride(
 
 // Manually cable a WA chat to a Person in the brain. Pass slug=null to unlink.
 export async function linkChatToPerson(userId: number, chatJid: string, slug: string | null): Promise<{ ok: boolean }> {
-  console.log(`[wa:link] u${userId} chat=${chatJid} → slug=${slug ?? 'NULL'}`);
+  dlog(`[wa:link] u${userId} chat=${chatJid} → slug=${slug ?? 'NULL'}`);
   if (slug !== null && typeof slug !== 'string') throw new Error('slug must be string or null');
   if (slug) {
     const exists = await query<{ slug: string }>(`SELECT slug FROM people WHERE user_id=$1 AND slug=$2 LIMIT 1`, [userId, slug]);
@@ -807,7 +816,7 @@ export async function linkChatToPerson(userId: number, chatJid: string, slug: st
     `SELECT linked_person_slug, display_name FROM wa_contacts WHERE user_id=$1 AND jid=$2`,
     [userId, chatJid],
   );
-  console.log(`[wa:link] post-write u${userId} chat=${chatJid} db.linked=${verify[0]?.linked_person_slug ?? 'NULL'} db.display=${verify[0]?.display_name ?? 'NULL'}`);
+  dlog(`[wa:link] post-write u${userId} chat=${chatJid} db.linked=${verify[0]?.linked_person_slug ?? 'NULL'} db.display=${verify[0]?.display_name ?? 'NULL'}`);
   return { ok: true };
 }
 
@@ -837,7 +846,7 @@ export async function wipeAllChats(userId: number): Promise<{ ok: boolean; delet
     const r = await query<{ n: number }>(`WITH d AS (DELETE FROM ig_threads WHERE user_id=$1 AND false RETURNING 1) SELECT count(*)::int AS n FROM d`, [userId]);
     threads = r[0]?.n ?? 0;
   } catch {}
-  console.log(`[wa:u${userId}] wipe: ${m[0]?.n ?? 0} msgs, ${c[0]?.n ?? 0} contacts`);
+  dlog(`[wa:u${userId}] wipe: ${m[0]?.n ?? 0} msgs, ${c[0]?.n ?? 0} contacts`);
   return { ok: true, deleted_messages: m[0]?.n ?? 0, deleted_contacts: c[0]?.n ?? 0, deleted_threads: threads };
 }
 
@@ -964,7 +973,7 @@ export async function dedupeChats(userId: number): Promise<{ merged: number; cha
     const canon = members[0];
     for (let i = 1; i < members.length; i++) res.push({ canon_jid: canon, dup_jid: members[i] });
   }
-  console.log(`[wa:u${userId}] dedupe found ${res.length} merge pairs`);
+  dlog(`[wa:u${userId}] dedupe found ${res.length} merge pairs`);
   // Diagnostic dump — what signals do we have? If `with_key=0` then NO chat
   // has any identity signal (phone/name/lid/notify/sender_name) and we'll
   // never group anything; tells the user the contact roster is unhydrated.
@@ -995,7 +1004,7 @@ export async function dedupeChats(userId: number): Promise<{ merged: number; cha
        FROM p`,
       [userId],
     );
-    console.log(`[wa:u${userId}] dedupe diagnostic:`, diag[0]);
+    dlog(`[wa:u${userId}] dedupe diagnostic:`, diag[0]);
   } catch {}
   let merged = 0;
   for (const r of res) {
@@ -1141,8 +1150,11 @@ export async function aiDedupeChats(userId: number): Promise<{ ok: boolean; merg
 }
 
 export async function refreshContactsAndGroups(userId: number): Promise<{ ok: boolean; groups: number; merged?: number; error?: string }> {
-  const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') return { ok: false, groups: 0, error: 'WhatsApp non connesso' };
+  if (!(await ensureWaConnected(userId))) {
+    const cur = sessions.get(userId);
+    return { ok: false, groups: 0, error: cur?.status === 'qr' ? 'WhatsApp in attesa di pairing (QR)' : `WhatsApp non connesso (status=${cur?.status ?? 'none'})` };
+  }
+  const s = sessions.get(userId)!;
   try {
     // Fetch all groups + participants
     const all: any = await (s.sock as any).groupFetchAllParticipating?.();
@@ -1179,8 +1191,11 @@ export async function refreshContactsAndGroups(userId: number): Promise<{ ok: bo
 }
 
 export async function syncOneChat(userId: number, chatJid: string, batches = 3): Promise<{ ok: boolean; requested: number; error?: string }> {
-  const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') return { ok: false, requested: 0, error: 'WhatsApp non connesso' };
+  if (!(await ensureWaConnected(userId))) {
+    const cur = sessions.get(userId);
+    return { ok: false, requested: 0, error: cur?.status === 'qr' ? 'WhatsApp in attesa di pairing (QR)' : `WhatsApp non connesso (status=${cur?.status ?? 'none'})` };
+  }
+  const s = sessions.get(userId)!;
   let requested = 0;
   for (let i = 0; i < batches; i++) {
     const rows = await query<{ msg_id: string; ts: string }>(
@@ -1202,9 +1217,46 @@ export async function syncOneChat(userId: number, chatJid: string, batches = 3):
   return { ok: true, requested };
 }
 
+// Wait until the in-memory WA session for `userId` reports `connected`, or
+// until `timeoutMs` elapses. Returns true on success. If no session exists,
+// triggers `startWaForUser` first — so a stale UI button press after backend
+// restart (or after Baileys auto-reconnected mid-handshake) doesn't error.
+async function ensureWaConnected(userId: number, timeoutMs = 12_000): Promise<boolean> {
+  const start = Date.now();
+  let s = sessions.get(userId);
+  // No session OR session is closed/stale → kick off a fresh start. Without
+  // this branch a previously-closed session (phone-side disconnect, network
+  // drop) would sit in `status='closed'` forever and the agent would keep
+  // replying "WA idle/disconnected".
+  if (!s || s.status === 'closed') {
+    if (s && s.status === 'closed') sessions.delete(userId);
+    try { await startWaForUser(userId); } catch {}
+    s = sessions.get(userId);
+  }
+  while (Date.now() - start < timeoutMs) {
+    s = sessions.get(userId);
+    if (s?.status === 'connected') return true;
+    // Status 'qr' means awaiting pairing — no point waiting further.
+    if (s?.status === 'qr') return false;
+    // Closed mid-wait → trigger another restart and keep polling.
+    if (s?.status === 'closed') {
+      sessions.delete(userId);
+      try { await startWaForUser(userId); } catch {}
+    }
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  return sessions.get(userId)?.status === 'connected';
+}
+
 export async function syncWaForUser(userId: number): Promise<{ ok: boolean; chats: number; requested: number; hint?: string; error?: string }> {
-  const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') return { ok: false, chats: 0, requested: 0, error: 'WhatsApp non connesso' };
+  if (!(await ensureWaConnected(userId))) {
+    const cur = sessions.get(userId);
+    const detail = cur?.status === 'qr'
+      ? 'WhatsApp in attesa di pairing (QR). Apri /whatsapp e scansiona.'
+      : `WhatsApp non connesso (status=${cur?.status ?? 'none'})`;
+    return { ok: false, chats: 0, requested: 0, error: detail };
+  }
+  const s = sessions.get(userId)!;
   // Sync ALL chats — most-recent first, throttled.
   const PER_CHAT_DELAY_MS = 600;
   const rows = await query<{ chat_jid: string; msg_id: string; ts: string }>(
@@ -1263,7 +1315,18 @@ export async function logoutWaForUser(userId: number): Promise<void> {
 
 export function getWaStatus(userId: number): { status: string; qr?: string; me?: any } {
   const s = sessions.get(userId);
-  if (!s) return { status: 'idle' };
+  if (!s) {
+    // Auto-recover: fire-and-forget restart so the NEXT status check finds an
+    // active session. Avoids the agent looping on "idle → tell user QR".
+    startWaForUser(userId).catch(() => {});
+    return { status: 'starting' };
+  }
+  if (s.status === 'closed') {
+    // Stale/closed → kick a restart and report 'starting' to the caller.
+    sessions.delete(userId);
+    startWaForUser(userId).catch(() => {});
+    return { status: 'starting' };
+  }
   return { status: s.status, qr: s.qrDataUrl, me: s.me };
 }
 
@@ -1281,11 +1344,11 @@ const picLoopRunning = new Set<number>();
 
 async function refreshProfilePicsLoop(userId: number, sock: any) {
   if (picLoopRunning.has(userId)) {
-    console.log(`[wa:u${userId}] pic loop already running, skip`);
+    dlog(`[wa:u${userId}] pic loop already running, skip`);
     return;
   }
   picLoopRunning.add(userId);
-  console.log(`[wa:u${userId}] pic loop started`);
+  dlog(`[wa:u${userId}] pic loop started`);
   try {
     while (sessions.get(userId)?.status === 'connected') {
       try {
@@ -1299,7 +1362,7 @@ async function refreshProfilePicsLoop(userId: number, sock: any) {
           [userId, String(PIC_STALE_DAYS), PIC_BATCH_SIZE],
         );
         if (rows.length > 0) {
-          console.log(`[wa:u${userId}] pic batch: ${rows.length} contacts to refresh`);
+          dlog(`[wa:u${userId}] pic batch: ${rows.length} contacts to refresh`);
           let hits = 0;
           let misses = 0;
           for (const r of rows) {
@@ -1321,16 +1384,16 @@ async function refreshProfilePicsLoop(userId: number, sock: any) {
             bus.emit('wa:contact_pic', { userId, jid: r.jid, url });
             await new Promise((res) => setTimeout(res, PIC_INTER_REQ_MS));
           }
-          console.log(`[wa:u${userId}] pic batch done: ${hits} hits, ${misses} misses`);
+          dlog(`[wa:u${userId}] pic batch done: ${hits} hits, ${misses} misses`);
         }
-      } catch (e: any) { console.warn(`[wa:u${userId}] pic loop iter`, e?.message); }
+      } catch (e: any) { dwarn(`[wa:u${userId}] pic loop iter`, e?.message); }
       // Faster cycles when there's likely more to fetch (lots of nulls);
       // settle into slower cadence once the queue is short.
       await new Promise((res) => setTimeout(res, PIC_LOOP_MS));
     }
   } finally {
     picLoopRunning.delete(userId);
-    console.log(`[wa:u${userId}] pic loop stopped`);
+    dlog(`[wa:u${userId}] pic loop stopped`);
   }
 }
 
@@ -1361,9 +1424,18 @@ const connector: Connector = {
   tools: [
     {
       name: 'status',
-      description: 'Stato della sessione WhatsApp (idle/qr/connected).',
+      description: 'Stato sessione WhatsApp. Riconnette attivamente se chiusa. Ritorna {status, recovering, action_required}. action_required="scan_qr" SOLO quando status="qr" — in TUTTI gli altri casi NON dire all\'utente di scansionare il QR. Se status="starting"/"connecting" la sessione si sta riconnettendo da sola (~10s), riprova dopo. Se status="connected" puoi mandare messaggi.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      handler: async (ctx) => getWaStatus(ctx.userId),
+      handler: async (ctx) => {
+        // Active recovery: try up to 8s to reach 'connected' before reporting.
+        await ensureWaConnected(ctx.userId, 8_000).catch(() => {});
+        const r = getWaStatus(ctx.userId);
+        return {
+          ...r,
+          recovering: r.status === 'starting' || r.status === 'connecting',
+          action_required: r.status === 'qr' ? 'scan_qr' : 'none',
+        };
+      },
     },
     {
       name: 'list_chats',

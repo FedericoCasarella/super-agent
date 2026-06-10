@@ -976,7 +976,7 @@ export default function BrainGraph3DConstellation({
         <div className="absolute inset-0 flex items-center justify-center z-10"><BrainLoading size={140} label="Caricamento cervello…" /></div>
       )}
       {loaded && data.nodes.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center text-muted text-sm z-10">empty vault</div>
+        <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm z-10">empty vault</div>
       )}
       <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-1">
         <button
@@ -994,7 +994,7 @@ export default function BrainGraph3DConstellation({
           className={`w-10 h-10 rounded-xl border backdrop-blur transition flex items-center justify-center text-xs font-semibold ${
             showLabels
               ? 'bg-accent/20 border-accent/60 text-accent'
-              : 'bg-surface2/70 border-border text-muted hover:border-accent/50'
+              : 'bg-surface2/70 border-border text-muted-foreground hover:border-accent/50'
           }`}
           title={showLabels ? 'Nascondi nomi' : 'Mostra nomi'}
         >Aa</button>
@@ -1009,7 +1009,7 @@ export default function BrainGraph3DConstellation({
             className={`w-10 h-10 rounded-xl border backdrop-blur transition flex items-center justify-center ${
               explorerOpen
                 ? 'bg-accent/20 border-accent/60 text-accent'
-                : 'bg-surface2/70 border-border text-muted hover:border-accent/50'
+                : 'bg-surface2/70 border-border text-muted-foreground hover:border-accent/50'
             }`}
             title={explorerOpen ? 'Nascondi file explorer' : 'Mostra file explorer'}
           >

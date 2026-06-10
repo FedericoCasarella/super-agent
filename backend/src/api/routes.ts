@@ -42,6 +42,10 @@ router.post('/tools/:name', async (req, res) => {
 });
 
 // All routes below require auth
+// Liveness probe — no auth, used by the frontend to detect "backend down"
+// and show a blocking overlay until it comes back.
+router.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
 router.use(requireUser);
 
 router.get('/status', async (req, res) => {
@@ -88,6 +92,110 @@ router.get('/messages', async (req, res) => {
     [req.user!.id, limit]
   );
   res.json(rows.reverse());
+});
+
+// Live page KPIs — agents-now, agents-24h, people-touched-24h, upcoming
+// scheduled contacts (channel + modality). Single round-trip; client renders.
+router.get('/live/kpis', async (req, res) => {
+  try {
+    const u = req.user!.id;
+    // Active agents NOW: running sub_agents + running team_tasks
+    const nowAgg = await query<{ sub_now: number; team_now: number; internal_now: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND status='running') AS sub_now,
+         (SELECT count(*)::int FROM team_tasks WHERE user_id=$1 AND status='running') AS team_now,
+         (SELECT count(*)::int FROM internal_agents WHERE user_id=$1 AND status='running') AS internal_now`,
+      [u],
+    ).catch(() => [{ sub_now: 0, team_now: 0, internal_now: 0 }]);
+
+    // Agents activated in last 24h
+    const last24Agg = await query<{ sub_24h: number; team_24h: number; internal_24h: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS sub_24h,
+         (SELECT count(*)::int FROM team_tasks WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS team_24h,
+         (SELECT count(*)::int FROM internal_agents WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS internal_24h`,
+      [u],
+    ).catch(() => [{ sub_24h: 0, team_24h: 0, internal_24h: 0 }]);
+
+    // People involved in agentic work last 24h — distinct recipients from
+    // outbound_log filtered to agent / sub-agent / perk origins.
+    const peopleAgg = await query<{ c: number }>(
+      `SELECT count(DISTINCT recipient)::int AS c
+       FROM outbound_log
+       WHERE user_id=$1
+         AND status='sent'
+         AND ts > now() - INTERVAL '24 hours'
+         AND recipient IS NOT NULL
+         AND (origin = 'agent' OR origin LIKE 'subagent:%' OR origin LIKE 'perk:%' OR origin LIKE 'team:%')`,
+      [u],
+    ).catch(() => [{ c: 0 }]);
+
+    // Upcoming scheduled contacts — compute next_run_at from cron expression
+    // since scheduled_tasks doesn't materialize it.
+    const upcoming = await query<{ id: number; name: string; cron: string; action_type: string; action_payload: any }>(
+      `SELECT id, name, cron, action_type, action_payload
+       FROM scheduled_tasks
+       WHERE user_id=$1 AND enabled=true
+       LIMIT 50`,
+      [u],
+    ).catch(() => []);
+    function inferChannel(t: any): string {
+      const blob = (`${t.name ?? ''} ${JSON.stringify(t.action_payload ?? {})}`).toLowerCase();
+      if (/whatsapp|wa\b/.test(blob)) return 'whatsapp';
+      if (/instagram|\big\b/.test(blob)) return 'instagram';
+      if (/telegram|\btg\b/.test(blob)) return 'telegram';
+      if (/gmail|email|mail|imap|smtp/.test(blob)) return 'email';
+      return 'agent';
+    }
+    function inferModality(t: any): string {
+      const blob = (`${t.name ?? ''} ${JSON.stringify(t.action_payload ?? {})}`).toLowerCase();
+      if (/community|broadcast|gruppo|group|many/.test(blob)) return '1:many';
+      if (/thread|conversazione|conversation/.test(blob)) return 'thread';
+      return '1:1';
+    }
+    const { CronExpressionParser } = await import('cron-parser');
+    const upcomingMapped = upcoming
+      .map((t) => {
+        let next: string | null = null;
+        try { next = CronExpressionParser.parse(t.cron, { tz: 'Europe/Rome' }).next().toISOString(); } catch {}
+        return {
+          id: t.id, name: t.name, cron: t.cron, next_run_at: next,
+          channel: inferChannel(t), modality: inferModality(t),
+        };
+      })
+      .filter((t) => !!t.next_run_at)
+      .sort((a, b) => (a.next_run_at! < b.next_run_at! ? -1 : 1))
+      .slice(0, 12);
+
+    res.json({
+      agentsNow: (nowAgg[0]?.sub_now ?? 0) + (nowAgg[0]?.team_now ?? 0) + (nowAgg[0]?.internal_now ?? 0),
+      agents24h: (last24Agg[0]?.sub_24h ?? 0) + (last24Agg[0]?.team_24h ?? 0) + (last24Agg[0]?.internal_24h ?? 0),
+      peopleTouched24h: peopleAgg[0]?.c ?? 0,
+      upcoming: upcomingMapped,
+      breakdown: {
+        now: nowAgg[0] ?? {},
+        last24h: last24Agg[0] ?? {},
+      },
+    });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Message counts for KPI cards — backend computes from full table so values
+// don't cap at /messages?limit=100 (which was producing the "Msg 24h = 100"
+// constant on the live dashboard).
+router.get('/messages/counts', async (req, res) => {
+  try {
+    const r = await query<{ h24: number; d7: number; d30: number; total: number }>(
+      `SELECT
+         count(*) FILTER (WHERE ts > now() - INTERVAL '24 hours')::int AS h24,
+         count(*) FILTER (WHERE ts > now() - INTERVAL '7 days')::int  AS d7,
+         count(*) FILTER (WHERE ts > now() - INTERVAL '30 days')::int AS d30,
+         count(*)::int AS total
+       FROM messages WHERE user_id=$1`,
+      [req.user!.id],
+    );
+    res.json(r[0] ?? { h24: 0, d7: 0, d30: 0, total: 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
 // One-off test for the TTS connector: synthesizes a sample line via the
@@ -150,6 +258,26 @@ router.put('/connectors/:name', async (req, res) => {
     [req.user!.id, req.params.name, enabled ?? null, cfgJson]
   );
   bus.emit('connectors:changed');
+  // Fire connector's onConfigSaved hook so side-effects (e.g. registering
+  // external resources) run immediately.
+  try {
+    const { getConnector } = await import('../connectors/registry.js');
+    const conn = getConnector(req.params.name);
+    if (conn?.onConfigSaved) {
+      const rows = await query<{ config: any; state: any }>(
+        `SELECT config, state FROM connectors WHERE user_id=$1 AND name=$2`,
+        [req.user!.id, req.params.name],
+      );
+      const r = rows[0] ?? { config: {}, state: {} };
+      await conn.onConfigSaved({
+        userId: req.user!.id,
+        config: r.config ?? {},
+        state: r.state ?? {},
+        saveState: async () => {},
+        log: (msg, meta) => console.log(`[${req.params.name}:u${req.user!.id}] ${msg}`, meta ?? ''),
+      });
+    }
+  } catch (e) { console.error(`[connectors:${req.params.name}] onConfigSaved`, e); }
   res.json({ ok: true });
 });
 
@@ -242,6 +370,160 @@ router.get('/brain/note', async (req, res) => {
   const note = await readNote(userId, raw);
   if (!note) return res.status(404).json({ error: 'not found' });
   res.json(note);
+});
+
+// Save edited note content. Supports `<vault>::<rel>` ids. Keeps existing
+// frontmatter (data passed back from FE) so `gray-matter` re-serializes.
+router.put('/brain/note', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.body?.path ?? '');
+    const content = String(req.body?.content ?? '');
+    const frontmatter = req.body?.data && typeof req.body.data === 'object' ? req.body.data : {};
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const matter = (await import('gray-matter')).default;
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    const full = path.join(vaultRoot, rel);
+    const md = matter.stringify(content, frontmatter);
+    await fs.mkdir(path.dirname(full), { recursive: true });
+    await fs.writeFile(full, md, 'utf8');
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Delete note from disk. Supports `<vault>::<rel>` ids.
+router.delete('/brain/note', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.query.path ?? '');
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    const full = path.join(vaultRoot, rel);
+    await fs.unlink(full);
+    // Also drop the row from brain_index if present.
+    try { await query(`DELETE FROM brain_index WHERE user_id=$1 AND path=$2`, [userId, rel]); } catch {}
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Reveal a vault path in the OS file manager (Finder on macOS, Explorer on
+// Windows, xdg-open on Linux). Accepts `<vault>::<rel>` or bare rel. If the
+// resolved path is a file, opens its PARENT folder with the file highlighted
+// when the platform supports it.
+router.post('/brain/reveal', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.body?.path ?? req.query?.path ?? '');
+    if (!raw) return res.status(400).json({ error: 'path missing' });
+    const path = await import('node:path');
+    const fs = await import('node:fs/promises');
+    const { spawn } = await import('node:child_process');
+    let vaultRoot: string | null = null;
+    let rel = raw;
+    if (raw.includes('::')) {
+      const { listVaults } = await import('../brain/vaults.js');
+      const vs = await listVaults(userId);
+      const [vaultName, r] = raw.split('::', 2);
+      const v = vs.find((x) => x.name === vaultName);
+      if (!v) return res.status(404).json({ error: 'vault not found' });
+      vaultRoot = v.path; rel = r;
+    } else {
+      const { getVaultRoot } = await import('../brain/vault.js');
+      vaultRoot = await getVaultRoot(userId);
+    }
+    if (!vaultRoot) return res.status(400).json({ error: 'no vault configured' });
+    // Resolve + sandbox: must stay under vaultRoot
+    const full = path.resolve(vaultRoot, rel);
+    const rootResolved = path.resolve(vaultRoot);
+    if (full !== rootResolved && !full.startsWith(rootResolved + path.sep)) {
+      return res.status(400).json({ error: 'path escapes vault' });
+    }
+    let stat;
+    try { stat = await fs.stat(full); } catch { return res.status(404).json({ error: 'not found' }); }
+    if (process.platform === 'darwin') {
+      // -R reveals the item in its parent folder (file or dir); for the vault
+      // root itself we just `open` it directly.
+      const args = stat.isFile() ? ['-R', full] : [full];
+      spawn('open', args, { detached: true, stdio: 'ignore' }).unref();
+    } else if (process.platform === 'win32') {
+      const args = stat.isFile() ? ['/select,', full] : [full];
+      spawn('explorer', args, { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      const target = stat.isFile() ? path.dirname(full) : full;
+      spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref();
+    }
+    res.json({ ok: true, path: full });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Brain snapshots: nightly backups + manual trigger.
+router.get('/brain/snapshots', async (req, res) => {
+  try {
+    const { listSnapshots } = await import('../brain/snapshots.js');
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 25), 1), 200);
+    const offset = Math.max(Number(req.query.offset ?? 0), 0);
+    const vault = req.query.vault ? String(req.query.vault) : undefined;
+    res.json(await listSnapshots(req.user!.id, { vault, limit, offset }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/brain/snapshots/run', async (req, res) => {
+  try {
+    const { createSnapshots } = await import('../brain/snapshots.js');
+    res.json({ ok: true, snapshots: await createSnapshots(req.user!.id, 'manual') });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/brain/snapshots/:id/restore', async (req, res) => {
+  try {
+    const { restoreSnapshot } = await import('../brain/snapshots.js');
+    res.json(await restoreSnapshot(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/brain/snapshots/:id', async (req, res) => {
+  try {
+    const { deleteSnapshot } = await import('../brain/snapshots.js');
+    res.json(await deleteSnapshot(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/brain/snapshots/dir', async (req, res) => {
+  try {
+    const { getSnapshotRoot } = await import('../brain/snapshots.js');
+    res.json({ dir: await getSnapshotRoot(req.user!.id) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/brain/snapshots/dir', async (req, res) => {
+  try {
+    const { setSnapshotRoot, getSnapshotRoot } = await import('../brain/snapshots.js');
+    await setSnapshotRoot(req.user!.id, String(req.body?.dir ?? ''));
+    res.json({ ok: true, dir: await getSnapshotRoot(req.user!.id) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
 router.get('/brain/stats', async (req, res) => {
@@ -1212,6 +1494,24 @@ router.get('/whatsapp/pending', async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   res.json({ count: await m.pendingCount(req.user!.id) });
 });
+router.get('/whatsapp/unread', async (req, res) => {
+  try {
+    const r = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM wa_messages
+       WHERE user_id=$1 AND from_me=false AND processed_at IS NULL
+         AND msg_id NOT LIKE 'chat:%' AND text <> ''`, [req.user!.id]);
+    res.json({ count: r[0]?.c ?? 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.get('/instagram/unread', async (req, res) => {
+  try {
+    const r = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM ig_messages
+       WHERE user_id=$1 AND from_me=false AND processed_at IS NULL AND text <> ''`,
+      [req.user!.id]);
+    res.json({ count: r[0]?.c ?? 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 router.post('/whatsapp/bonify', quotaGuard, async (req, res) => {
   const m = await import('../connectors/builtin/whatsapp/index.js');
   const limit = Number(req.body?.limit ?? 100);
@@ -1612,6 +1912,549 @@ router.get('/settings', async (req, res) => {
   res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message });
 });
 // Branding (per-user customizable title + logo)
+// ---------------------------------------------------------------------------
+// MAIL — full email client backed by mail_messages + mail_attachments.
+// ---------------------------------------------------------------------------
+// Per-account auto-sync preference. Stored in user settings under
+// `mail.autoSync.<accountLabel>`. When ON, the scheduler runs an
+// incremental sync + bonifica every cycle (so new mail lands in the
+// brain + people are linked without manual button presses).
+router.get('/mail/accounts/:label/auto-sync', async (req, res) => {
+  try {
+    const v = await getSetting<{ enabled: boolean }>(req.user!.id, `mail.autoSync.${req.params.label}`);
+    res.json({ enabled: !!v?.enabled });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+// Per-account HTML signature. Primary source = IMAP connector account config
+// (accounts[i].signature). Legacy fallback = settings key set by the older
+// dialog. Composer hits this at open time.
+router.get('/mail/accounts/:label/signature', async (req, res) => {
+  try {
+    const { listAccounts } = await import('../mail/service.js');
+    const accs = await listAccounts(req.user!.id);
+    const acc = accs.find((a) => a.label === req.params.label);
+    let html = (acc?.signature ?? '').trim();
+    let source = 'connector';
+    if (!html) {
+      const legacy = await getSetting<{ html: string }>(req.user!.id, `mail.signature.${req.params.label}`);
+      if (legacy?.html) { html = legacy.html; source = 'settings:legacy'; }
+    }
+    console.log(`[mail:sig:u${req.user!.id}] label="${req.params.label}" len=${html.length} source=${source}`);
+    res.json({ html });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.put('/mail/accounts/:label/auto-sync', async (req, res) => {
+  try {
+    await setSetting(req.user!.id, `mail.autoSync.${req.params.label}`, { enabled: !!req.body?.enabled });
+    res.json({ ok: true, enabled: !!req.body?.enabled });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Lookup person row by email address. Used by the mail UI to know whether
+// a sender is already linked to a brain person (and show the chip).
+router.get('/people/by-email', async (req, res) => {
+  try {
+    const addr = String(req.query.addr ?? '').toLowerCase().trim();
+    if (!addr) return res.json({ person: null });
+    const rows = await query<any>(
+      `SELECT id::int, slug, name, emails, phones, note_path
+       FROM people
+       WHERE user_id=$1 AND $2 = ANY(emails)
+       LIMIT 1`,
+      [req.user!.id, addr],
+    );
+    res.json({ person: rows[0] ?? null });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Bind an email address to an existing person. Adds it to people.emails[] if
+// not already there. Re-runs brain note write so "related" reflects the new
+// email mapping for downstream people_search lookups.
+router.post('/people/:slug/bind-email', async (req, res) => {
+  try {
+    const addr = String(req.body?.email ?? '').toLowerCase().trim();
+    if (!addr || !addr.includes('@')) return res.status(400).json({ error: 'email mancante o invalida' });
+    const { upsertPerson } = await import('../connectors/builtin/people/index.js');
+    // upsertPerson dedupes by email + name. We pass the existing slug as alias
+    // hint so the engine picks the right person; in practice just adding the
+    // email and letting downstream merge handle conflicts.
+    const slug = String(req.params.slug);
+    // Fetch existing person row
+    const rows = await query<{ id: number; emails: string[]; name: string }>(
+      `SELECT id::int, emails, name FROM people WHERE user_id=$1 AND slug=$2`,
+      [req.user!.id, slug],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'persona non trovata' });
+    const existing = new Set((rows[0].emails ?? []).map((e) => e.toLowerCase()));
+    if (!existing.has(addr)) {
+      const newEmails = [...(rows[0].emails ?? []), addr];
+      await query(`UPDATE people SET emails=$1, updated_at=now() WHERE id=$2`, [newEmails, rows[0].id]);
+      // Refresh the brain note for this person so the agent sees the new mapping.
+      try { await upsertPerson(req.user!.id, { name: rows[0].name, emails: [addr], note: `Email manualmente collegata via UI` }); } catch {}
+    }
+    res.json({ ok: true, slug, email: addr });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/accounts', async (req, res) => {
+  try {
+    const { listAccounts } = await import('../mail/service.js');
+    const accs = await listAccounts(req.user!.id);
+    // Diagnostic block when empty so the UI can guide the user without
+    // making the user crack open backend logs.
+    let diag: any = undefined;
+    if (!accs.length) {
+      const rows = await query<{ config: any; enabled: boolean }>(
+        `SELECT config, enabled FROM connectors WHERE user_id=$1 AND name='imap'`,
+        [req.user!.id],
+      );
+      const r = rows[0];
+      const rawAccs = (r?.config?.accounts ?? []) as any[];
+      diag = {
+        connectorRow: !!r,
+        enabled: r?.enabled ?? null,
+        rawCount: rawAccs.length,
+        firstMissing: rawAccs[0]
+          ? ['label', 'host', 'user', 'pass'].filter((k) => !rawAccs[0]?.[k])
+          : null,
+      };
+    }
+    res.json({
+      accounts: accs.map((a) => ({ label: a.label, address: a.user, host: a.host, mailbox: a.mailbox ?? 'INBOX' })),
+      diag,
+    });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/messages', async (req, res) => {
+  try {
+    const { listMessages } = await import('../mail/service.js');
+    const r = await listMessages(req.user!.id, {
+      account: req.query.account ? String(req.query.account) : undefined,
+      folder: req.query.folder ? String(req.query.folder) : undefined,
+      q: req.query.q ? String(req.query.q) : undefined,
+      unread: req.query.unread === 'true',
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      offset: req.query.offset ? Number(req.query.offset) : undefined,
+    });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/threads/:key', async (req, res) => {
+  try {
+    const { getThread } = await import('../mail/service.js');
+    const r = await getThread(req.user!.id, String(req.params.key));
+    res.json({ messages: r });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/messages/:id', async (req, res) => {
+  try {
+    const { getMessage } = await import('../mail/service.js');
+    const r = await getMessage(req.user!.id, Number(req.params.id));
+    if (!r) return res.status(404).json({ error: 'not found' });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.patch('/mail/messages/:id', async (req, res) => {
+  try {
+    const { setFlags } = await import('../mail/service.js');
+    await setFlags(req.user!.id, Number(req.params.id), {
+      seen: typeof req.body?.seen === 'boolean' ? req.body.seen : undefined,
+      flagged: typeof req.body?.flagged === 'boolean' ? req.body.flagged : undefined,
+      starred: typeof req.body?.starred === 'boolean' ? req.body.starred : undefined,
+    });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.delete('/mail/messages/:id', async (req, res) => {
+  try {
+    const { trashMessage } = await import('../mail/service.js');
+    await trashMessage(req.user!.id, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/attachments/:id', async (req, res) => {
+  try {
+    const { getAttachment } = await import('../mail/service.js');
+    const a = await getAttachment(req.user!.id, Number(req.params.id));
+    if (!a) return res.status(404).json({ error: 'not found' });
+    if (a.content_type) res.type(a.content_type);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(a.filename)}"`);
+    const fs = await import('node:fs');
+    fs.createReadStream(a.path).pipe(res);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/sync', async (req, res) => {
+  try {
+    const { syncAccount, syncAccountAllFolders } = await import('../mail/service.js');
+    const account = String(req.body?.account ?? '');
+    // If a specific folder is requested, sync just that. Otherwise iterate all.
+    if (req.body?.folder) {
+      const r = await syncAccount(req.user!.id, account, { limit: req.body?.limit ?? 1000, folder: String(req.body.folder) });
+      res.json(r);
+    } else {
+      const r = await syncAccountAllFolders(req.user!.id, account, { limit: req.body?.limit ?? 1000 });
+      res.json({
+        ok: r.ok,
+        fetched: r.totals.fetched,
+        skipped: r.totals.skipped,
+        scanned: r.totals.scanned,
+        diag: { perFolder: r.perFolder },
+      });
+    }
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.get('/mail/folders', async (req, res) => {
+  try {
+    const { listFolders } = await import('../mail/service.js');
+    const r = await listFolders(req.user!.id, String(req.query.account ?? ''));
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/bonify', async (req, res) => {
+  try {
+    const { bonifyAll } = await import('../mail/service.js');
+    const r = await bonifyAll(req.user!.id, {
+      account: req.body?.account ? String(req.body.account) : undefined,
+      force: !!req.body?.force,
+      limit: req.body?.limit ? Number(req.body.limit) : undefined,
+    });
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/messages/:id/bonify', async (req, res) => {
+  try {
+    const { bonifyOne } = await import('../mail/service.js');
+    const r = await bonifyOne(req.user!.id, Number(req.params.id), !!req.body?.force);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/send', upload.array('attachments', 10), async (req, res) => {
+  try {
+    const { sendMail } = await import('../mail/service.js');
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const b = req.body ?? {};
+    const refs: string[] = Array.isArray(b.references) ? b.references
+      : typeof b.references === 'string' && b.references.length ? b.references.split(',').map((x: string) => x.trim()).filter(Boolean)
+      : [];
+    const r = await sendMail(req.user!.id, {
+      accountLabel: String(b.account ?? ''),
+      to: String(b.to ?? ''),
+      cc: b.cc ? String(b.cc) : undefined,
+      bcc: b.bcc ? String(b.bcc) : undefined,
+      subject: String(b.subject ?? '(no subject)'),
+      body: String(b.body ?? ''),
+      html: b.html ? String(b.html) : undefined,
+      inReplyTo: b.inReplyTo ? String(b.inReplyTo) : undefined,
+      references: refs,
+      attachments: files.map((f) => ({ filename: f.originalname, content: f.buffer, contentType: f.mimetype })),
+    });
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// AI-drafted reply — same pattern as WA suggestReply.
+router.post('/mail/messages/:id/suggest', quotaGuard, async (req, res) => {
+  try {
+    const { getMessage } = await import('../mail/service.js');
+    const m = await getMessage(req.user!.id, Number(req.params.id));
+    if (!m) return res.status(404).json({ error: 'not found' });
+    const hint = String(req.body?.hint ?? '').slice(0, 400);
+    const { runClaude } = await import('../claude/runner.js');
+    const prompt = [
+      `Sei l'assistente personale dell'utente. Scrivi una bozza di risposta a questa email.`,
+      `Lingua: stessa dell'email originale (default italiano).`,
+      `Tono: professionale ma diretto. Niente filler. Vai al punto.`,
+      hint ? `Direttiva utente: ${hint}` : ``,
+      ``,
+      `--- EMAIL ORIGINALE ---`,
+      `From: ${m.from_name ?? ''} <${m.from_addr ?? ''}>`,
+      `Subject: ${m.subject ?? ''}`,
+      ``,
+      String(m.body_text ?? '').slice(0, 4000),
+      `--- FINE EMAIL ---`,
+      ``,
+      `Restituisci SOLO il corpo della risposta, niente subject né intestazioni.`,
+    ].join('\n');
+    const r = await runClaude(req.user!.id, prompt, { timeoutMs: 60_000, kind: 'mail_suggest', meta: { mailId: m.id } });
+    if (!r.ok) return res.status(400).json({ ok: false, error: r.stderr || 'agent error' });
+    res.json({ ok: true, draft: r.text.trim() });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+// ---------------------------------------------------------------------------
+// REPORT — time saved aggregates + PRIMA vs ADESSO radar.
+// PRIMA = cold-start vector [0,1,0,0] (Comunicazione, Brain, CRM, Memoria).
+// ADESSO = derived from real usage in the selected window.
+// Time-saved minutes are estimates (per-channel), not measured wall-clock.
+// ---------------------------------------------------------------------------
+const REPORT_MIN = {
+  reply_whatsapp: 3,
+  reply_telegram: 2,
+  reply_email: 8,
+  reply_instagram: 2,
+  brain_search: 4,            // every vault/people lookup
+  ingest_per_msg: 0.3,         // bulk sync overhead per ingested message
+  voice_baseline_min: 1,       // typing/edit overhead on top of clip length
+  // Email "read" = an email landed in the mail client and was either
+  // bonificata (filed in brain + people linked) or sorted by the agent.
+  // Estimated 2 min you would have spent opening / scanning / triaging it.
+  mail_read: 2,
+};
+
+router.get('/report', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const range = String(req.query.range ?? '30d');
+    const interval = range === '7d' ? "7 days"
+                   : range === '30d' ? "30 days"
+                   : range === '90d' ? "90 days"
+                   : null; // all-time
+    const sinceClause = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    // Outbound by channel (sent only) — drives reply time saved + Comunicazione score
+    const outbound = await query<{ channel: string; c: number }>(
+      `SELECT channel, count(*)::int AS c FROM outbound_log
+       WHERE user_id=$1 AND status='sent' ${sinceClause}
+       GROUP BY channel`, [userId],
+    );
+    const outboundBy: Record<string, number> = {};
+    let outboundTotal = 0;
+    for (const r of outbound) { outboundBy[r.channel] = r.c; outboundTotal += r.c; }
+
+    // Brain/people searches via tool_events
+    const sinceClauseTool = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const brainSearches = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM tool_events
+       WHERE user_id=$1 AND name IN ('brain_search','people_search','people_get','agent_brain_search') ${sinceClauseTool}`,
+      [userId],
+    );
+    const searchCount = brainSearches[0]?.c ?? 0;
+
+    // Ingestion: count of inbound messages stored in window (WA/IG/Telegram inbound)
+    const sinceClauseMsg = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const waIngest = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM wa_messages WHERE user_id=$1 AND from_me=false ${sinceClauseMsg}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0 }]; });
+    const igIngest = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM ig_messages WHERE user_id=$1 AND from_me=false ${sinceClauseMsg}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0 }]; });
+    const ingestCount = (waIngest[0]?.c ?? 0) + (igIngest[0]?.c ?? 0);
+
+    // Email ingested via mail_messages (inbound only, not trashed).
+    // Subset that was auto/manual bonificata is counted separately so the
+    // user sees both "email lette" and "delle quali nel brain".
+    const sinceClauseMail = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const mailRead = await query<{ c: number; bonified: number }>(
+      `SELECT count(*)::int AS c,
+              count(*) FILTER (WHERE bonified_at IS NOT NULL)::int AS bonified
+       FROM mail_messages
+       WHERE user_id=$1 AND direction='in' AND trashed_at IS NULL ${sinceClauseMail}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0, bonified: 0 }]; });
+    const mailReadCount = mailRead[0]?.c ?? 0;
+    const mailBonifiedCount = mailRead[0]?.bonified ?? 0;
+
+    // Voice transcribe runs — duration + baseline typing overhead
+    const sinceClauseRun = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const voice = await query<{ c: number; total_dur: string | number }>(
+      `SELECT count(*)::int AS c, COALESCE(sum(duration_ms),0)::bigint AS total_dur
+       FROM agent_runs WHERE user_id=$1 AND kind='voice_transcribe' AND status='ok' ${sinceClauseRun}`,
+      [userId],
+    );
+    const voiceCount = voice[0]?.c ?? 0;
+    const voiceDurMin = Number(voice[0]?.total_dur ?? 0) / 60000;
+
+    // === Time saved (minutes) ===
+    const tReplies =
+      (outboundBy.whatsapp ?? 0) * REPORT_MIN.reply_whatsapp
+    + (outboundBy.telegram ?? 0) * REPORT_MIN.reply_telegram
+    + (outboundBy.email ?? 0) * REPORT_MIN.reply_email
+    + (outboundBy.instagram ?? 0) * REPORT_MIN.reply_instagram;
+    const tSearches = searchCount * REPORT_MIN.brain_search;
+    const tIngest = ingestCount * REPORT_MIN.ingest_per_msg;
+    const tVoice = voiceCount * REPORT_MIN.voice_baseline_min + voiceDurMin;
+    const tMailRead = mailReadCount * REPORT_MIN.mail_read;
+    const totalMin = Math.round(tReplies + tSearches + tIngest + tVoice + tMailRead);
+
+    // === Radar (0-10) ===
+    // Comunicazione: log-scale of total outbound, capped
+    const commScore = outboundTotal === 0 ? 0
+                    : Math.min(10, Math.round(Math.log10(1 + outboundTotal) * 4 * 10) / 10);
+    // Brain: notes count + link density (filtered by range via updated_at)
+    const sinceClauseBrain = interval ? `AND updated_at >= now() - INTERVAL '${interval}'` : '';
+    const brainAgg = await query<{ notes: number; refs_with_data: number }>(
+      `SELECT count(*)::int AS notes,
+              count(*) FILTER (WHERE jsonb_typeof(refs) = 'object' AND refs <> '{}'::jsonb)::int AS refs_with_data
+       FROM brain_index WHERE user_id=$1 ${sinceClauseBrain}`, [userId],
+    ).catch(() => [{ notes: 0, refs_with_data: 0 }]);
+    const notes = brainAgg[0]?.notes ?? 0;
+    const linkedRatio = notes === 0 ? 0 : (brainAgg[0].refs_with_data ?? 0) / notes;
+    const brainScore = notes === 0 ? 0
+                     : Math.min(10, Math.round((Math.log10(1 + notes) * 3 + linkedRatio * 4) * 10) / 10);
+    // CRM: coverage (people with note) + psy-profile share
+    // has_psy lives in brain_index (file `people/<slug>.psy-profile.md`), not in
+    // people.meta. Compute via EXISTS join, same as /people route.
+    const sinceClauseCrm = interval ? `AND p.updated_at >= now() - INTERVAL '${interval}'` : '';
+    const crmAgg = await query<{ total: number; with_note: number; with_psy: number }>(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE p.note_path IS NOT NULL)::int AS with_note,
+              count(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM brain_index bi
+                WHERE bi.user_id = p.user_id
+                  AND bi.path = 'people/' || p.slug || '.psy-profile.md'
+              ))::int AS with_psy
+       FROM people p WHERE p.user_id=$1 ${sinceClauseCrm}`, [userId],
+    ).catch(() => [{ total: 0, with_note: 0, with_psy: 0 }]);
+    const peopleTotal = crmAgg[0]?.total ?? 0;
+    const crmScore = peopleTotal === 0 ? 0 : Math.min(10, Math.round((
+      ((crmAgg[0].with_note / peopleTotal) * 6) +
+      ((crmAgg[0].with_psy / peopleTotal) * 4)
+    ) * 10) / 10);
+    // Memoria: reflection runs + tool_use brain accesses
+    const sinceClauseMem = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const memAgg = await query<{ refl: number; access: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND kind='reflection' AND status='ok' ${sinceClauseMem}) AS refl,
+         (SELECT count(*)::int FROM tool_events WHERE user_id=$1 AND name IN ('brain_search','agent_brain_search','people_get','people_search') ${sinceClauseMem}) AS access`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ refl: 0, access: 0 }]; });
+    const reflCount = memAgg[0]?.refl ?? 0;
+    const accessCount = memAgg[0]?.access ?? 0;
+    const memScore = (reflCount === 0 && accessCount === 0) ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + reflCount) * 3 + Math.log10(1 + accessCount) * 3) * 10) / 10);
+
+    // Automazione: flows + scheduled_tasks attivi (enabled, filtrati per range)
+    const sinceClauseAuto = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
+    const autoAgg = await query<{ flows: number; tasks: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM flows WHERE user_id=$1 AND enabled=true ${sinceClauseAuto}) AS flows,
+         (SELECT count(*)::int FROM scheduled_tasks WHERE user_id=$1 AND enabled=true ${sinceClauseAuto}) AS tasks`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ flows: 0, tasks: 0 }]; });
+    const flowsCount = autoAgg[0]?.flows ?? 0;
+    const tasksCount = autoAgg[0]?.tasks ?? 0;
+    const autoScore = (flowsCount + tasksCount) === 0 ? 0
+                    : Math.min(10, Math.round(((flowsCount * 1.5) + (tasksCount * 1.2)) * 10) / 10);
+
+    // Triage messaggi: % wa+ig elaborati (processed_at IS NOT NULL)
+    const sinceClauseTri = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const triageAgg = await query<{ wa_tot: number; wa_proc: number; ig_tot: number; ig_proc: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false ${sinceClauseTri}) AS wa_tot,
+         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL ${sinceClauseTri}) AS wa_proc,
+         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false ${sinceClauseTri}) AS ig_tot,
+         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL ${sinceClauseTri}) AS ig_proc`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ wa_tot: 0, wa_proc: 0, ig_tot: 0, ig_proc: 0 }]; });
+    const triageTot = (triageAgg[0]?.wa_tot ?? 0) + (triageAgg[0]?.ig_tot ?? 0);
+    const triageProc = (triageAgg[0]?.wa_proc ?? 0) + (triageAgg[0]?.ig_proc ?? 0);
+    const triageScore = triageTot === 0 ? 0
+                      : Math.min(10, Math.round((triageProc / triageTot) * 10 * 10) / 10);
+
+    // Sub-agenti: numero di sub_agents completati con successo + custom agents/teams attivi
+    const sinceClauseSub = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
+    const subAgg = await query<{ subs: number; teams: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND status='completed' ${sinceClauseSub}) AS subs,
+         (SELECT count(*)::int FROM custom_agents WHERE user_id=$1 ${sinceClauseSub}) AS teams`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ subs: 0, teams: 0 }]; });
+    const subsCount = subAgg[0]?.subs ?? 0;
+    const customAgents = subAgg[0]?.teams ?? 0;
+    const subScore = (subsCount + customAgents) === 0 ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + subsCount) * 4 + customAgents * 1) * 10) / 10);
+
+    // Documentazione: snapshot count + log run total (storia preservata)
+    const sinceClauseDocSnap = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
+    const sinceClauseDocRun = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const docAgg = await query<{ snaps: number; runs: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM brain_snapshots WHERE user_id=$1 AND status='ok' ${sinceClauseDocSnap}) AS snaps,
+         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND status='ok' ${sinceClauseDocRun}) AS runs`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ snaps: 0, runs: 0 }]; });
+    const snapsCount = docAgg[0]?.snaps ?? 0;
+    const runsCount = docAgg[0]?.runs ?? 0;
+    const docScore = (snapsCount + runsCount) === 0 ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + snapsCount) * 5 + Math.log10(1 + runsCount) * 2) * 10) / 10);
+
+    res.json({
+      range,
+      timeSaved: {
+        totalMin,
+        breakdown: {
+          replies: { min: Math.round(tReplies), count: outboundTotal, byChannel: outboundBy },
+          brain_searches: { min: Math.round(tSearches), count: searchCount },
+          ingestion: { min: Math.round(tIngest), count: ingestCount },
+          voice: { min: Math.round(tVoice), count: voiceCount, dur_min: Math.round(voiceDurMin) },
+          mail_read: { min: Math.round(tMailRead), count: mailReadCount, bonified: mailBonifiedCount },
+        },
+      },
+      radar: {
+        axes: [
+          'Comunicazione',
+          'Brain',
+          'CRM / People',
+          'Memoria',
+          'Automazione',
+          'Triage messaggi',
+          'Sub-agenti',
+          'Documentazione',
+        ],
+        prima: [0, 1, 0, 0, 0, 0, 0, 1],
+        adesso: [commScore, brainScore, crmScore, memScore, autoScore, triageScore, subScore, docScore],
+        metrics: {
+          comunicazione: { outbound: outboundTotal },
+          brain: { notes, linked_ratio: Math.round(linkedRatio * 100) / 100 },
+          crm: { total: peopleTotal, with_note: crmAgg[0]?.with_note ?? 0, with_psy: crmAgg[0]?.with_psy ?? 0 },
+          memoria: { reflections: reflCount, brain_accesses: accessCount },
+          automazione: { flows: flowsCount, tasks: tasksCount },
+          triage: { total: triageTot, processed: triageProc },
+          sub_agenti: { completed: subsCount, custom: customAgents },
+          documentazione: { snapshots: snapsCount, runs: runsCount },
+        },
+      },
+    });
+  } catch (e: any) {
+    console.error('[report] outer fail', e);
+    // Never 500 — surface a zero-shape so the page renders + the user sees the
+    // structure. error string included for diagnosis.
+    res.json({
+      range: String(req.query.range ?? '30d'),
+      error: String(e?.message ?? e),
+      timeSaved: {
+        totalMin: 0,
+        breakdown: {
+          replies: { min: 0, count: 0, byChannel: {} },
+          brain_searches: { min: 0, count: 0 },
+          ingestion: { min: 0, count: 0 },
+          voice: { min: 0, count: 0, dur_min: 0 },
+        },
+      },
+      radar: {
+        axes: ['Comunicazione clienti', 'Organizzazione second brain', 'CRM / People', 'Memoria contestuale'],
+        prima: [0, 1, 0, 0],
+        adesso: [0, 0, 0, 0],
+        metrics: {},
+      },
+    });
+  }
+});
+
 router.get('/branding', async (req, res) => {
   const b = (await getSetting<any>(req.user!.id, 'branding')) ?? null;
   res.json(b ?? { title: 'super-agent', subtitle: 'personal · brain', logoDataUrl: null });

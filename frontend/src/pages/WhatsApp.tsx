@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Button, Card, Chip, Toggle, useToast } from '../components/ui';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { useDialog } from '../components/dialog';
 import { useWS } from '../ws';
 import { useQuotaLock } from '../quota';
@@ -258,7 +260,7 @@ function AudioWave({ size = 'sm' }: { size?: 'sm' | 'md' }) {
           />
         ))}
       </span>
-      <span className={`text-[10px] text-muted ${size === 'sm' ? '' : 'text-xs'}`}>vocale</span>
+      <span className={`text-[10px] text-muted-foreground ${size === 'sm' ? '' : 'text-xs'}`}>vocale</span>
     </span>
   );
 }
@@ -593,7 +595,7 @@ export default function WhatsApp() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-semibold text-gradient">WhatsApp</h1>
         <div className="flex items-center gap-2 flex-wrap">
-          <Chip tone="on"><span className="inline-block w-1.5 h-1.5 rounded-full bg-ok mr-1.5 animate-pulse" />live</Chip>
+          <Chip tone="on">live</Chip>
           {pending > 0 && <Chip tone="warn">{pending} da bonificare</Chip>}
           <Button size="sm" onClick={() => bonify()} disabled={bonifying || pending === 0}>
             <Sparkles size={14} className="inline mr-1.5 -mt-0.5" />
@@ -617,29 +619,29 @@ export default function WhatsApp() {
               {aiDedupeProgress.pairs.length > 0 && <Chip tone="accent">{aiDedupeProgress.pairs.length} coppie</Chip>}
               {aiDedupeProgress.merged > 0 && <Chip tone="on">{aiDedupeProgress.merged} unite</Chip>}
             </div>
-            <span className="text-[10px] text-muted font-mono">{Math.floor((Date.now() - aiDedupeProgress.startedAt) / 1000)}s</span>
+            <span className="text-[10px] text-muted-foreground font-mono">{Math.floor((Date.now() - aiDedupeProgress.startedAt) / 1000)}s</span>
           </div>
           <div className="bg-bg/60 border border-border rounded-lg p-2 max-h-40 overflow-y-auto font-mono text-[11px] space-y-0.5">
             {aiDedupeProgress.lines.map((ln, i) => (
-              <div key={i} className="text-muted">{ln}</div>
+              <div key={i} className="text-muted-foreground">{ln}</div>
             ))}
           </div>
           {aiDedupeProgress.pairs.length > 0 && (
             <div className="mt-2 text-[11px] space-y-1">
-              <div className="text-muted uppercase tracking-wider font-semibold text-[9px]">Proposte AI</div>
+              <div className="text-muted-foreground uppercase tracking-wider font-semibold text-[9px]">Proposte AI</div>
               {aiDedupeProgress.pairs.slice(0, 8).map((p, i) => {
                 const canonName = chats.find((c) => c.chat_jid === p.canon)?.sender_name ?? p.canon;
                 const dupName = chats.find((c) => c.chat_jid === p.dup)?.sender_name ?? p.dup;
                 return (
                   <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md bg-surface2/40">
                     <span className="font-medium text-accent">{canonName}</span>
-                    <span className="text-muted">←</span>
-                    <span className="text-muted line-through">{dupName}</span>
-                    {p.reason && <span className="text-[10px] text-muted ml-auto italic truncate">{p.reason}</span>}
+                    <span className="text-muted-foreground">←</span>
+                    <span className="text-muted-foreground line-through">{dupName}</span>
+                    {p.reason && <span className="text-[10px] text-muted-foreground ml-auto italic truncate">{p.reason}</span>}
                   </div>
                 );
               })}
-              {aiDedupeProgress.pairs.length > 8 && <div className="text-muted">+{aiDedupeProgress.pairs.length - 8} altri</div>}
+              {aiDedupeProgress.pairs.length > 8 && <div className="text-muted-foreground">+{aiDedupeProgress.pairs.length - 8} altri</div>}
             </div>
           )}
         </Card>
@@ -661,7 +663,7 @@ export default function WhatsApp() {
               <style>{`@keyframes indeterminate { 0% { left: -33%; } 100% { left: 100%; } }`}</style>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-xs font-mono text-muted">
+          <div className="flex items-center gap-4 text-xs font-mono text-muted-foreground">
             <span>{bonifyProgress.total} msg</span>
             <span>{bonifyProgress.toolCalls} tool calls</span>
             <span>{elapsed}s</span>
@@ -672,7 +674,7 @@ export default function WhatsApp() {
       <div className="grid grid-cols-12 gap-3 flex-1 min-h-0 h-[78vh] max-h-[78vh]">
         {/* Chats sidebar */}
         <Card className="col-span-12 md:col-span-4 lg:col-span-3 p-0 overflow-hidden flex flex-col h-full max-h-[78vh]">
-          <div className="p-3 border-b border-border text-xs uppercase tracking-wider text-muted font-semibold flex items-center gap-2">
+          <div className="p-3 border-b border-border text-xs uppercase tracking-wider text-muted-foreground font-semibold flex items-center gap-2">
             <MessageCircle size={14} />
             {chatsLoaded ? (
               selectedChats.size > 0 ? (
@@ -693,7 +695,7 @@ export default function WhatsApp() {
                     }}
                     className="text-red-400 hover:text-red-300"
                   ><Trash2 size={12} className="inline mr-1 -mt-0.5" />Elimina</Button>
-                  <button onClick={() => setSelectedChats(new Set())} className="ml-auto text-muted hover:text-text"><X size={12} /></button>
+                  <button onClick={() => setSelectedChats(new Set())} className="ml-auto text-muted-foreground hover:text-text"><X size={12} /></button>
                 </span>
               ) : `${chats.length} chat`
             ) : (
@@ -714,7 +716,7 @@ export default function WhatsApp() {
                 ))}
               </div>
             )}
-            {chatsLoaded && chats.length === 0 && <div className="p-4 text-muted text-sm">Nessun messaggio ancora. Configura WhatsApp in Connettori.</div>}
+            {chatsLoaded && chats.length === 0 && <div className="p-4 text-muted-foreground text-sm">Nessun messaggio ancora. Configura WhatsApp in Connettori.</div>}
             {(() => {
               // Visual dedupe: if multiple rows share the SAME displayed
               // identity (phone OR resolved name OR linked person), collapse
@@ -779,11 +781,11 @@ export default function WhatsApp() {
                           </span>
                         )}
                       </span>
-                      <span className="text-[10px] text-muted shrink-0 flex items-center gap-1">
+                      <span className="text-[10px] text-muted-foreground shrink-0 flex items-center gap-1">
                         {fmtTime(c.ts)}
                       </span>
                     </div>
-                    <div className="text-xs text-muted truncate flex items-center gap-1.5">
+                    <div className="text-xs text-muted-foreground truncate flex items-center gap-1.5">
                       <span className="truncate flex-1">
                         {isAudio(c.text) ? <AudioWave /> : (c.text || '…')}
                       </span>
@@ -829,18 +831,9 @@ export default function WhatsApp() {
         </Card>
 
         {/* Chat view */}
-        <div
-          className="col-span-12 md:col-span-8 lg:col-span-9 rounded-3xl border border-border overflow-hidden flex flex-col h-full max-h-[78vh] relative"
-          style={{
-            backgroundColor: '#0a0a0c',
-            backgroundImage: `linear-gradient(rgba(10,10,12,0.75), rgba(10,10,12,0.75)), url('/pattern-11-themed.svg')`,
-            backgroundSize: 'auto, 33.33% auto',
-            backgroundPosition: 'center, top left',
-            backgroundRepeat: 'no-repeat, repeat',
-          }}
-        >
+        <div className="col-span-12 md:col-span-8 lg:col-span-9 rounded-xl border overflow-hidden flex flex-col h-full max-h-[78vh] relative chat-pattern">
           {!selected ? (
-            <div className="flex-1 flex items-center justify-center text-muted text-sm">
+            <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
               {chatsLoaded
                 ? (chats.length === 0
                     ? 'Nessuna chat ancora. Configura WhatsApp in Connettori.'
@@ -877,11 +870,11 @@ export default function WhatsApp() {
                           <span className="text-[9px] uppercase tracking-wider text-accent2 border border-accent2/40 rounded-full px-1.5 py-px" title="Nome/numero personalizzati">custom</span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 text-[10px] text-muted">
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
                         <span className="font-mono truncate">{c?.sender_phone || selected}</span>
                         {c && c.total_count > 0 && c.pending_count === 0 && <span className="text-on">●&nbsp;bonificata</span>}
                         {c && c.pending_count > 0 && c.bonified_count > 0 && <span className="text-warn">●&nbsp;{c.bonified_count}/{c.total_count}</span>}
-                        {c && c.pending_count > 0 && c.bonified_count === 0 && <span className="text-muted">●&nbsp;nuova</span>}
+                        {c && c.pending_count > 0 && c.bonified_count === 0 && <span className="text-muted-foreground">●&nbsp;nuova</span>}
                       </div>
                     </div>
 
@@ -897,7 +890,7 @@ export default function WhatsApp() {
                             toast.push(err.message, 'err');
                           });
                       }}
-                      className={`group inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border transition ${c?.auto_bonify ? 'bg-on/15 border-on/40 text-on' : 'bg-surface2 border-border text-muted hover:text-text'}`}
+                      className={`group inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border transition ${c?.auto_bonify ? 'bg-on/15 border-on/40 text-on' : 'bg-surface2 border-border text-muted-foreground hover:text-text'}`}
                       title="Auto-bonifica i nuovi messaggi pending ogni 5 minuti"
                     >
                       <span className={`w-1.5 h-1.5 rounded-full ${c?.auto_bonify ? 'bg-on' : 'bg-muted'}`} />
@@ -945,7 +938,7 @@ export default function WhatsApp() {
                             }}
                             className="w-full text-left px-3 py-2 text-sm hover:bg-surface2 flex items-center gap-2"
                           >
-                            <Pencil size={13} className={(c?.display_name_override || c?.display_phone_override) ? 'text-accent' : 'text-muted'} />
+                            <Pencil size={13} className={(c?.display_name_override || c?.display_phone_override) ? 'text-accent' : 'text-muted-foreground'} />
                             <div className="flex-1">Modifica nome/numero</div>
                             {(c?.display_name_override || c?.display_phone_override) && <span className="text-[9px] text-accent">attivo</span>}
                           </button>
@@ -953,7 +946,7 @@ export default function WhatsApp() {
                             onClick={() => { setChatMenuOpen(false); setLinkFor(selected!); setLinkQuery(''); }}
                             className="w-full text-left px-3 py-2 text-sm hover:bg-surface2 flex items-center gap-2"
                           >
-                            <UserCog size={13} className={c?.linked_person_slug ? 'text-accent' : 'text-muted'} />
+                            <UserCog size={13} className={c?.linked_person_slug ? 'text-accent' : 'text-muted-foreground'} />
                             <div className="flex-1">Cabla a persona del brain</div>
                             {c?.linked_person_slug && <span className="text-[9px] text-accent truncate max-w-[80px]">{c.linked_person_slug}</span>}
                           </button>
@@ -961,7 +954,7 @@ export default function WhatsApp() {
                             onClick={() => { setChatMenuOpen(false); setMergeFor(selected!); setMergeQuery(''); }}
                             className="w-full text-left px-3 py-2 text-sm hover:bg-surface2 flex items-center gap-2"
                           >
-                            <GitMerge size={13} className="text-muted" />
+                            <GitMerge size={13} className="text-muted-foreground" />
                             <div className="flex-1">Unisci con altra chat</div>
                           </button>
                           <div className="border-t border-border" />
@@ -1040,12 +1033,12 @@ export default function WhatsApp() {
                       {isAudio(m.text) ? (
                         <div>
                           <AudioWave size="md" />
-                          {audioCaption(m.text) && <div className="text-xs text-muted mt-1.5">{audioCaption(m.text)}</div>}
+                          {audioCaption(m.text) && <div className="text-xs text-muted-foreground mt-1.5">{audioCaption(m.text)}</div>}
                         </div>
                       ) : (
-                        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{m.text || <span className="text-muted italic">(empty)</span>}</div>
+                        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{m.text || <span className="text-muted-foreground italic">(empty)</span>}</div>
                       )}
-                      <div className="text-[9px] text-muted mt-1 text-right">{fmtAgo(m.ts)} fa</div>
+                      <div className="text-[9px] text-muted-foreground mt-1 text-right">{fmtAgo(m.ts)} fa</div>
                     </div>
                   </div>
                 );})}
@@ -1057,7 +1050,7 @@ export default function WhatsApp() {
                   {composeFromAi && (
                     <div className="absolute -top-5 left-1 inline-flex items-center gap-1 text-[9px] uppercase tracking-wider text-accent2 font-semibold">
                       <Wand2 size={9} /> bozza AI
-                      <button onClick={() => setComposeFromAi(false)} className="text-muted hover:text-text ml-1" title="Marca come user">×</button>
+                      <button onClick={() => setComposeFromAi(false)} className="text-muted-foreground hover:text-text ml-1" title="Marca come user">×</button>
                     </div>
                   )}
                   {/* AI button prepended inside the input */}
@@ -1069,7 +1062,7 @@ export default function WhatsApp() {
                   >
                     <Sparkles size={16} className={suggesting ? 'animate-pulse' : ''} />
                   </button>
-                  <textarea
+                  <Textarea
                     value={composeText}
                     onChange={(e) => { setComposeText(e.target.value); if (composeFromAi && e.target.value === '') setComposeFromAi(false); }}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCompose(); } }}
@@ -1103,7 +1096,7 @@ export default function WhatsApp() {
                   <Wand2 size={11} />
                   {suggesting ? 'Formulando…' : 'Bozza pronta'}
                 </div>
-                <button onClick={() => { setDraftReply(''); setSuggesting(false); }} className="text-muted hover:text-text">
+                <button onClick={() => { setDraftReply(''); setSuggesting(false); }} className="text-muted-foreground hover:text-text">
                   <X size={13} />
                 </button>
               </div>
@@ -1116,11 +1109,11 @@ export default function WhatsApp() {
                 {suggesting && !draftReply ? (
                   <div className="flex items-center gap-3 py-2">
                     <BrainLoading size={48} inline />
-                    <span className="text-sm text-muted animate-pulse">Formulando risposta…</span>
+                    <span className="text-sm text-muted-foreground animate-pulse">Formulando risposta…</span>
                   </div>
                 ) : (
                   <>
-                    <textarea
+                    <Textarea
                       value={draftReply}
                       onChange={(e) => setDraftReply(e.target.value)}
                       rows={4}
@@ -1171,30 +1164,30 @@ export default function WhatsApp() {
             <Card className="w-full max-w-md">
               <div className="p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
                 <div>
-                  <div className="text-xs text-muted">Modifica chat</div>
+                  <div className="text-xs text-muted-foreground">Modifica chat</div>
                   <div className="font-medium truncate text-sm">{target?.sender_name ?? editFor}</div>
-                  <div className="text-[10px] text-muted truncate">{editFor}</div>
+                  <div className="text-[10px] text-muted-foreground truncate">{editFor}</div>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[11px] text-muted">Nome visualizzato</label>
-                  <input
+                  <label className="text-[11px] text-muted-foreground">Nome visualizzato</label>
+                  <Input
                     autoFocus
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
                     placeholder="Es. Mario Rossi"
-                    className="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-accent"
+                   
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[11px] text-muted">Numero visualizzato</label>
-                  <input
+                  <label className="text-[11px] text-muted-foreground">Numero visualizzato</label>
+                  <Input
                     value={editPhone}
                     onChange={(e) => setEditPhone(e.target.value)}
                     placeholder="Es. +39 333 1234567"
-                    className="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-accent"
+                   
                   />
                 </div>
-                <div className="text-[10px] text-muted">Override locale — sopravvive a ogni sync. Lascia vuoto per usare il valore di WhatsApp.</div>
+                <div className="text-[10px] text-muted-foreground">Override locale — sopravvive a ogni sync. Lascia vuoto per usare il valore di WhatsApp.</div>
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   {hasOverride
                     ? <Button size="sm" variant="ghost" onClick={() => save(true)} disabled={editSaving}>Rimuovi override</Button>
@@ -1248,22 +1241,22 @@ export default function WhatsApp() {
             <Card className="w-full max-w-md">
               <div className="p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
                 <div>
-                  <div className="text-xs text-muted">Cabla chat a persona del brain</div>
+                  <div className="text-xs text-muted-foreground">Cabla chat a persona del brain</div>
                   <div className="font-medium truncate text-sm">{targetName}</div>
                   {target?.linked_person_slug && (
                     <div className="text-[11px] text-accent mt-1">Già cablata a <code>{target.linked_person_slug}</code></div>
                   )}
                 </div>
-                <input
+                <Input
                   autoFocus
                   placeholder="Cerca persona…"
                   value={linkQuery}
                   onChange={(e) => { setLinkQuery(e.target.value); loadPeople(e.target.value); }}
                   onFocus={() => loadPeople(linkQuery)}
-                  className="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-accent"
+                 
                 />
                 <div className="max-h-72 overflow-y-auto space-y-1">
-                  {linkPeople.length === 0 && <div className="text-xs text-muted py-2">Nessun risultato. Digita per cercare.</div>}
+                  {linkPeople.length === 0 && <div className="text-xs text-muted-foreground py-2">Nessun risultato. Digita per cercare.</div>}
                   {linkPeople.map((p) => {
                     const rich = (p.emails?.length ?? 0) + (p.phones?.length ?? 0);
                     return (
@@ -1281,9 +1274,9 @@ export default function WhatsApp() {
                             <span className="truncate">{p.name}</span>
                             {rich > 0 && <span className="shrink-0 text-[8px] uppercase tracking-wider text-accent2 border border-accent2/40 rounded-full px-1 py-px">contatti</span>}
                           </div>
-                          <div className="text-[10px] text-muted truncate font-mono">{p.slug}</div>
+                          <div className="text-[10px] text-muted-foreground truncate font-mono">{p.slug}</div>
                           {(p.emails?.length || p.phones?.length) ? (
-                            <div className="text-[10px] text-muted truncate flex gap-2">
+                            <div className="text-[10px] text-muted-foreground truncate flex gap-2">
                               {p.emails?.length ? <span>✉ {p.emails[0]}{p.emails.length > 1 ? ` +${p.emails.length - 1}` : ''}</span> : null}
                               {p.phones?.length ? <span>📞 {p.phones[0]}{p.phones.length > 1 ? ` +${p.phones.length - 1}` : ''}</span> : null}
                             </div>
@@ -1360,10 +1353,10 @@ export default function WhatsApp() {
                   <GitMerge size={14} className="text-accent" />
                   <span className="font-semibold">Unisci chat duplicata</span>
                 </div>
-                <div className="mt-2 text-xs text-muted">
+                <div className="mt-2 text-xs text-muted-foreground">
                   Canonica: <span className="text-text font-medium">{canonName}</span>. Seleziona la chat duplicata da fondere qui dentro.
                 </div>
-                <input
+                <Input
                   autoFocus
                   value={mergeQuery}
                   onChange={(e) => setMergeQuery(e.target.value)}
@@ -1372,7 +1365,7 @@ export default function WhatsApp() {
                 />
               </div>
               <div className="flex-1 overflow-y-auto">
-                {candidates.length === 0 && <div className="text-xs text-muted text-center py-6">Nessuna chat trovata.</div>}
+                {candidates.length === 0 && <div className="text-xs text-muted-foreground text-center py-6">Nessuna chat trovata.</div>}
                 {candidates.length > 0 && candidates[0]._score > 0 && !q && (
                   <div className="text-[9px] uppercase tracking-wider text-accent font-semibold px-4 pt-2 pb-1">Suggeriti — token in comune</div>
                 )}
@@ -1383,7 +1376,7 @@ export default function WhatsApp() {
                   const showSep = !q && i > 0 && candidates[i - 1]._score > 0 && c._score === 0;
                   return (
                     <div key={c.chat_jid}>
-                      {showSep && <div className="text-[9px] uppercase tracking-wider text-muted font-semibold px-4 pt-2 pb-1 border-t border-border/40">Altre chat</div>}
+                      {showSep && <div className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold px-4 pt-2 pb-1 border-t border-border/40">Altre chat</div>}
                       <button
                         onClick={() => doMerge(c.chat_jid)}
                         disabled={merging}
@@ -1395,9 +1388,9 @@ export default function WhatsApp() {
                             {n}
                             {suggested && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30 uppercase tracking-wider">match</span>}
                           </div>
-                          <div className="text-[10px] text-muted truncate font-mono">{c.chat_jid}</div>
+                          <div className="text-[10px] text-muted-foreground truncate font-mono">{c.chat_jid}</div>
                         </div>
-                        <span className="text-[10px] text-muted shrink-0">{c.total_count} msg</span>
+                        <span className="text-[10px] text-muted-foreground shrink-0">{c.total_count} msg</span>
                       </button>
                     </div>
                   );

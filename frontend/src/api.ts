@@ -28,6 +28,8 @@ export const api = {
   setVault: (vaultPath: string) => req('/onboarding/vault', { method: 'POST', body: JSON.stringify({ vaultPath }) }),
   setTelegram: (token: string) => req<any>('/onboarding/telegram', { method: 'POST', body: JSON.stringify({ token }) }),
   messages: (limit = 100) => req<any[]>(`/messages?limit=${limit}`),
+  messageCounts: () => req<{ h24: number; d7: number; d30: number; total: number }>('/messages/counts'),
+  liveKpis: () => req<{ agentsNow: number; agents24h: number; peopleTouched24h: number; upcoming: { id: number; name: string; cron: string; next_run_at: string; channel: string; modality: string }[] }>('/live/kpis'),
   connectors: () => req<any[]>('/connectors'),
   updateConnector: (name: string, body: any) => req(`/connectors/${name}`, { method: 'PUT', body: JSON.stringify(body) }),
   runConnector: (name: string) => req(`/connectors/${name}/run`, { method: 'POST' }),
@@ -37,6 +39,25 @@ export const api = {
   brainTree: () => req<{ root: string | null; files: string[] }>('/brain/tree'),
   brainGraph: () => req<{ nodes: any[]; links: any[] }>('/brain/graph'),
   brainNote: (path: string) => req<any>(`/brain/note?path=${encodeURIComponent(path)}`),
+  brainSnapshots: (opts: { vault?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.vault) p.set('vault', opts.vault);
+    p.set('limit', String(opts.limit ?? 25));
+    p.set('offset', String(opts.offset ?? 0));
+    return req<{ rows: any[]; total: number }>(`/brain/snapshots?${p}`);
+  },
+  brainSnapshotRun: () => req<{ ok: boolean; snapshots: any[] }>('/brain/snapshots/run', { method: 'POST' }),
+  brainSnapshotDelete: (id: number) => req<{ ok: boolean }>(`/brain/snapshots/${id}`, { method: 'DELETE' }),
+  brainSnapshotRestore: (id: number) =>
+    req<{ ok: boolean; restored?: number; safety_snapshot_id?: number; error?: string }>(`/brain/snapshots/${id}/restore`, { method: 'POST' }),
+  brainSnapshotDirGet: () => req<{ dir: string }>('/brain/snapshots/dir'),
+  brainSnapshotDirSet: (dir: string) => req<{ ok: boolean; dir: string }>('/brain/snapshots/dir', { method: 'PUT', body: JSON.stringify({ dir }) }),
+  brainNoteSave: (path: string, content: string, data?: any) =>
+    req<{ ok: boolean }>('/brain/note', { method: 'PUT', body: JSON.stringify({ path, content, data }) }),
+  brainNoteDelete: (path: string) =>
+    req<{ ok: boolean }>(`/brain/note?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  brainReveal: (path: string) =>
+    req<{ ok: boolean; path: string }>('/brain/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
   callTool: (name: string, args: any = {}) => req<any>(`/tools/${name}`, { method: 'POST', body: JSON.stringify(args) }),
   logs: (opts: { kinds?: string[]; statuses?: string[]; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();
@@ -68,6 +89,8 @@ export const api = {
     return req<{ rows: any[]; total: number; limit: number; offset: number }>(`/people?${p}`);
   },
   peopleDedupeAgent: () => req<{ ok: boolean; subAgentId: number }>('/people/dedupe-agent', { method: 'POST' }),
+  peopleByEmail: (addr: string) => req<{ person: { id: number; slug: string; name: string; emails: string[]; phones: string[]; note_path: string | null } | null }>(`/people/by-email?addr=${encodeURIComponent(addr)}`),
+  peopleBindEmail: (slug: string, email: string) => req<{ ok: boolean; slug: string; email: string }>(`/people/${encodeURIComponent(slug)}/bind-email`, { method: 'POST', body: JSON.stringify({ email }) }),
   peopleDelete: (slug: string, opts: { keep_note?: boolean; keep_refs?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (opts.keep_note) q.set('keep_note', '1');
@@ -235,4 +258,50 @@ export const api = {
   igPending: () => req<any>('/instagram/pending'),
   igSync: (pages = 3) => req<any>('/instagram/sync', { method: 'POST', body: JSON.stringify({ pages }) }),
   igSyncThread: (id: string, pages = 5) => req<any>(`/instagram/threads/${encodeURIComponent(id)}/sync`, { method: 'POST', body: JSON.stringify({ pages }) }),
+  report: (range: '7d' | '30d' | '90d' | 'all' = '30d') => req<any>(`/report?range=${range}`),
+  // ----- MAIL CLIENT -----
+  mailAccounts: () => req<{ accounts: { label: string; address: string; host: string; mailbox: string }[] }>('/mail/accounts'),
+  mailList: (opts: { account?: string; folder?: string; q?: string; unread?: boolean; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.account) p.set('account', opts.account);
+    if (opts.folder) p.set('folder', opts.folder);
+    if (opts.q) p.set('q', opts.q);
+    if (opts.unread) p.set('unread', 'true');
+    if (opts.limit) p.set('limit', String(opts.limit));
+    if (opts.offset) p.set('offset', String(opts.offset));
+    return req<{ rows: any[]; total: number }>(`/mail/messages?${p}`);
+  },
+  mailGet: (id: number) => req<any>(`/mail/messages/${id}`),
+  mailThread: (key: string) => req<{ messages: any[] }>(`/mail/threads/${encodeURIComponent(key)}`),
+  mailMark: (id: number, patch: { seen?: boolean; flagged?: boolean; starred?: boolean }) => req<any>(`/mail/messages/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  mailTrash: (id: number) => req<any>(`/mail/messages/${id}`, { method: 'DELETE' }),
+  mailSync: (account: string, limit = 1000) => req<any>('/mail/sync', { method: 'POST', body: JSON.stringify({ account, limit }) }),
+  mailBonify: (opts: { account?: string; force?: boolean; limit?: number } = {}) => req<any>('/mail/bonify', { method: 'POST', body: JSON.stringify(opts) }),
+  mailBonifyOne: (id: number, force = false) => req<any>(`/mail/messages/${id}/bonify`, { method: 'POST', body: JSON.stringify({ force }) }),
+  mailFolders: (account: string) => req<{ ok: boolean; folders: { name: string; label: string; kind: string; subscribed: boolean }[]; error?: string }>(`/mail/folders?account=${encodeURIComponent(account)}`),
+  mailAutoSyncGet: (account: string) => req<{ enabled: boolean }>(`/mail/accounts/${encodeURIComponent(account)}/auto-sync`),
+  mailAutoSyncSet: (account: string, enabled: boolean) => req<{ ok: boolean; enabled: boolean }>(`/mail/accounts/${encodeURIComponent(account)}/auto-sync`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  mailSignatureGet: (account: string) => req<{ html: string }>(`/mail/accounts/${encodeURIComponent(account)}/signature`),
+  waUnread: () => req<{ count: number }>('/whatsapp/unread'),
+  igUnread: () => req<{ count: number }>('/instagram/unread'),
+  mailSuggest: (id: number, hint?: string) => req<any>(`/mail/messages/${id}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
+  mailSend: (payload: { account: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html?: string; inReplyTo?: string; references?: string[]; attachments?: File[] }) => {
+    const fd = new FormData();
+    fd.append('account', payload.account);
+    fd.append('to', payload.to);
+    if (payload.cc) fd.append('cc', payload.cc);
+    if (payload.bcc) fd.append('bcc', payload.bcc);
+    fd.append('subject', payload.subject);
+    fd.append('body', payload.body);
+    if (payload.html) fd.append('html', payload.html);
+    if (payload.inReplyTo) fd.append('inReplyTo', payload.inReplyTo);
+    if (payload.references?.length) fd.append('references', payload.references.join(','));
+    for (const f of (payload.attachments ?? [])) fd.append('attachments', f);
+    return fetch('/api/mail/send', { method: 'POST', credentials: 'include', body: fd }).then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      return j;
+    });
+  },
+  mailAttachmentUrl: (id: number) => `/api/mail/attachments/${id}`,
 };

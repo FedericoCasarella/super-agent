@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { ChevronRight, ChevronDown, File as FileIcon, Folder, FolderOpen, Search, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, File as FileIcon, Folder, FolderOpen, Search, X, Trash2, FolderSearch } from 'lucide-react';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 
 // Obsidian-style file explorer. Renders vault files as a nested folder tree.
 // Click a file → calls onSelect(relPath). Caller wires that to graph focus
@@ -78,11 +84,12 @@ function lsGet(key: string, fallback: string[]): Set<string> {
 function lsSet(key: string, s: Set<string>) { try { localStorage.setItem(key, JSON.stringify(Array.from(s))); } catch {} }
 
 export default function BrainFileExplorer({
-  selectedPath, onSelect, onClose,
+  selectedPath, onSelect, onClose, onDelete,
 }: {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onClose: () => void;
+  onDelete?: (path: string) => void;
 }) {
   const [files, setFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,30 +136,58 @@ export default function BrainFileExplorer({
     if (n.kind === 'file') {
       const active = selectedPath === n.path;
       return (
-        <button
-          key={n.path}
-          onClick={() => onSelect(n.path)}
-          className={`w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-surface2 transition ${active ? 'bg-accent/15 text-accent' : 'text-text'}`}
-          style={pad}
-          title={n.path}
-        >
-          <FileIcon size={12} className="shrink-0 text-muted" />
-          <span className="truncate">{n.name}</span>
-        </button>
+        <ContextMenu key={n.path}>
+          <ContextMenuTrigger asChild>
+            <button
+              onClick={() => onSelect(n.path)}
+              className={`w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-accent/10 transition ${active ? 'bg-accent/15 text-foreground' : 'text-foreground/80'}`}
+              style={pad}
+              title={n.path}
+            >
+              <FileIcon size={12} className="shrink-0 text-muted-foreground" />
+              <span className="truncate">{n.name}</span>
+            </button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={() => onSelect(n.path)}>
+              <FileIcon className="h-3.5 w-3.5" /> Apri
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => { api.brainReveal(n.path).catch(() => {}); }}>
+              <FolderSearch className="h-3.5 w-3.5" /> Mostra nel Finder
+            </ContextMenuItem>
+            {onDelete && (
+              <ContextMenuItem
+                onSelect={() => onDelete(n.path)}
+                className="text-destructive focus:text-destructive focus:bg-destructive/10"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Elimina
+              </ContextMenuItem>
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
       );
     }
     const open = isExpanded(n.path);
     return (
       <div key={n.path}>
-        <button
-          onClick={() => toggle(n.path)}
-          className="w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-surface2 transition text-muted"
-          style={pad}
-        >
-          {open ? <ChevronDown size={11} className="shrink-0" /> : <ChevronRight size={11} className="shrink-0" />}
-          {open ? <FolderOpen size={12} className="shrink-0 text-accent2" /> : <Folder size={12} className="shrink-0 text-accent2" />}
-          <span className="truncate font-medium">{n.name}</span>
-        </button>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <button
+              onClick={() => toggle(n.path)}
+              className="w-full text-left text-xs py-1 pr-2 flex items-center gap-1.5 hover:bg-surface2 transition text-muted-foreground"
+              style={pad}
+            >
+              {open ? <ChevronDown size={11} className="shrink-0" /> : <ChevronRight size={11} className="shrink-0" />}
+              {open ? <FolderOpen size={12} className="shrink-0 text-accent2" /> : <Folder size={12} className="shrink-0 text-accent2" />}
+              <span className="truncate font-medium">{n.name}</span>
+            </button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={() => { api.brainReveal(n.path).catch(() => {}); }}>
+              <FolderSearch className="h-3.5 w-3.5" /> Mostra nel Finder
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
         {open && n.children.map((c) => renderNode(c, depth + 1))}
       </div>
     );
@@ -161,14 +196,14 @@ export default function BrainFileExplorer({
   return (
     <div className="h-full flex flex-col min-w-[240px] w-[280px]">
       <div className="p-2 border-b border-border flex items-center gap-1.5">
-        <Search size={12} className="text-muted shrink-0" />
+        <Search size={12} className="text-muted-foreground shrink-0" />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Filtra file…"
-          className="flex-1 bg-transparent text-xs focus:outline-none placeholder:text-muted"
+          className="flex-1 bg-transparent text-xs focus:outline-none placeholder:text-muted-foreground"
         />
-        <button onClick={onClose} className="text-muted hover:text-text transition shrink-0" title="Chiudi">
+        <button onClick={onClose} className="text-muted-foreground hover:text-text transition shrink-0" title="Chiudi">
           <X size={13} />
         </button>
       </div>
@@ -187,10 +222,10 @@ export default function BrainFileExplorer({
             })}
           </div>
         )}
-        {!loading && tree.length === 0 && <div className="px-3 py-2 text-xs text-muted">Nessun file.</div>}
+        {!loading && tree.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">Nessun file.</div>}
         {!loading && tree.map((n) => renderNode(n, 0))}
       </div>
-      <div className="border-t border-border px-2 py-1 text-[10px] text-muted">
+      <div className="border-t border-border px-2 py-1 text-[10px] text-muted-foreground">
         {files.length} file totali
       </div>
     </div>

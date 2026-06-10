@@ -6,6 +6,7 @@ import { Button, Card, Chip, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { useWS, useLiveData } from '../ws';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { useSetBreadcrumb } from '../components/Breadcrumbs';
 import MarkdownView from '../components/MarkdownView';
 
 type Event = {
@@ -51,6 +52,16 @@ export default function TeamTaskDetail() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const zoomedRef = useRef(false);
   const [size, setSize] = useState({ w: 600, h: 480 });
+  // Hide the canvas until the first zoomToFit + clamp finishes. Without this
+  // ForceGraph2D paints a flash of "fully zoomed in" before the engine
+  // settles and we fit the view.
+  const [zoomReady, setZoomReady] = useState(false);
+  const [bottomTab, setBottomTab] = useState<'brief' | 'result' | 'history'>('brief');
+  useSetBreadcrumb(task ? [
+    { label: 'Tasks', to: '/tasks' },
+    { label: 'Team task', to: '/tasks?tab=team' },
+    { label: task.title },
+  ] : null);
 
   const load = useCallback(async () => {
     try {
@@ -207,19 +218,19 @@ export default function TeamTaskDetail() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={() => nav('/team-tasks')} className="text-muted hover:text-text"><ArrowLeft size={16} /></button>
+        <button onClick={() => nav('/team-tasks')} className="text-muted-foreground hover:text-text"><ArrowLeft size={16} /></button>
         <h1 className="text-xl font-semibold truncate">{task?.title ?? 'Loading…'}</h1>
         {task && <Chip tone={task.status === 'done' ? 'on' : task.status === 'running' ? 'accent' : task.status === 'error' ? 'err' : 'default'}>{task.status}</Chip>}
         <div className="ml-auto flex gap-2 items-center">
           {/* Token + cost widget */}
           <div className="flex items-center gap-3 px-3 py-1.5 rounded-full bg-surface2/60 border border-border text-xs">
             <span className="inline-flex items-center gap-1.5">
-              <span className="text-[9px] uppercase text-muted tracking-wider">tokens</span>
+              <span className="text-[9px] uppercase text-muted-foreground tracking-wider">tokens</span>
               <span className="font-mono font-semibold tabular-nums">{totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}K` : totalTokens}</span>
             </span>
             <span className="w-px h-3 bg-border" />
             <span className="inline-flex items-center gap-1.5">
-              <span className="text-[9px] uppercase text-muted tracking-wider">costo</span>
+              <span className="text-[9px] uppercase text-muted-foreground tracking-wider">costo</span>
               <span className="font-mono font-semibold tabular-nums text-emerald-300">${(task?.cost_usd ?? taskCostLive).toFixed(4)}</span>
             </span>
             {task?.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
@@ -238,8 +249,9 @@ export default function TeamTaskDetail() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div ref={wrapRef} className="lg:col-span-2 h-[60vh]"><Card className="p-0 overflow-hidden h-full">
           {graphData.nodes.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-muted text-sm">In attesa di eventi…</div>
+            <div className="h-full flex items-center justify-center text-muted-foreground text-sm">In attesa di eventi…</div>
           ) : (
+          <div className="h-full w-full">
             <ForceGraph2D
               ref={fgRef}
               width={size.w}
@@ -248,11 +260,22 @@ export default function TeamTaskDetail() {
               backgroundColor="#0a0a0f"
               cooldownTicks={120}
               d3AlphaDecay={0.04}
-              onEngineStop={() => {
-                // Fire only ONCE — engine can re-settle on data change and would reset user pan/zoom.
+              cooldownTime={1500}
+              warmupTicks={20}
+              onEngineTick={() => {
+                // First-tick fit: don't wait for the whole simulation to cool
+                // down (which can take 3-5s with d3AlphaDecay 0.04) — clamp
+                // zoom right away so the user sees the graph immediately.
                 if (zoomedRef.current) return;
-                zoomedRef.current = true;
-                try { fgRef.current?.zoomToFit(500, 100); } catch {}
+                const fg: any = fgRef.current;
+                if (!fg) return;
+                try {
+                  fg.zoomToFit(0, 240);
+                  const z = fg.zoom();
+                  if (typeof z === 'number' && z > 1) fg.zoom(1, 0);
+                  zoomedRef.current = true;
+                  setZoomReady(true);
+                } catch {}
               }}
               linkColor={(l: any) => l.kinds?.has('error') ? '#f8717177' : '#a78bfa66'}
               linkWidth={(l: any) => Math.min(1 + Math.log(l.count + 1), 4)}
@@ -383,6 +406,7 @@ export default function TeamTaskDetail() {
                 ctx.fillText(statsStr, x + W - 12, y + H - 14);
               }}
             />
+          </div>
           )}
         </Card></div>
 
@@ -391,13 +415,13 @@ export default function TeamTaskDetail() {
             <div className="font-semibold inline-flex items-center gap-2 text-sm">
               🟢 Live activity
               {task?.status === 'running' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-400/30 uppercase tracking-wider">streaming</span>}
-              <span className="text-xs text-muted font-mono">({liveFeed.length})</span>
+              <span className="text-xs text-muted-foreground font-mono">({liveFeed.length})</span>
             </div>
             {liveFeed.length > 0 && <Button size="sm" variant="ghost" onClick={() => setLiveFeed([])}>clear</Button>}
           </div>
           <div ref={feedRef} className="flex-1 overflow-y-auto space-y-1">
             {liveFeed.length === 0 ? (
-              <div className="text-xs text-muted py-3">
+              <div className="text-xs text-muted-foreground py-3">
                 {task?.status === 'running' ? 'Aspetto attività dagli agenti…' : 'Nessuna attività live (task non in esecuzione).'}
               </div>
             ) : liveFeed.map((t, i) => {
@@ -406,14 +430,14 @@ export default function TeamTaskDetail() {
               const cleanName = mcp ? t.name.replace(/^mcp__[^_]+__/, '') : t.name;
               return (
                 <div key={i} className="flex items-start gap-2 text-xs border border-border/40 rounded-lg p-2 bg-surface2/30">
-                  <span className="text-[10px] text-muted font-mono shrink-0 w-12">{new Date(t.ts).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono shrink-0 w-12">{new Date(t.ts).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                   {ag && (
                     <span className="px-1.5 py-0.5 rounded-full font-semibold text-[9px] uppercase tracking-wider shrink-0" style={{ background: (ag.color ?? '#c084fc') + '22', color: ag.color ?? '#c084fc', border: `1px solid ${ag.color ?? '#c084fc'}55` }}>
                       {ag.name}
                     </span>
                   )}
                   <span className={`font-mono text-[10px] shrink-0 ${mcp ? 'text-accent2' : 'text-accent'}`}>{cleanName}</span>
-                  {t.brief && <span className="text-muted whitespace-pre-wrap break-all flex-1 min-w-0 font-mono">{t.brief}</span>}
+                  {t.brief && <span className="text-muted-foreground whitespace-pre-wrap break-all flex-1 min-w-0 font-mono">{t.brief}</span>}
                 </div>
               );
             })}
@@ -422,33 +446,50 @@ export default function TeamTaskDetail() {
       </div>
 
       <Card>
-        <div className="text-xs uppercase tracking-wider text-muted mb-2 font-semibold">Brief</div>
-        <div className="text-sm whitespace-pre-wrap break-words p-3 rounded-xl bg-surface2/40 border border-border mb-3 max-h-[30vh] overflow-y-auto">{task?.prompt}</div>
-        {task?.result && (
+        <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1 w-fit mb-3">
+          <Button size="sm" variant={bottomTab === 'brief' ? 'primary' : 'ghost'} onClick={() => setBottomTab('brief')}>Brief</Button>
+          <Button size="sm" variant={bottomTab === 'result' ? 'primary' : 'ghost'} onClick={() => setBottomTab('result')}>Risultato</Button>
+          <Button size="sm" variant={bottomTab === 'history' ? 'primary' : 'ghost'} onClick={() => setBottomTab('history')}>Storico interazioni</Button>
+        </div>
+
+        {bottomTab === 'brief' && (
+          <div className="p-3 rounded-xl bg-surface2/40 border border-border text-sm max-h-[60vh] overflow-y-auto">
+            <MarkdownView content={task?.prompt ?? ''} />
+          </div>
+        )}
+
+        {bottomTab === 'result' && (
           <>
-            <div className="text-xs uppercase tracking-wider text-muted mb-2 font-semibold">Risultato</div>
-            <div className="p-3 rounded-xl bg-surface2/40 border border-border text-sm mb-3">
-              <MarkdownView content={task.result} />
-            </div>
+            {task?.result ? (
+              <div className="p-3 rounded-xl bg-surface2/40 border border-border text-sm max-h-[60vh] overflow-y-auto">
+                <MarkdownView content={task.result} />
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-surface2/40 border border-border text-sm text-muted-foreground">
+                {task?.status === 'running' ? 'In esecuzione — il risultato apparirà al termine.' : 'Nessun risultato disponibile.'}
+              </div>
+            )}
+            {task?.error && (
+              <div className="text-xs text-red-300 font-mono whitespace-pre-wrap break-all bg-red-500/5 border border-red-400/30 rounded-xl p-3 mt-3">{task.error}</div>
+            )}
           </>
         )}
-        {task?.error && (
-          <div className="text-xs text-red-300 font-mono whitespace-pre-wrap break-all bg-red-500/5 border border-red-400/30 rounded-xl p-3 mb-3">{task.error}</div>
+
+        {bottomTab === 'history' && (
+          <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
+            {events.map((e) => (
+              <div key={e.id} className="flex items-start gap-2 text-sm border border-border/60 rounded-xl p-2.5 bg-surface2/30">
+                <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full" style={{ background: (KIND_COLOR[e.kind] ?? '#888') + '22', color: KIND_COLOR[e.kind] ?? '#888', border: `1px solid ${(KIND_COLOR[e.kind] ?? '#888')}55` }}>
+                  {e.kind}
+                </span>
+                <div className="text-xs text-muted-foreground shrink-0 font-mono">{agentName(e.from_agent_id)} → {agentName(e.to_agent_id)}</div>
+                <div className="text-xs flex-1 min-w-0 whitespace-pre-wrap break-words">{(e.content ?? '').slice(0, 600)}</div>
+                <div className="text-[10px] text-muted-foreground font-mono shrink-0">{new Date(e.ts).toLocaleTimeString('it-IT')}</div>
+              </div>
+            ))}
+            {events.length === 0 && <div className="text-muted-foreground text-sm">Nessun evento.</div>}
+          </div>
         )}
-        <div className="font-semibold mb-2">Storico interazioni ({events.length})</div>
-        <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
-          {events.map((e) => (
-            <div key={e.id} className="flex items-start gap-2 text-sm border border-border/60 rounded-xl p-2.5 bg-surface2/30">
-              <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full" style={{ background: (KIND_COLOR[e.kind] ?? '#888') + '22', color: KIND_COLOR[e.kind] ?? '#888', border: `1px solid ${(KIND_COLOR[e.kind] ?? '#888')}55` }}>
-                {e.kind}
-              </span>
-              <div className="text-xs text-muted shrink-0 font-mono">{agentName(e.from_agent_id)} → {agentName(e.to_agent_id)}</div>
-              <div className="text-xs flex-1 min-w-0 whitespace-pre-wrap break-words">{(e.content ?? '').slice(0, 600)}</div>
-              <div className="text-[10px] text-muted font-mono shrink-0">{new Date(e.ts).toLocaleTimeString('it-IT')}</div>
-            </div>
-          ))}
-          {events.length === 0 && <div className="text-muted text-sm">Nessun evento.</div>}
-        </div>
       </Card>
     </div>
   );

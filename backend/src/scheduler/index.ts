@@ -87,7 +87,98 @@ export async function startScheduler() {
   });
   console.log('[scheduler] reflection loop armed (every 2m, all users)');
 
-  // Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
+  // WA watchdog: every 60s scan active users and restart any WA session that
+  // is missing or in a stale 'closed' state. Prevents the agent from sitting
+  // on `status=idle` after a backend restart, network drop, or phone-side
+  // disconnect (Baileys' own auto-retry path doesn't fire on every disconnect
+  // reason).
+  let waWatchRunning = false;
+  cron.schedule('* * * * *', async () => {
+    if (waWatchRunning) return;
+    waWatchRunning = true;
+    try {
+      const wa = await import('../connectors/builtin/whatsapp/index.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try {
+          const st = wa.getWaStatus(u.id);
+          if (st.status === 'starting' || st.status === 'closed' || st.status === 'idle') {
+            await wa.startWaForUser(u.id).catch(() => {});
+          }
+        } catch {}
+      }
+    } catch (e) { console.error('[wa-watchdog]', e); }
+    finally { waWatchRunning = false; }
+  });
+  console.log('[scheduler] wa-watchdog armed (every 1m)');
+
+  // Mail auto-sync: react to `mail:new` events. When the IMAP cron's
+  // persistInbound fires for an account the user flagged `mail.autoSync=true`,
+  // immediately bonifica that single message (brain note + people linking).
+  // Per-message, NOT a polling loop.
+  bus.on('mail:new', async (m: any) => {
+    if (!m?.userId || !m?.account || !m?.id) return;
+    try {
+      const pref = await getSetting<{ enabled: boolean }>(m.userId, `mail.autoSync.${m.account}`);
+      if (!pref?.enabled) return;
+      bus.emit('mail:autosync', { userId: m.userId, account: m.account, mailId: m.id, phase: 'started' });
+      const { bonifyOne } = await import('../mail/service.js');
+      const r = await bonifyOne(m.userId, m.id, false);
+      bus.emit('mail:autosync', {
+        userId: m.userId, account: m.account, mailId: m.id,
+        phase: r.ok ? 'done' : 'error',
+        skipped: r.skipped, subj: r.subj, error: r.error,
+      });
+    } catch (e: any) {
+      bus.emit('mail:autosync', { userId: m.userId, account: m.account, mailId: m.id, phase: 'error', error: String(e?.message ?? e) });
+    }
+  });
+  console.log('[scheduler] mail auto-sync armed (per-message, on mail:new)');
+
+  // Brain snapshots: 00:00 nightly per-user vault copy + counts.
+  // Pin to Europe/Rome so it fires at midnight LOCAL regardless of system TZ
+  // (default would be process TZ — if running in UTC container, "00:00" =
+  // 02:00 CEST and the user thinks it's broken).
+  let snapRunning = false;
+  async function runSnapshotSweep(label: string) {
+    if (snapRunning) return;
+    snapRunning = true;
+    try {
+      const { createSnapshots } = await import('../brain/snapshots.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try { const r = await createSnapshots(u.id, 'cron'); console.log(`[snapshots:${label}:u${u.id}] ${r.length} vaults snapshotted`); }
+        catch (e) { console.error(`[snapshots:${label}:u${u.id}]`, e); }
+      }
+    } finally { snapRunning = false; }
+  }
+  cron.schedule('0 0 * * *', () => { runSnapshotSweep('cron').catch(() => {}); }, { timezone: 'Europe/Rome' });
+  console.log('[scheduler] brain-snapshot loop armed (daily 00:00 Europe/Rome)');
+
+  // Catch-up: backend was down at midnight, or process restarted mid-sweep.
+  // On boot, check whether a cron snapshot for TODAY already exists per user;
+  // if not, run one now. Guarantees daily coverage even with frequent restarts.
+  (async () => {
+    try {
+      const { createSnapshots } = await import('../brain/snapshots.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try {
+          const r = await query<{ c: number }>(
+            `SELECT count(*)::int AS c FROM brain_snapshots
+             WHERE user_id=$1 AND trigger='cron' AND created_at::date = (now() AT TIME ZONE 'Europe/Rome')::date`,
+            [u.id],
+          );
+          if ((r[0]?.c ?? 0) > 0) continue;
+          console.log(`[snapshots:catchup:u${u.id}] no cron snapshot for today — running now`);
+          const out = await createSnapshots(u.id, 'cron');
+          console.log(`[snapshots:catchup:u${u.id}] ${out.length} vaults snapshotted`);
+        } catch (e) { console.error(`[snapshots:catchup:u${u.id}]`, e); }
+      }
+    } catch (e) { console.error('[snapshots:catchup]', e); }
+  })().catch(() => {});
+
+// Auto-bonify loop: every 5 minutes, find chats with auto_bonify=true that have pending
   // wa_messages and run bonifyWaMessages(onlyChat=jid). Skips quiet/disabled.
   let bonifyRunning = false;
   cron.schedule('*/5 * * * *', async () => {

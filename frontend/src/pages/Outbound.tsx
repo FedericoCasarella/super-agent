@@ -7,7 +7,7 @@ import { Send, AlertCircle, X, MessageCircle, Mail, MessageSquare, Camera, Activ
 import DataTable, { Column, ChipFilter } from '../components/DataTable';
 
 type Channel = 'whatsapp' | 'email' | 'telegram' | 'instagram';
-const CHANNEL_FALLBACK = { label: '—', icon: Activity, color: 'text-muted' };
+const CHANNEL_FALLBACK = { label: '—', icon: Activity, color: 'text-muted-foreground' };
 type Status = 'sent' | 'error';
 
 type Row = {
@@ -49,7 +49,7 @@ export default function Outbound() {
   }
 
   const columns: Column<Row>[] = [
-    { key: 'ts', header: 'Quando', width: 'w-44', render: (r) => <span className="text-[10px] text-muted font-mono">{fmtDate(r.ts)}</span> },
+    { key: 'ts', header: 'Quando', width: 'w-44', render: (r) => <span className="text-[10px] text-muted-foreground font-mono">{fmtDate(r.ts)}</span> },
     { key: 'channel', header: 'Canale', width: 'w-28', render: (r) => {
       const m = CHANNEL_META[r.channel] ?? CHANNEL_FALLBACK;
       const I = m.icon;
@@ -62,17 +62,17 @@ export default function Outbound() {
     { key: 'recipient', header: 'Destinatario', render: (r) => (
       <div className="min-w-0">
         <div className="text-sm font-medium truncate">{r.recipient_name || r.recipient || '—'}</div>
-        {r.subject && <div className="text-[11px] text-muted truncate">{r.subject}</div>}
+        {r.subject && <div className="text-[11px] text-muted-foreground truncate">{r.subject}</div>}
       </div>
     )},
     { key: 'body_preview', header: 'Contenuto', render: (r) => (
-      <div className="text-xs text-muted line-clamp-2 max-w-[420px]">{r.body_preview}</div>
+      <div className="text-xs text-muted-foreground line-clamp-2 max-w-[420px]">{r.body_preview}</div>
     )},
     { key: 'origin', header: 'Origine', width: 'w-32', render: (r) => r.origin ? (
-      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${r.origin.startsWith('perk:') ? 'bg-accent/15 text-accent border border-accent/30' : r.origin.startsWith('subagent:') ? 'bg-accent2/15 text-accent2 border border-accent2/30' : r.origin === 'agent' ? 'bg-sky-500/15 text-sky-300 border border-sky-400/30' : 'bg-surface2 text-muted border border-border'}`}>
+      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${r.origin.startsWith('perk:') ? 'bg-accent/15 text-accent border border-accent/30' : r.origin.startsWith('subagent:') ? 'bg-accent2/15 text-accent2 border border-accent2/30' : r.origin === 'agent' ? 'bg-sky-500/15 text-sky-300 border border-sky-400/30' : 'bg-surface2 text-muted-foreground border border-border'}`}>
         {r.origin.length > 22 ? r.origin.slice(0, 19) + '…' : r.origin}
       </span>
-    ) : <span className="text-muted">—</span> },
+    ) : <span className="text-muted-foreground">—</span> },
   ];
 
   const chipFilters: ChipFilter[] = [
@@ -109,6 +109,7 @@ export default function Outbound() {
       </div>
 
       <DataTable<Row>
+        persistKey="outbound"
         fetcher={async ({ q, page, pageSize, filters }) => {
           const r = await api.outboundList({
             channels: filters.channels, statuses: filters.statuses, q,
@@ -134,44 +135,44 @@ export default function Outbound() {
                 {(() => { const M = CHANNEL_META[openRow.channel as Channel] ?? CHANNEL_FALLBACK; const I = M.icon; return <I size={18} className={M.color} />; })()}
                 <div className="min-w-0">
                   <div className="font-semibold text-sm truncate">{openRow.recipient_name || openRow.recipient || '—'}</div>
-                  <div className="text-[10px] text-muted font-mono truncate">{fmtDate(openRow.ts)} · {openRow.channel}</div>
+                  <div className="text-[10px] text-muted-foreground font-mono truncate">{fmtDate(openRow.ts)} · {openRow.channel}</div>
                 </div>
               </div>
-              <button onClick={() => setOpenRow(null)} className="p-1.5 rounded-md hover:bg-surface2 text-muted hover:text-text"><X size={16} /></button>
+              <button onClick={() => setOpenRow(null)} className="p-1.5 rounded-md hover:bg-surface2 text-muted-foreground hover:text-text"><X size={16} /></button>
             </div>
             <div className="overflow-y-auto p-5 flex-1 space-y-3">
               {openRow.subject && (
                 <div>
-                  <div className="text-[10px] uppercase text-muted tracking-wider mb-1">Oggetto</div>
+                  <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-1">Oggetto</div>
                   <div className="text-sm font-medium">{openRow.subject}</div>
                 </div>
               )}
               <div>
-                <div className="text-[10px] uppercase text-muted tracking-wider mb-1">Destinatario</div>
+                <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-1">Destinatario</div>
                 <div className="text-xs font-mono break-all">{openRow.recipient}</div>
-                {openRow.recipient_name && <div className="text-xs text-muted">({openRow.recipient_name})</div>}
+                {openRow.recipient_name && <div className="text-xs text-muted-foreground">({openRow.recipient_name})</div>}
               </div>
               <div>
-                <div className="text-[10px] uppercase text-muted tracking-wider mb-1">Origine</div>
+                <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-1">Origine</div>
                 <div className="text-xs font-mono">{openRow.origin ?? '—'}</div>
               </div>
               <div>
-                <div className="text-[10px] uppercase text-muted tracking-wider mb-1">Stato</div>
+                <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-1">Stato</div>
                 <Chip tone={openRow.status === 'sent' ? 'on' : 'err'}>{openRow.status}</Chip>
               </div>
               {openRow.error && (
                 <div>
-                  <div className="text-[10px] uppercase text-muted tracking-wider mb-1">Errore</div>
+                  <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-1">Errore</div>
                   <pre className="text-xs text-red-300 font-mono whitespace-pre-wrap break-all bg-red-500/5 border border-red-400/20 rounded-xl p-3">{openRow.error}</pre>
                 </div>
               )}
               <div>
-                <div className="text-[10px] uppercase text-muted tracking-wider mb-1">Contenuto</div>
+                <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-1">Contenuto</div>
                 <pre className="text-sm whitespace-pre-wrap break-words bg-surface2/40 border border-border rounded-xl p-3">{openRow.body || '—'}</pre>
               </div>
               {openRow.meta && Object.keys(openRow.meta).length > 0 && (
                 <div>
-                  <div className="text-[10px] uppercase text-muted tracking-wider mb-1">Meta</div>
+                  <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-1">Meta</div>
                   <pre className="text-[11px] font-mono whitespace-pre-wrap break-all bg-surface2/40 border border-border rounded-xl p-3">{JSON.stringify(openRow.meta, null, 2)}</pre>
                 </div>
               )}

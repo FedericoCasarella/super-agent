@@ -134,8 +134,15 @@ export async function buildSystemContext(userId: number): Promise<string> {
 
   const externals = listExternalMcps();
   if (externals.length) {
-    const lines = externals.map((e) => `- mcp__${e.serverName}__* — ${e.rawName} [${e.status}]${e.url ? ` (${e.url})` : ''}`).join('\n');
-    parts.push('EXTERNAL MCP SERVERS (user-global Claude Code):\n' + lines + '\n\n`needs_auth` = unusable until user authenticates.');
+    // Server prefix is normalize(rawName): "claude.ai flowspace" → "claude_ai_flowspace".
+    // Confirmed against `claude -p` inspection — this IS the real prefix Claude
+    // exposes. The wildcard `mcp__<server>__*` is allow-listed in runner.ts.
+    const lines = externals
+      .filter((e) => e.status === 'connected')
+      .map((e) => `- mcp__${e.serverName}__<tool> — ${e.rawName}`)
+      .join('\n');
+    const blocked = externals.filter((e) => e.status !== 'connected').map((e) => e.rawName);
+    parts.push('EXTERNAL MCP SERVERS (user-global Claude Code):\n' + lines + (blocked.length ? '\n\nNot connected (do not call): ' + blocked.join(', ') : ''));
   }
 
   parts.push(

@@ -11,16 +11,10 @@ export default function AgentsHub() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-semibold text-gradient">Agents</h1>
-        <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-full p-1">
-          <Button size="sm" variant={tab === 'live' ? 'primary' : 'ghost'} onClick={() => setTab('live')}>
-            <Zap size={13} className="inline mr-1 -mt-0.5" />Live
-          </Button>
-          <Button size="sm" variant={tab === 'custom' ? 'primary' : 'ghost'} onClick={() => setTab('custom')}>
-            <Bot size={13} className="inline mr-1 -mt-0.5" />Custom
-          </Button>
-        </div>
+      <h1 className="text-2xl font-semibold text-gradient">Agents</h1>
+      <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1 w-fit">
+        <Button size="sm" variant={tab === 'live' ? 'primary' : 'ghost'} onClick={() => setTab('live')}>Live</Button>
+        <Button size="sm" variant={tab === 'custom' ? 'primary' : 'ghost'} onClick={() => setTab('custom')}>Custom</Button>
       </div>
       {tab === 'live' && <LiveAgentsPanel />}
       {tab === 'custom' && <CustomAgentsPanel />}

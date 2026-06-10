@@ -1,143 +1,332 @@
-import { NavLink } from 'react-router-dom';
-import { useCallback, useEffect, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { useCallback, useState } from 'react';
 import { useI18n } from '../i18n';
 import { useAuth } from '../auth';
-import { Button } from './ui';
-import UsageGauge from './UsageGauge';
-import ActiveAgentsBadge from './ActiveAgentsBadge';
 import { useBranding } from '../branding';
 import { api } from '../api';
 import { useLiveData } from '../ws';
 import { usePageVisibility, type PageKey } from '../pageVisibility';
 import {
+  Sidebar as SbRoot,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarRail,
+} from '@/components/ui/sidebar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faWhatsapp, faInstagram } from '@fortawesome/free-brands-svg-icons';
+import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
-  Share2, ScrollText, Settings as SettingsIcon, LogOut, ChevronsLeft, ChevronsRight, MessageCircle, Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow, Camera as IgIcon,
-  type LucideIcon,
+  Share2, ScrollText, Settings as SettingsIcon, LogOut, MessageCircle,
+  Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow,
+  Camera as IgIcon, type LucideIcon, ChevronsUpDown, Archive, LineChart, Mail as MailIcon,
 } from 'lucide-react';
 
-type Props = {
-  collapsed: boolean;
-  mobileOpen: boolean;
-  onToggleCollapse: () => void;
-  onCloseMobile: () => void;
-};
+function humanizeIn(ms: number): string {
+  if (ms <= 0) return 'a momenti';
+  const min = Math.floor(ms / 60000);
+  if (min < 60) return `tra ${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `tra ${h}h ${m ? `${m}m` : ''}`.trim();
+}
 
-export default function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onCloseMobile }: Props) {
+export default function AppSidebar() {
   const { t } = useI18n();
   const { user, logout } = useAuth();
   const { branding } = useBranding();
-  // Tasks running counter — WS-driven via team_task events, long fallback safety.
   const [tasksRunning, setTasksRunning] = useState(0);
+  const [tasksScheduled, setTasksScheduled] = useState(0);
+  const loadTasksScheduled = useCallback(async () => {
+    try { const all = await api.tasks(); setTasksScheduled((all ?? []).length); } catch {}
+  }, []);
+  useLiveData(loadTasksScheduled, { refreshOn: ['task'], fallbackMs: 60_000 });
+
+  const [agentsRunning, setAgentsRunning] = useState(0);
+  const loadAgentsRunning = useCallback(async () => {
+    try { const a = await api.subAgentsActive(); setAgentsRunning((a ?? []).filter((x: any) => x.status === 'running').length); } catch {}
+  }, []);
+  useLiveData(loadAgentsRunning, { refreshOn: ['subagent'], fallbackMs: 15_000 });
   const loadTasksRunning = useCallback(async () => {
     try { const r = await api.teamTasksRunningCount(); setTasksRunning(r.running); } catch {}
   }, []);
   useLiveData(loadTasksRunning, { refreshOn: ['team_task'], fallbackMs: 120_000 });
 
+  // Unread email count for the /mail badge
+  const [mailUnread, setMailUnread] = useState(0);
+  const loadMailUnread = useCallback(async () => {
+    try { const r = await api.mailList({ unread: true, folder: 'INBOX', limit: 1 }); setMailUnread(r.total ?? 0); } catch {}
+  }, []);
+  useLiveData(loadMailUnread, { refreshOn: ['mail:new', 'mail:flags'], fallbackMs: 60_000 });
+
+  const [waUnread, setWaUnread] = useState(0);
+  const loadWaUnread = useCallback(async () => {
+    try { const r = await api.waUnread(); setWaUnread(r.count); } catch {}
+  }, []);
+  useLiveData(loadWaUnread, { refreshOn: ['wa:message', 'wa:bonify'], fallbackMs: 60_000 });
+
+  const [igUnread, setIgUnread] = useState(0);
+  const loadIgUnread = useCallback(async () => {
+    try { const r = await api.igUnread(); setIgUnread(r.count); } catch {}
+  }, []);
+  useLiveData(loadIgUnread, { refreshOn: ['ig:message'], fallbackMs: 60_000 });
+
+  // Claude session usage card data
+  const [usage, setUsage] = useState<{ percent: number; resetIn: string | null; plan: string | null } | null>(null);
+  const loadUsage = useCallback(async () => {
+    try {
+      const r: any = await api.usage();
+      if (!r) return setUsage(null);
+      const budget = r.plan?.costBudgetUsd ?? 0;
+      const percent = budget > 0 ? Math.min(100, Math.round(((r.costUsd ?? 0) / budget) * 100)) : 0;
+      const resetAt = r.resetAt ? new Date(r.resetAt) : null;
+      const resetIn = resetAt ? humanizeIn(resetAt.getTime() - Date.now()) : null;
+      setUsage({
+        percent,
+        resetIn,
+        plan: r.plan?.name ?? null,
+      });
+    } catch {}
+  }, []);
+  useLiveData(loadUsage, { refreshOn: ['usage'], fallbackMs: 60_000 });
+
   const { isVisible } = usePageVisibility();
-  // Each item can carry an optional `gate` PageKey — if set, the entry is
-  // hidden when that page has been toggled off in Settings.
-  const allItems: { to: string; label: string; icon: LucideIcon; badge?: number; gate?: PageKey }[] = [
+  const location = useLocation();
+  type NavItem = { to: string; label: string; icon: LucideIcon; badge?: number; gate?: PageKey };
+  const items: NavItem[] = ([
     { to: '/', label: t('nav.live'), icon: Activity },
     { to: '/connectors', label: t('nav.connectors'), icon: Plug },
     { to: '/brain', label: t('nav.brain'), icon: Brain },
     { to: '/roadmap', label: t('nav.roadmap'), icon: MapIcon },
-    { to: '/tasks', label: 'Tasks', icon: ListChecks, badge: tasksRunning > 0 ? tasksRunning : undefined },
-    { to: '/agents', label: 'Agents', icon: Zap },
+    { to: '/tasks', label: 'Tasks', icon: ListChecks },
+    { to: '/agents', label: 'Agents', icon: Zap, badge: agentsRunning > 0 ? agentsRunning : undefined },
     { to: '/perks', label: 'Perks', icon: Sparkles },
-    { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, gate: 'whatsapp' },
-    { to: '/instagram', label: 'Instagram', icon: IgIcon, gate: 'instagram' },
+    { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, gate: 'whatsapp', badge: waUnread > 0 ? waUnread : undefined },
+    { to: '/mail', label: 'Email', icon: MailIcon, badge: mailUnread > 0 ? mailUnread : undefined },
+    { to: '/instagram', label: 'Instagram', icon: IgIcon, gate: 'instagram', badge: igUnread > 0 ? igUnread : undefined },
     { to: '/people', label: 'People', icon: UsersIcon, gate: 'people' },
     { to: '/teams', label: 'Teams', icon: NetworkIcon, gate: 'teams' },
     { to: '/flows', label: 'Flows', icon: Workflow, gate: 'flows' },
     { to: '/outbound', label: 'Inviati', icon: Send, gate: 'outbound' },
     { to: '/logs', label: 'Logs', icon: ScrollText, gate: 'logs' },
+    { to: '/snapshots', label: 'Snapshot', icon: Archive },
+    { to: '/report', label: 'Report', icon: LineChart },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
-  ];
-  const items = allItems.filter((it) => !it.gate || isVisible(it.gate));
-  const widthClass = collapsed ? 'md:w-[72px]' : 'md:w-64';
+  ] as NavItem[]).filter((it) => !it.gate || isVisible(it.gate as PageKey));
+
+  const initials = (user?.name || user?.email || 'U')
+    .split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
 
   return (
-    <>
-      {/* Mobile backdrop */}
-      {mobileOpen && (
-        <div className="fixed inset-0 z-30 bg-bg/60 backdrop-blur-sm md:hidden animate-fade-in" onClick={onCloseMobile} />
-      )}
-
-      <aside
-        className={[
-          'glass border-r border-border flex flex-col gap-1 p-3 shrink-0 overflow-hidden',
-          'fixed inset-y-0 left-0 z-40 w-64',
-          'md:static md:h-screen md:translate-x-0 transition-transform duration-300 ease-out-expo',
-          widthClass,
-          mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
-        ].join(' ')}
-      >
-        <div className={`flex items-center gap-3 px-2 py-3 animate-fade-in ${collapsed ? 'md:justify-center' : ''}`}>
-          <div className="relative shrink-0">
-            <div className="absolute inset-0 rounded-2xl bg-accent/30 blur-xl animate-soft-pulse" />
-            <img src={branding.logoDataUrl || '/rounded-image.png'} alt={branding.title} className="relative w-11 h-11 rounded-2xl ring-1 ring-white/10 shadow-lg object-cover" />
-          </div>
-          <div className={collapsed ? 'md:hidden' : ''}>
-            <div className="text-base font-semibold tracking-tight text-gradient truncate">{branding.title}</div>
-            {branding.subtitle && <div className="text-[10px] uppercase tracking-[0.18em] text-muted truncate">{branding.subtitle}</div>}
-          </div>
-        </div>
-
-        <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-1 mt-2 pr-1 sidebar-scroll">
-          {items.map((it, i) => {
-            const Icon = it.icon;
-            return (
-              <NavLink
-                key={it.to}
-                to={it.to}
-                end
-                onClick={onCloseMobile}
-                title={collapsed ? it.label : undefined}
-                style={{ animationDelay: `${i * 30}ms` }}
-                className={({ isActive }) =>
-                  `group relative flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm transition-all duration-200 ease-out-expo animate-slide-up ${
-                    collapsed ? 'md:justify-center md:px-0' : ''
-                  } ${
-                    isActive
-                      ? 'bg-gradient-to-r from-accent/15 to-accent2/10 text-text border border-accent/30 shadow-[0_0_22px_-8px_rgba(192,132,252,0.6)]'
-                      : 'text-muted hover:text-text hover:bg-surface2/60 hover:translate-x-0.5'
-                  }`
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    {isActive && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-gradient-to-b from-accent to-accent2" />}
-                    <Icon size={18} className={isActive ? 'text-accent2' : 'text-accent/70 group-hover:text-accent2'} />
-                    <span className={`flex-1 ${collapsed ? 'md:hidden' : ''}`}>{it.label}</span>
-                    {it.badge != null && (
-                      <span className={`text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 animate-pulse ${collapsed ? 'md:hidden' : ''}`}>{it.badge}</span>
-                    )}
-                  </>
-                )}
-              </NavLink>
-            );
-          })}
-        </nav>
-
-        <div className="shrink-0 px-1 pt-4 border-t border-border/60 space-y-2">
-          <ActiveAgentsBadge collapsed={collapsed} />
-          <UsageGauge collapsed={collapsed} />
-          {!collapsed && <div className="text-xs text-muted truncate font-medium px-1">{user?.name || user?.email}</div>}
-          <Button variant="ghost" size="sm" className={`w-full ${collapsed ? 'md:px-2' : ''}`} onClick={logout}>
-            {collapsed ? <LogOut size={16} /> : (<><LogOut size={14} className="inline mr-1.5 -mt-0.5" />{t('nav.logout')}</>)}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="hidden md:flex w-full"
-            onClick={onToggleCollapse}
-            title={collapsed ? t('nav.expand') : t('nav.collapseTip')}
+    <SbRoot variant="inset" collapsible="icon">
+      <SidebarHeader>
+        <div className="flex items-center gap-2 px-2 py-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+          <div
+            className="shadow shrink-0 overflow-hidden rounded-lg group-data-[collapsible=icon]:rounded-full"
+            style={{ width: 36, height: 36, flex: '0 0 36px' }}
           >
-            {collapsed ? <ChevronsRight size={16} /> : (<><ChevronsLeft size={14} className="inline mr-1.5 -mt-0.5" />{t('nav.collapse')}</>)}
-          </Button>
-          <div className={`text-[10px] text-muted/70 text-center tracking-widest ${collapsed ? 'md:hidden' : ''}`}>v0.1.0</div>
+            <img
+              src={branding.logoDataUrl || '/rounded-image.png'}
+              alt={branding.title}
+              className="block w-full h-full object-cover"
+              style={{ aspectRatio: '1 / 1' }}
+            />
+          </div>
+          <div className="flex flex-col min-w-0 group-data-[collapsible=icon]:hidden">
+            <span className="font-semibold text-sm tracking-tight truncate">{branding.title}</span>
+            {branding.subtitle && (
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground truncate">
+                {branding.subtitle}
+              </span>
+            )}
+          </div>
         </div>
-      </aside>
-    </>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Navigazione</SidebarGroupLabel>
+          <SidebarMenu>
+            {items.map((it) => {
+              const Icon = it.icon;
+              const isActive = it.to === '/' ? location.pathname === '/' : location.pathname.startsWith(it.to);
+              // Brand icons only for WhatsApp + Instagram nav rows so they
+              // pop visually in the list. Other rows keep lucide line icons.
+              const brand = it.to === '/whatsapp' ? faWhatsapp
+                          : it.to === '/instagram' ? faInstagram
+                          : null;
+              return (
+                <SidebarMenuItem key={it.to}>
+                  <SidebarMenuButton asChild isActive={isActive} tooltip={it.label}>
+                    <Link to={it.to}>
+                      {brand
+                        ? <FontAwesomeIcon icon={brand} style={{ width: 16, height: 16 }} />
+                        : <Icon />}
+                      <span className="flex-1 text-left">{it.label}</span>
+                      {it.to === '/tasks' ? (
+                        <span className="flex items-center gap-1">
+                          {tasksScheduled > 0 && (
+                            <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--primary))]/20 text-[hsl(var(--primary))]">
+                              {tasksScheduled}
+                            </span>
+                          )}
+                          {tasksRunning > 0 && (
+                            <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--accent-2))]/20 text-[hsl(var(--accent-2))]">
+                              {tasksRunning}
+                            </span>
+                          )}
+                        </span>
+                      ) : it.badge != null && (
+                        <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--success))]/20 text-[hsl(var(--success))]">
+                          {it.badge}
+                        </span>
+                      )}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarMenu>
+        </SidebarGroup>
+      </SidebarContent>
+
+      <SidebarFooter>
+        {usage && (
+          <>
+            {/* Expanded: full card with bar */}
+            <Card className="group-data-[collapsible=icon]:hidden p-3 bg-sidebar-accent/40 border-sidebar-border">
+              <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span>Claude • {usage.plan ?? 'Plan'}</span>
+                <span className="font-mono">{usage.percent}%</span>
+              </div>
+              <div className="mt-1.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-primary transition-all duration-500"
+                  style={{ width: `${usage.percent}%` }}
+                />
+              </div>
+              {usage.resetIn && (
+                <div className="mt-1.5 text-[10px] text-muted-foreground">Reset {usage.resetIn}</div>
+              )}
+            </Card>
+            {/* Collapsed: gradient progress ring with % in center */}
+            <div className="hidden group-data-[collapsible=icon]:flex items-center justify-center">
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button type="button" className="block focus:outline-none">
+                      <UsageRing percent={usage.percent} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    {usage.resetIn ? `Reset ${usage.resetIn}` : 'Nessuna scadenza nota'}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          </>
+        )}
+
+        {/* User popover — clicked-on avatar opens a panel with details + logout */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button className="flex items-center gap-2 rounded-md p-2 hover:bg-sidebar-accent transition-colors text-left group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-1">
+              <Avatar className="h-8 w-8 rounded-full shrink-0">
+                <AvatarImage src={(user as any)?.avatar_url ?? undefined} alt={user?.name || user?.email} />
+                <AvatarFallback className="rounded-full text-xs flex items-center justify-center leading-none">{initials}</AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
+                <div className="text-sm font-medium truncate">{user?.name || 'User'}</div>
+                <div className="text-[11px] text-muted-foreground truncate">{user?.email}</div>
+              </div>
+              <ChevronsUpDown className="ml-auto h-4 w-4 text-muted-foreground group-data-[collapsible=icon]:hidden" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="start" sideOffset={8} className="w-60 p-0">
+            <div className="p-3 flex items-center gap-2 border-b">
+              <Avatar className="h-9 w-9 rounded-full shrink-0">
+                <AvatarImage src={(user as any)?.avatar_url ?? undefined} alt={user?.name || user?.email} />
+                <AvatarFallback className="rounded-full text-xs flex items-center justify-center leading-none">{initials}</AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{user?.name || 'User'}</div>
+                <div className="text-xs text-muted-foreground truncate">{user?.email}</div>
+              </div>
+            </div>
+            <div className="p-1">
+              <Link to="/settings" className="flex items-center gap-2 w-full px-3 py-1.5 rounded-sm text-sm hover:bg-accent/10">
+                <SettingsIcon className="h-4 w-4" /> Impostazioni
+              </Link>
+              <Separator className="my-1" />
+              <Button variant="ghost" size="sm" className="w-full justify-start text-destructive" onClick={logout}>
+                <LogOut className="h-4 w-4" /> Esci
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </SidebarFooter>
+      <SidebarRail />
+    </SbRoot>
+  );
+}
+
+// Gradient progress ring for the collapsed sidebar. SVG so it stays crisp at
+// 32px. Uses an SVG <linearGradient> with the same stops as `bg-gradient-primary`
+// so it visually matches the expanded bar.
+function UsageRing({ percent }: { percent: number }) {
+  const p = Math.max(0, Math.min(100, percent));
+  const size = 34;
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c * (1 - p / 100);
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="block">
+      <defs>
+        <linearGradient id="usage-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="hsl(var(--primary))" />
+          <stop offset="100%" stopColor="hsl(var(--accent))" />
+        </linearGradient>
+      </defs>
+      {/* track */}
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth={stroke} opacity={0.35} />
+      {/* progress */}
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke="url(#usage-ring-grad)"
+        strokeWidth={stroke}
+        strokeDasharray={c}
+        strokeDashoffset={offset}
+        strokeLinecap="round"
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        style={{ transition: 'stroke-dashoffset 500ms ease' }}
+      />
+      <text
+        x="50%"
+        y="50%"
+        dominantBaseline="central"
+        textAnchor="middle"
+        fontSize="9"
+        fontWeight={600}
+        fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="hsl(var(--foreground))"
+      >
+        {p}%
+      </text>
+    </svg>
   );
 }

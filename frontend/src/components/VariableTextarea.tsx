@@ -77,7 +77,7 @@ export default function VariableTextarea({ value, onChange, vars, placeholder, m
               />
             </div>
             <div className="max-h-64 overflow-y-auto">
-              {filtered.length === 0 && <div className="px-3 py-4 text-xs text-muted text-center">Nessuna variabile.</div>}
+              {filtered.length === 0 && <div className="px-3 py-4 text-xs text-muted-foreground text-center">Nessuna variabile.</div>}
               {filtered.map((v) => (
                 <button
                   key={v.key}
@@ -87,7 +87,7 @@ export default function VariableTextarea({ value, onChange, vars, placeholder, m
                 >
                   <div className="text-xs font-medium">{v.label}</div>
                   <div className="text-[10px] font-mono text-accent2">{`{{${v.key}}}`}</div>
-                  {v.sample && <div className="text-[10px] text-muted truncate">es: {v.sample}</div>}
+                  {v.sample && <div className="text-[10px] text-muted-foreground truncate">es: {v.sample}</div>}
                 </button>
               ))}
             </div>

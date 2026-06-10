@@ -290,6 +290,18 @@ const connector: Connector = {
             if (msg.uid <= maxUid) continue;
             try {
               const parsed = await simpleParser(msg.source as Buffer);
+              // (1) Persist to mail_messages + mail_attachments for the mail UI
+              try {
+                const { persistInbound } = await import('../../../mail/service.js');
+                await persistInbound({
+                  userId: ctx.userId, accountLabel: acc.label, uid: msg.uid, parsed,
+                  folder: acc.mailbox || 'INBOX',
+                  rawSize: (msg.source as Buffer)?.length ?? 0,
+                });
+              } catch (persistErr) {
+                ctx.log('mail-persist-failed', { uid: msg.uid, err: String(persistErr) });
+              }
+              // (2) Index as brain note (existing behavior — used by agent)
               const ev = await ingestEmail({ userId: ctx.userId, accountLabel: acc.label, uid: msg.uid, parsed });
               bus.emit('connector:event', {
                 userId: ctx.userId,
