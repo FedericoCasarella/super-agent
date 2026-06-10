@@ -69,10 +69,15 @@ export default function Dashboard() {
   }
 
   const loadMsgs = useCallback(async () => { try { setMsgs(await api.messages(100)); } catch {} }, []);
+  // Real KPI counts pulled from backend SQL — slicing the 100-row list above
+  // was capping h24/d7/d30 at 100 (constant).
+  const [msgCounts, setMsgCounts] = useState<{ h24: number; d7: number; d30: number; total: number } | null>(null);
+  const loadMsgCounts = useCallback(async () => { try { setMsgCounts(await api.messageCounts()); } catch {} }, []);
   const loadStateCb = useCallback(loadState, [loadState]);
   // State refreshes on any agent event; msgs on inbound message-ish events.
   useLiveData(loadStateCb, { refreshOn: ['team_task', 'subagent', 'internal_agent', 'flow', 'task'], fallbackMs: 60_000 });
   useLiveData(loadMsgs, { refreshOn: ['wa:message', 'ig:message', 'outbound'], fallbackMs: 120_000 });
+  useLiveData(loadMsgCounts, { refreshOn: ['wa:message', 'ig:message', 'outbound', 'message', 'mail:new'], fallbackMs: 60_000 });
 
   async function wake() { await api.agentWake(); toast.push(t('dash.woken'), 'on'); loadState(); }
 
@@ -113,9 +118,11 @@ export default function Dashboard() {
     return mm ? `${h}h ${mm}m` : `${h}h`;
   })();
   const now = Date.now();
-  const msg24h = msgs.filter((m) => now - new Date(m.ts).getTime() < 24 * 3600_000).length;
-  const msg7d = msgs.filter((m) => now - new Date(m.ts).getTime() < 7 * 24 * 3600_000).length;
-  const msg30d = msgs.filter((m) => now - new Date(m.ts).getTime() < 30 * 24 * 3600_000).length;
+  // Prefer backend counts (uncapped); fall back to client slicing only while
+  // counts are still loading.
+  const msg24h = msgCounts?.h24 ?? msgs.filter((m) => now - new Date(m.ts).getTime() < 24 * 3600_000).length;
+  const msg7d  = msgCounts?.d7  ?? msgs.filter((m) => now - new Date(m.ts).getTime() < 7 * 24 * 3600_000).length;
+  const msg30d = msgCounts?.d30 ?? msgs.filter((m) => now - new Date(m.ts).getTime() < 30 * 24 * 3600_000).length;
   const chatId = status?.telegram?.chatId ?? null;
   const running = activeAgents.filter((a) => a.status === 'running').length;
   const pending = activeAgents.filter((a) => a.status === 'pending').length;

@@ -90,6 +90,24 @@ router.get('/messages', async (req, res) => {
   res.json(rows.reverse());
 });
 
+// Message counts for KPI cards — backend computes from full table so values
+// don't cap at /messages?limit=100 (which was producing the "Msg 24h = 100"
+// constant on the live dashboard).
+router.get('/messages/counts', async (req, res) => {
+  try {
+    const r = await query<{ h24: number; d7: number; d30: number; total: number }>(
+      `SELECT
+         count(*) FILTER (WHERE ts > now() - INTERVAL '24 hours')::int AS h24,
+         count(*) FILTER (WHERE ts > now() - INTERVAL '7 days')::int  AS d7,
+         count(*) FILTER (WHERE ts > now() - INTERVAL '30 days')::int AS d30,
+         count(*)::int AS total
+       FROM messages WHERE user_id=$1`,
+      [req.user!.id],
+    );
+    res.json(r[0] ?? { h24: 0, d7: 0, d30: 0, total: 0 });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 // One-off test for the TTS connector: synthesizes a sample line via the
 // configured provider (ElevenLabs) and sends it as a Telegram voice note.
 // Surfaces the real failure reason so the user can debug API key / voice id.

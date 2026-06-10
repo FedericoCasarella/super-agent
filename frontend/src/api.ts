@@ -28,6 +28,7 @@ export const api = {
   setVault: (vaultPath: string) => req('/onboarding/vault', { method: 'POST', body: JSON.stringify({ vaultPath }) }),
   setTelegram: (token: string) => req<any>('/onboarding/telegram', { method: 'POST', body: JSON.stringify({ token }) }),
   messages: (limit = 100) => req<any[]>(`/messages?limit=${limit}`),
+  messageCounts: () => req<{ h24: number; d7: number; d30: number; total: number }>('/messages/counts'),
   connectors: () => req<any[]>('/connectors'),
   updateConnector: (name: string, body: any) => req(`/connectors/${name}`, { method: 'PUT', body: JSON.stringify(body) }),
   runConnector: (name: string) => req(`/connectors/${name}/run`, { method: 'POST' }),

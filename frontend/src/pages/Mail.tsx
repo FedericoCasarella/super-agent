@@ -177,6 +177,7 @@ export default function MailPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [imapFolders, setImapFolders] = useState<{ name: string; label: string; kind: string }[]>([]);
   const [foldersError, setFoldersError] = useState<string | null>(null);
+  const [foldersLoading, setFoldersLoading] = useState(false);
   const [accountsDiag, setAccountsDiag] = useState<any>(null);
   const [account, setAccount] = useState<string | undefined>(undefined);
   const [folder, setFolder] = useState<Folder>('INBOX');
@@ -249,7 +250,8 @@ export default function MailPage() {
   // Everything else — Drafts, Spam, Archive, All Mail, Important, Starred,
   // [Gmail]/Categories, user labels — is shown.
   useEffect(() => {
-    if (!account) { setImapFolders([]); setFoldersError(null); return; }
+    if (!account) { setImapFolders([]); setFoldersError(null); setFoldersLoading(false); return; }
+    setFoldersLoading(true);
     const cleanErr = (raw: string) => {
       // Express returns raw HTML on 404 → strip tags and pick "Cannot GET ..." line.
       const m = raw.match(/Cannot (GET|POST|PUT|DELETE) [^\s<]+/);
@@ -264,7 +266,8 @@ export default function MailPage() {
         setImapFolders([]);
         setFoldersError(cleanErr(r.error ?? 'errore nel caricamento'));
       }
-    }).catch((e) => { setImapFolders([]); setFoldersError(cleanErr(String(e?.message ?? e))); });
+    }).catch((e) => { setImapFolders([]); setFoldersError(cleanErr(String(e?.message ?? e))); })
+    .finally(() => setFoldersLoading(false));
   }, [account]);
 
   // WS push: new mail / seen change → silent refresh
@@ -495,8 +498,24 @@ firstMissing: ${(accountsDiag.firstMissing ?? []).join(', ') || '—'}`}
                 </button>
               );
             })}
-            {(imapFolders.length > 0 || foldersError) && (
-              <div className="mt-3 mb-1 px-3 text-[10px] uppercase tracking-wider text-muted-foreground/60">Cartelle & etichette</div>
+            {(imapFolders.length > 0 || foldersError || foldersLoading) && (
+              <div className="mt-3 mb-1 px-3 text-[10px] uppercase tracking-wider text-muted-foreground/60 flex items-center gap-1.5">
+                Cartelle & etichette
+                {foldersLoading && <Loader2 size={10} className="animate-spin text-muted-foreground/60" />}
+              </div>
+            )}
+            {foldersLoading && (
+              <div className="space-y-1 px-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-2 px-1 py-2">
+                    <div className="h-3.5 w-3.5 rounded bg-muted/60 animate-pulse shrink-0" />
+                    <div
+                      className="h-3 rounded bg-muted/60 animate-pulse"
+                      style={{ width: `${50 + (i * 11) % 40}%`, animationDelay: `${i * 80}ms` }}
+                    />
+                  </div>
+                ))}
+              </div>
             )}
             {foldersError && (
               <div className="px-3 py-2 text-[10px] text-destructive break-words">
