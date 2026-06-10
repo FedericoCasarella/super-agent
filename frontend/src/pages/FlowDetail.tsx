@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
+import { useSetBreadcrumb } from '../components/Breadcrumbs';
 import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
 import SearchSelect from '../components/SearchSelect';
 import { fetchClaudeModels, fetchCustomAgents, fetchEmailAccounts, fetchPerks, fetchScheduledTasks, fetchTeams, fetchWaChats, fetchIgThreads } from '../components/searchSources';
@@ -349,6 +350,10 @@ export default function FlowDetail() {
   const toast = useToast();
   const [flow, setFlow] = useState<Flow | null>(null);
   const [tab, setTab] = useState<'builder' | 'runs'>('builder');
+  useSetBreadcrumb(flow ? [
+    { label: 'Flows', to: '/flows' },
+    { label: flow.name || `#${flow.id}` },
+  ] : null);
   const [runs, setRuns] = useState<any[]>([]);
   const [openRun, setOpenRun] = useState<any | null>(null);
   // Drawers

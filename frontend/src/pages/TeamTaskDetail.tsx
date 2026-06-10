@@ -6,6 +6,7 @@ import { Button, Card, Chip, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { useWS, useLiveData } from '../ws';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { useSetBreadcrumb } from '../components/Breadcrumbs';
 import MarkdownView from '../components/MarkdownView';
 
 type Event = {
@@ -56,6 +57,11 @@ export default function TeamTaskDetail() {
   // settles and we fit the view.
   const [zoomReady, setZoomReady] = useState(false);
   const [bottomTab, setBottomTab] = useState<'brief' | 'result' | 'history'>('brief');
+  useSetBreadcrumb(task ? [
+    { label: 'Tasks', to: '/tasks' },
+    { label: 'Team task', to: '/tasks?tab=team' },
+    { label: task.title },
+  ] : null);
 
   const load = useCallback(async () => {
     try {

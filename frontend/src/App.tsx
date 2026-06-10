@@ -6,6 +6,7 @@ import { QuotaBanner } from './quota';
 import { usePageVisibility, type PageKey } from './pageVisibility';
 import AppSidebar from './components/Sidebar';
 import { SidebarProvider, SidebarTrigger, SidebarInset } from '@/components/ui/sidebar';
+import { BreadcrumbsProvider, Breadcrumbs } from './components/Breadcrumbs';
 import { ThemeSwitcher } from '@/components/theme-switcher';
 import { Separator } from '@/components/ui/separator';
 
@@ -59,13 +60,15 @@ export default function App() {
 
   return (
     <SidebarProvider>
+      <BreadcrumbsProvider>
       <MessageSound />
       <AppSidebar />
       <SidebarInset>
-        {/* Topbar: sidebar toggle + page area + theme switcher */}
+        {/* Topbar: sidebar toggle + breadcrumbs + theme switcher */}
         <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 backdrop-blur px-4">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 h-4" />
+          <Breadcrumbs />
           <div className="flex-1" />
           <ThemeSwitcher />
         </header>
@@ -107,6 +110,7 @@ export default function App() {
           } />
         </Routes>
       </SidebarInset>
+      </BreadcrumbsProvider>
     </SidebarProvider>
   );
 }

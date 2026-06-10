@@ -47,6 +47,17 @@ export default function AppSidebar() {
   const { user, logout } = useAuth();
   const { branding } = useBranding();
   const [tasksRunning, setTasksRunning] = useState(0);
+  const [tasksScheduled, setTasksScheduled] = useState(0);
+  const loadTasksScheduled = useCallback(async () => {
+    try { const all = await api.tasks(); setTasksScheduled((all ?? []).length); } catch {}
+  }, []);
+  useLiveData(loadTasksScheduled, { refreshOn: ['task'], fallbackMs: 60_000 });
+
+  const [agentsRunning, setAgentsRunning] = useState(0);
+  const loadAgentsRunning = useCallback(async () => {
+    try { const a = await api.subAgentsActive(); setAgentsRunning((a ?? []).filter((x: any) => x.status === 'running').length); } catch {}
+  }, []);
+  useLiveData(loadAgentsRunning, { refreshOn: ['subagent'], fallbackMs: 15_000 });
   const loadTasksRunning = useCallback(async () => {
     try { const r = await api.teamTasksRunningCount(); setTasksRunning(r.running); } catch {}
   }, []);
@@ -98,8 +109,8 @@ export default function AppSidebar() {
     { to: '/connectors', label: t('nav.connectors'), icon: Plug },
     { to: '/brain', label: t('nav.brain'), icon: Brain },
     { to: '/roadmap', label: t('nav.roadmap'), icon: MapIcon },
-    { to: '/tasks', label: 'Tasks', icon: ListChecks, badge: tasksRunning > 0 ? tasksRunning : undefined },
-    { to: '/agents', label: 'Agents', icon: Zap },
+    { to: '/tasks', label: 'Tasks', icon: ListChecks },
+    { to: '/agents', label: 'Agents', icon: Zap, badge: agentsRunning > 0 ? agentsRunning : undefined },
     { to: '/perks', label: 'Perks', icon: Sparkles },
     { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, gate: 'whatsapp', badge: waUnread > 0 ? waUnread : undefined },
     { to: '/mail', label: 'Email', icon: MailIcon, badge: mailUnread > 0 ? mailUnread : undefined },
@@ -163,7 +174,20 @@ export default function AppSidebar() {
                         ? <FontAwesomeIcon icon={brand} style={{ width: 16, height: 16 }} />
                         : <Icon />}
                       <span className="flex-1 text-left">{it.label}</span>
-                      {it.badge != null && (
+                      {it.to === '/tasks' ? (
+                        <span className="flex items-center gap-1">
+                          {tasksScheduled > 0 && (
+                            <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--primary))]/20 text-[hsl(var(--primary))]">
+                              {tasksScheduled}
+                            </span>
+                          )}
+                          {tasksRunning > 0 && (
+                            <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--accent-2))]/20 text-[hsl(var(--accent-2))]">
+                              {tasksRunning}
+                            </span>
+                          )}
+                        </span>
+                      ) : it.badge != null && (
                         <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--success))]/20 text-[hsl(var(--success))]">
                           {it.badge}
                         </span>

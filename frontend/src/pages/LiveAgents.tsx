@@ -102,17 +102,10 @@ export function LiveAgentsPanel() {
     catch (e: any) { toast.push(e.message, 'err'); }
   }
 
-  const active = agents.filter((a) => a.status === 'running' || a.status === 'pending');
-  const recent = agents.filter((a) => a.status !== 'running' && a.status !== 'pending').slice(0, 30);
-
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-end">
-        <Button size="sm" variant="ghost" onClick={refresh}>↻</Button>
-      </div>
-
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <div className="border border-border rounded-2xl p-3 bg-surface2/40">
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Totale agenti</div>
             <div className="text-2xl font-semibold mt-1">{stats.totals?.n ?? 0}</div>
@@ -129,24 +122,7 @@ export function LiveAgentsPanel() {
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Turni</div>
             <div className="text-2xl font-semibold mt-1 font-mono">{stats.totals?.turns ?? 0}</div>
           </div>
-          <div className="border border-border rounded-2xl p-3 bg-surface2/40">
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Costo</div>
-            <div className="text-2xl font-semibold mt-1 font-mono">${Number(stats.totals?.cost ?? 0).toFixed(4)}</div>
-          </div>
         </div>
-      )}
-
-      {stats?.topTools?.length > 0 && (
-        <Card>
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-3 font-semibold">Tool più usati</div>
-          <div className="flex flex-wrap gap-2 text-xs">
-            {stats.topTools.map((t: any) => (
-              <div key={t.name} className="border border-border rounded-full px-2.5 py-1 bg-surface2/40">
-                <span className="font-mono">{t.name}</span> · <span className="text-muted-foreground">{t.n}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
       )}
 
       {proposals.length > 0 && (
@@ -176,33 +152,6 @@ export function LiveAgentsPanel() {
         </Card>
       )}
 
-      <Card>
-        <div className="text-xs uppercase text-muted-foreground mb-3 font-semibold">In esecuzione ({active.length})</div>
-        {active.length === 0 ? (
-          <div className="text-muted-foreground text-sm">Nessun agent attivo.</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {active.map((a) => (
-              <button key={a.id} onClick={() => setOpen(a)} className="text-left border border-accent/30 bg-accent/5 hover:border-accent/60 rounded-2xl p-3 transition">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="font-medium">{a.title}</div>
-                  <Chip tone={STATUS_TONE[a.status] ?? 'default'}>{a.status === 'running' ? '⚡ in corso' : '⏳ in coda'}</Chip>
-                </div>
-                {a.brief && <div className="text-sm text-muted-foreground line-clamp-2">{a.brief}</div>}
-                <div className="text-xs text-muted-foreground mt-2 flex justify-between">
-                  <span>Avviato {fmtAgo(a.started_at ?? a.created_at)}</span>
-                  <span>{fmtDur(a.started_at ?? a.created_at, null)}</span>
-                </div>
-                <div className="mt-2 text-right">
-                  <Button size="sm" variant="ghost" onClick={(e: any) => { e.stopPropagation(); cancel(a); }}>Annulla</Button>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <div className="text-xs uppercase text-muted-foreground font-semibold">Storico agenti</div>
       <DataTable<SubAgent>
         persistKey="live-agents"
         refreshKey={agents.length}
@@ -244,9 +193,6 @@ export function LiveAgentsPanel() {
         onRowClick={(a) => setOpen(a)}
         emptyText="Niente da mostrare."
       />
-      {/* keep `recent` reference alive for legacy users — silenced */}
-      <span className="hidden">{recent.length}</span>
-
       {open && createPortal(
         <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setOpen(null)} role="dialog" aria-modal="true">
           <div className="max-w-3xl w-full max-h-[85vh] overflow-y-auto" onClick={(e: any) => e.stopPropagation()}><Card>

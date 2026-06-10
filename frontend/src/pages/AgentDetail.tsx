@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useLiveData } from '../ws';
+import { useSetBreadcrumb } from '../components/Breadcrumbs';
 import { Button, Card, Chip, Field, Input, Toggle, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
 import { usePerkCooldown } from '../hooks/usePerkCooldown';
@@ -22,6 +23,7 @@ export default function AgentDetail() {
   const { name = '' } = useParams();
   const nav = useNavigate();
   const [agent, setAgent] = useState<any>(null);
+  useSetBreadcrumb([{ label: 'Perks', to: '/perks' }, { label: agent?.title ?? agent?.name ?? name }]);
   const [hour, setHour] = useState(0);
   const [minute, setMinute] = useState(0);
   const [intervalHours, setIntervalHours] = useState<number | null>(null);
