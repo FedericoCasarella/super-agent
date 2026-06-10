@@ -15,16 +15,32 @@ function normalize(raw: string): string {
   return raw.replace(/[^A-Za-z0-9_]+/g, '_');
 }
 
+// `claude mcp list` prints one line per server: "<name>: <cmd-or-url> - <status>".
+// Two traps make a naive `name: <token> - <status>` regex silently drop servers:
+//   1. Status glyph is U+2714 "✔" (HEAVY CHECK MARK), not U+2713 "✓", and may
+//      change across CLI versions — so we match the keyword, never the glyph.
+//   2. The command/url segment is NOT a single token: locals are "bash -c …",
+//      HTTP servers carry a " (HTTP)" suffix, python servers have multi-word
+//      commands. The old regex only matched these by accident (e.g. on the dash
+//      in "bash -c"), dropping every HTTP server (windsor/supabase/…).
+// Robust approach: split the name on the first colon-whitespace, then read the
+// status from a keyword anywhere in the remainder.
 function parse(stdout: string): ExternalMcp[] {
   const out: ExternalMcp[] = [];
-  for (const line of stdout.split('\n')) {
-    const m = line.match(/^(.+?):\s*(\S+)\s*-\s*(.+)$/);
+  for (const raw of stdout.split('\n')) {
+    const line = raw.replace(/\x1b\[[0-9;]*m/g, '').trim(); // strip ANSI colour codes
+    if (!/(Connected|Needs authentication|Failed to connect)/i.test(line)) continue;
+    const m = line.match(/^(.+?):\s+(.+)$/);
     if (!m) continue;
-    const [, name, url, statusRaw] = m;
+    const name = m[1].trim();
+    const rest = m[2].trim();
+    if (!name) continue;
     let status: ExternalMcp['status'] = 'error';
-    if (/✓\s*Connected/i.test(statusRaw)) status = 'connected';
-    else if (/Needs authentication/i.test(statusRaw)) status = 'needs_auth';
-    out.push({ rawName: name.trim(), serverName: normalize(name.trim()), url: url.trim(), status });
+    if (/Needs authentication/i.test(rest)) status = 'needs_auth';
+    else if (/connected/i.test(rest)) status = 'connected';
+    const di = rest.lastIndexOf(' - ');
+    const url = (di > 0 ? rest.slice(0, di) : rest).trim();
+    out.push({ rawName: name, serverName: normalize(name), url, status });
   }
   return out;
 }
