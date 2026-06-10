@@ -819,3 +819,24 @@ CREATE TABLE IF NOT EXISTS mail_folders (
   PRIMARY KEY (user_id, account_label, name)
 );
 CREATE INDEX IF NOT EXISTS mail_folders_user_account_idx ON mail_folders(user_id, account_label);
+
+-- =====================================================================
+-- Thought Analyzer (sess.8266) — diario cognitivo + knowledge graph
+-- Pensieri come oggetti di prima classe: un messaggio nel flusso
+-- conversazionale sparisce; un pensiero e' aggregabile nel tempo, che e'
+-- la condizione necessaria per far emergere i loop ricorrenti.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS thoughts (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  text TEXT NOT NULL,
+  src TEXT NOT NULL DEFAULT 'telegram',          -- telegram | voice | api
+  emotion TEXT,                                   -- popolato dall'analisi leggera
+  themes JSONB NOT NULL DEFAULT '[]'::jsonb,       -- string[]
+  backlinks JSONB NOT NULL DEFAULT '[]'::jsonb,    -- string[] (titoli note vault)
+  vault_path TEXT,                                -- nodo creato, relativo al vault
+  analyzed BOOLEAN NOT NULL DEFAULT false,
+  digested_on DATE                                -- data del digest che l'ha aggregato
+);
+CREATE INDEX IF NOT EXISTS thoughts_user_ts_idx ON thoughts(user_id, ts DESC);

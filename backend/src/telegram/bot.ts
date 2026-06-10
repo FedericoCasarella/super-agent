@@ -66,6 +66,8 @@ async function startBotForUser(userId: number) {
     { command: 'agents',  description: 'Lista sub-agent in esecuzione' },
     { command: 'status',  description: 'Stato agent: quota, agent attivi, ultima riflessione' },
     { command: 'tasks',   description: 'Task schedulati attivi' },
+    { command: 'think',   description: 'Butta un pensiero: lo analizzo e lo collego al second brain' },
+    { command: 'thoughts',description: 'Pensieri di oggi · on/off per la modalità diario' },
     { command: 'reset',   description: 'Pulisci la cronologia conversazione (ultimi 30 msg)' },
     { command: 'stop',    description: 'Mette in pausa le risposte automatiche' },
     { command: 'resume',  description: 'Riprende le risposte automatiche' },
@@ -77,6 +79,62 @@ async function startBotForUser(userId: number) {
     if (cur?.chatId !== chatId) return;
     const body = COMMAND_CATALOG.map((c) => `/${c.command} — ${c.description}`).join('\n');
     await ctx.reply(`🤖 Comandi disponibili:\n\n${body}`);
+  });
+
+  // ── Thought Analyzer (sess.8266) ───────────────────────────────────────────
+  // Cattura DB-first (ack istantaneo), poi analisi leggera asincrona che non blocca.
+  const captureAndReply = async (ctx: any, text: string) => {
+    const { captureThought, analyzeThoughtLight, lightReplyLine } = await import('../brain/thoughts.js');
+    let id: number;
+    try {
+      ({ id } = await captureThought(userId, text, 'telegram'));
+    } catch (e: any) {
+      await ctx.reply(`⚠️ Non sono riuscito a salvare il pensiero: ${String(e?.message ?? e).slice(0, 120)}`).catch(() => {});
+      return;
+    }
+    await ctx.reply('🐙 Salvato.').catch(() => {});
+    // Analisi leggera in background — l'ack non aspetta mai l'LLM.
+    (async () => {
+      const stop = await startTyping(userId).catch(() => (() => {}));
+      try {
+        const r = await analyzeThoughtLight(userId, id, text);
+        if (r.ok && r.analysis) await sendTelegram(userId, lightReplyLine(r.analysis), 'thought');
+      } catch (e) { console.error('[thoughts] capture analyze failed', e); }
+      finally { try { stop(); } catch {} }
+    })();
+  };
+
+  bot.command('think', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    const text = ctx.message.text.replace(/^\/think(@\S+)?/, '').trim();
+    if (!text) { await ctx.reply('🐙 Scrivi il pensiero dopo /think, oppure /thoughts on per la modalità diario.'); return; }
+    await captureAndReply(ctx, text);
+  });
+
+  bot.command('thoughts', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    const arg = ctx.message.text.replace(/^\/thoughts(@\S+)?/, '').trim().toLowerCase();
+    if (arg === 'on' || arg === 'off') {
+      await setSetting(userId, 'thought_mode', arg === 'on');
+      await ctx.reply(arg === 'on'
+        ? '🐙 Thought-mode ON — ogni messaggio diventa un pensiero analizzato. /thoughts off per tornare alla chat.'
+        : '🐙 Thought-mode OFF — torno l\'agente conversazionale.');
+      return;
+    }
+    const { thoughtsToday } = await import('../brain/thoughts.js');
+    const list = await thoughtsToday(userId);
+    if (!list.length) { await ctx.reply('🐙 Nessun pensiero oggi. Buttane uno con /think, o /thoughts on per la modalità diario.'); return; }
+    const lines = list.map((t, i) => {
+      const hhmm = new Date(t.ts).toISOString().slice(11, 16);
+      const tag = t.themes?.length ? ` · ${t.themes.join('/')}` : (t.analyzed ? '' : ' · …');
+      return `${i + 1}. [${hhmm}] ${t.text.slice(0, 80)}${tag}`;
+    });
+    const mode = await getSetting<boolean>(userId, 'thought_mode');
+    await ctx.reply(`🐙 Pensieri di oggi (${list.length})${mode ? ' · mode ON' : ''}:\n\n${lines.join('\n')}`);
   });
 
   bot.command('status', async (ctx) => {
@@ -260,6 +318,12 @@ async function startBotForUser(userId: number) {
     if (text) {
       const messageId = (ctx.message as any).message_id;
       try { await setSetting(userId, 'telegram_last_incoming', { chatId, messageId, ts: Date.now() }); } catch {}
+      // Thought-mode: ogni messaggio (non-comando) è un pensiero da catturare+analizzare,
+      // NON un turno conversazionale. Default OFF → il bot resta l'agente di sempre.
+      if (!text.startsWith('/')) {
+        const tmode = await getSetting<boolean>(userId, 'thought_mode');
+        if (tmode) { await captureAndReply(ctx, text); return; }
+      }
       bus.emit('telegram:incoming', { userId, chatId, text, messageId });
       return;
     }
