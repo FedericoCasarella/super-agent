@@ -154,3 +154,23 @@ New internal (cron) agents follow the same pattern: drop a file in `backend/src/
 - **LLM:** Claude Code CLI (`claude -p`, headless)
 - **Brain:** Obsidian-style markdown vault + Postgres index
 - **Channels:** Telegram · IMAP/SMTP · WhatsApp · Instagram · Voice (Whisper)
+
+---
+
+## Contributing
+
+PRs welcome. The codebase is modular by design — most contributions are a single
+new connector or internal agent (see [Extending it](#extending-it)), with no core
+changes needed. For anything larger, open an issue first so we can align.
+
+`tsc -p backend/tsconfig.json` should pass clean before you push.
+
+---
+
+## Authors & credits
+
+- **[Federico Casarella](https://github.com/FedericoCasarella)** — creator & maintainer
+- **[Mattia Calastri](https://github.com/mattiacalastri)** — co-maintainer & contributor
+
+Developed with **[Claude Code](https://claude.com/claude-code)** (Anthropic) as an
+AI pair-programming partner — the same reasoning engine that powers the agent at runtime.
