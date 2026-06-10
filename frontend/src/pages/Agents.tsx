@@ -98,6 +98,7 @@ export default function Agents() {
 
       {view === 'table' ? (
         <DataTable<Agent>
+          persistKey="agents"
           fetcher={async ({ q, page, pageSize, filters }) => {
             // Client-side filter/paginate (perks list is small).
             let rows = itemsRef.current;

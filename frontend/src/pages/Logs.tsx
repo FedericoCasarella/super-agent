@@ -109,6 +109,7 @@ export default function Logs() {
       )}
 
       <DataTable<Row>
+        persistKey="logs"
         fetcher={async ({ q, page, pageSize, filters }) => {
           const r = await api.logs({
             kinds: filters.kind, statuses: filters.status, q,

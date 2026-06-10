@@ -198,6 +198,7 @@ export default function Snapshots() {
       </Card>
 
       <DataTable<Snapshot>
+        persistKey="snapshots"
         fetcher={async ({ q: _q, page, pageSize }) => {
           const r = await api.brainSnapshots({ limit: pageSize, offset: page * pageSize });
           return { rows: r.rows, total: r.total };

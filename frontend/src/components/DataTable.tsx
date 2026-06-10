@@ -52,6 +52,7 @@ export default function DataTable<T>({
   emptyText = 'Nessun risultato.',
   toolbar,
   loadOnMount = true,
+  persistKey,
 }: {
   fetcher: (params: FetchParams) => Promise<FetchResult<T>>;
   columns: Column<T>[];
@@ -64,13 +65,34 @@ export default function DataTable<T>({
   emptyText?: string;
   toolbar?: ReactNode;
   loadOnMount?: boolean;
+  // localStorage key prefix — pass any string unique to this table usage
+  // (e.g. "tasks.scheduled"). When set, q / page / pageSize / filters / sort
+  // hydrate from localStorage on mount and persist on every change so the
+  // user's table state survives reload + navigation.
+  persistKey?: string;
 }) {
-  const [q, setQ] = useState('');
-  const [qInput, setQInput] = useState('');
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(defaultPageSize);
-  const [filters, setFilters] = useState<Record<string, string[]>>({});
-  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(null);
+  // Hydrate initial state from localStorage when persistKey is set.
+  const initial = (() => {
+    if (!persistKey || typeof window === 'undefined') return null;
+    try {
+      const raw = window.localStorage.getItem(`dt:${persistKey}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  })();
+  const [q, setQ] = useState<string>(initial?.q ?? '');
+  const [qInput, setQInput] = useState<string>(initial?.q ?? '');
+  const [page, setPage] = useState<number>(initial?.page ?? 0);
+  const [pageSize, setPageSize] = useState<number>(initial?.pageSize ?? defaultPageSize);
+  const [filters, setFilters] = useState<Record<string, string[]>>(initial?.filters ?? {});
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(initial?.sort ?? null);
+
+  // Persist on every state change.
+  useEffect(() => {
+    if (!persistKey || typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(`dt:${persistKey}`, JSON.stringify({ q, page, pageSize, filters, sort }));
+    } catch {}
+  }, [persistKey, q, page, pageSize, filters, sort]);
   const [rows, setRows] = useState<T[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);

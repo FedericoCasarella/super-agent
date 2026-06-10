@@ -204,6 +204,7 @@ export function LiveAgentsPanel() {
 
       <div className="text-xs uppercase text-muted-foreground font-semibold">Storico agenti</div>
       <DataTable<SubAgent>
+        persistKey="live-agents"
         refreshKey={agents.length}
         fetcher={async ({ q, page, pageSize, filters }) => {
           const r: any = await api.subAgentsListPaginated({ statuses: filters.status, q, limit: pageSize, offset: page * pageSize });

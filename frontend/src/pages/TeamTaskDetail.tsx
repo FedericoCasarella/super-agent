@@ -51,6 +51,11 @@ export default function TeamTaskDetail() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const zoomedRef = useRef(false);
   const [size, setSize] = useState({ w: 600, h: 480 });
+  // Hide the canvas until the first zoomToFit + clamp finishes. Without this
+  // ForceGraph2D paints a flash of "fully zoomed in" before the engine
+  // settles and we fit the view.
+  const [zoomReady, setZoomReady] = useState(false);
+  const [bottomTab, setBottomTab] = useState<'brief' | 'result' | 'history'>('brief');
 
   const load = useCallback(async () => {
     try {
@@ -240,6 +245,7 @@ export default function TeamTaskDetail() {
           {graphData.nodes.length === 0 ? (
             <div className="h-full flex items-center justify-center text-muted-foreground text-sm">In attesa di eventi…</div>
           ) : (
+          <div className="h-full w-full">
             <ForceGraph2D
               ref={fgRef}
               width={size.w}
@@ -248,11 +254,22 @@ export default function TeamTaskDetail() {
               backgroundColor="#0a0a0f"
               cooldownTicks={120}
               d3AlphaDecay={0.04}
-              onEngineStop={() => {
-                // Fire only ONCE — engine can re-settle on data change and would reset user pan/zoom.
+              cooldownTime={1500}
+              warmupTicks={20}
+              onEngineTick={() => {
+                // First-tick fit: don't wait for the whole simulation to cool
+                // down (which can take 3-5s with d3AlphaDecay 0.04) — clamp
+                // zoom right away so the user sees the graph immediately.
                 if (zoomedRef.current) return;
-                zoomedRef.current = true;
-                try { fgRef.current?.zoomToFit(500, 100); } catch {}
+                const fg: any = fgRef.current;
+                if (!fg) return;
+                try {
+                  fg.zoomToFit(0, 240);
+                  const z = fg.zoom();
+                  if (typeof z === 'number' && z > 1) fg.zoom(1, 0);
+                  zoomedRef.current = true;
+                  setZoomReady(true);
+                } catch {}
               }}
               linkColor={(l: any) => l.kinds?.has('error') ? '#f8717177' : '#a78bfa66'}
               linkWidth={(l: any) => Math.min(1 + Math.log(l.count + 1), 4)}
@@ -383,6 +400,7 @@ export default function TeamTaskDetail() {
                 ctx.fillText(statsStr, x + W - 12, y + H - 14);
               }}
             />
+          </div>
           )}
         </Card></div>
 
@@ -422,33 +440,50 @@ export default function TeamTaskDetail() {
       </div>
 
       <Card>
-        <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Brief</div>
-        <div className="text-sm whitespace-pre-wrap break-words p-3 rounded-xl bg-surface2/40 border border-border mb-3 max-h-[30vh] overflow-y-auto">{task?.prompt}</div>
-        {task?.result && (
+        <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1 w-fit mb-3">
+          <Button size="sm" variant={bottomTab === 'brief' ? 'primary' : 'ghost'} onClick={() => setBottomTab('brief')}>Brief</Button>
+          <Button size="sm" variant={bottomTab === 'result' ? 'primary' : 'ghost'} onClick={() => setBottomTab('result')}>Risultato</Button>
+          <Button size="sm" variant={bottomTab === 'history' ? 'primary' : 'ghost'} onClick={() => setBottomTab('history')}>Storico interazioni</Button>
+        </div>
+
+        {bottomTab === 'brief' && (
+          <div className="p-3 rounded-xl bg-surface2/40 border border-border text-sm max-h-[60vh] overflow-y-auto">
+            <MarkdownView content={task?.prompt ?? ''} />
+          </div>
+        )}
+
+        {bottomTab === 'result' && (
           <>
-            <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Risultato</div>
-            <div className="p-3 rounded-xl bg-surface2/40 border border-border text-sm mb-3">
-              <MarkdownView content={task.result} />
-            </div>
+            {task?.result ? (
+              <div className="p-3 rounded-xl bg-surface2/40 border border-border text-sm max-h-[60vh] overflow-y-auto">
+                <MarkdownView content={task.result} />
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-surface2/40 border border-border text-sm text-muted-foreground">
+                {task?.status === 'running' ? 'In esecuzione — il risultato apparirà al termine.' : 'Nessun risultato disponibile.'}
+              </div>
+            )}
+            {task?.error && (
+              <div className="text-xs text-red-300 font-mono whitespace-pre-wrap break-all bg-red-500/5 border border-red-400/30 rounded-xl p-3 mt-3">{task.error}</div>
+            )}
           </>
         )}
-        {task?.error && (
-          <div className="text-xs text-red-300 font-mono whitespace-pre-wrap break-all bg-red-500/5 border border-red-400/30 rounded-xl p-3 mb-3">{task.error}</div>
+
+        {bottomTab === 'history' && (
+          <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
+            {events.map((e) => (
+              <div key={e.id} className="flex items-start gap-2 text-sm border border-border/60 rounded-xl p-2.5 bg-surface2/30">
+                <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full" style={{ background: (KIND_COLOR[e.kind] ?? '#888') + '22', color: KIND_COLOR[e.kind] ?? '#888', border: `1px solid ${(KIND_COLOR[e.kind] ?? '#888')}55` }}>
+                  {e.kind}
+                </span>
+                <div className="text-xs text-muted-foreground shrink-0 font-mono">{agentName(e.from_agent_id)} → {agentName(e.to_agent_id)}</div>
+                <div className="text-xs flex-1 min-w-0 whitespace-pre-wrap break-words">{(e.content ?? '').slice(0, 600)}</div>
+                <div className="text-[10px] text-muted-foreground font-mono shrink-0">{new Date(e.ts).toLocaleTimeString('it-IT')}</div>
+              </div>
+            ))}
+            {events.length === 0 && <div className="text-muted-foreground text-sm">Nessun evento.</div>}
+          </div>
         )}
-        <div className="font-semibold mb-2">Storico interazioni ({events.length})</div>
-        <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
-          {events.map((e) => (
-            <div key={e.id} className="flex items-start gap-2 text-sm border border-border/60 rounded-xl p-2.5 bg-surface2/30">
-              <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full" style={{ background: (KIND_COLOR[e.kind] ?? '#888') + '22', color: KIND_COLOR[e.kind] ?? '#888', border: `1px solid ${(KIND_COLOR[e.kind] ?? '#888')}55` }}>
-                {e.kind}
-              </span>
-              <div className="text-xs text-muted-foreground shrink-0 font-mono">{agentName(e.from_agent_id)} → {agentName(e.to_agent_id)}</div>
-              <div className="text-xs flex-1 min-w-0 whitespace-pre-wrap break-words">{(e.content ?? '').slice(0, 600)}</div>
-              <div className="text-[10px] text-muted-foreground font-mono shrink-0">{new Date(e.ts).toLocaleTimeString('it-IT')}</div>
-            </div>
-          ))}
-          {events.length === 0 && <div className="text-muted-foreground text-sm">Nessun evento.</div>}
-        </div>
       </Card>
     </div>
   );

@@ -127,6 +127,7 @@ export default function PeoplePage() {
       </div>
 
       <DataTable<Person>
+        persistKey="people"
         fetcher={async ({ q, page, pageSize, filters, sort }) => {
           const r = await api.people({
             q, limit: pageSize, offset: page * pageSize,

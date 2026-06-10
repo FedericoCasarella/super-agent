@@ -109,6 +109,7 @@ export default function Outbound() {
       </div>
 
       <DataTable<Row>
+        persistKey="outbound"
         fetcher={async ({ q, page, pageSize, filters }) => {
           const r = await api.outboundList({
             channels: filters.channels, statuses: filters.statuses, q,
