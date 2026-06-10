@@ -87,7 +87,7 @@ export async function runTaskById(userId: number, id: number) {
   let result = '';
   try {
     if (t.action_type === 'notify') {
-      const text = String(t.action_payload?.text ?? '').trim();
+      const text = String(t.action_payload?.text ?? t.action_payload?.message ?? '').trim();
       if (!text) throw new Error('notify: empty text');
       await sendTelegram(userId, text);
       result = `sent: ${text.slice(0, 120)}`;
