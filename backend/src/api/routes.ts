@@ -42,6 +42,10 @@ router.post('/tools/:name', async (req, res) => {
 });
 
 // All routes below require auth
+// Liveness probe — no auth, used by the frontend to detect "backend down"
+// and show a blocking overlay until it comes back.
+router.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
 router.use(requireUser);
 
 router.get('/status', async (req, res) => {
@@ -2290,11 +2294,12 @@ router.get('/report', async (req, res) => {
     // Comunicazione: log-scale of total outbound, capped
     const commScore = outboundTotal === 0 ? 0
                     : Math.min(10, Math.round(Math.log10(1 + outboundTotal) * 4 * 10) / 10);
-    // Brain: notes count + link density
+    // Brain: notes count + link density (filtered by range via updated_at)
+    const sinceClauseBrain = interval ? `AND updated_at >= now() - INTERVAL '${interval}'` : '';
     const brainAgg = await query<{ notes: number; refs_with_data: number }>(
       `SELECT count(*)::int AS notes,
               count(*) FILTER (WHERE jsonb_typeof(refs) = 'object' AND refs <> '{}'::jsonb)::int AS refs_with_data
-       FROM brain_index WHERE user_id=$1`, [userId],
+       FROM brain_index WHERE user_id=$1 ${sinceClauseBrain}`, [userId],
     ).catch(() => [{ notes: 0, refs_with_data: 0 }]);
     const notes = brainAgg[0]?.notes ?? 0;
     const linkedRatio = notes === 0 ? 0 : (brainAgg[0].refs_with_data ?? 0) / notes;
@@ -2303,6 +2308,7 @@ router.get('/report', async (req, res) => {
     // CRM: coverage (people with note) + psy-profile share
     // has_psy lives in brain_index (file `people/<slug>.psy-profile.md`), not in
     // people.meta. Compute via EXISTS join, same as /people route.
+    const sinceClauseCrm = interval ? `AND p.updated_at >= now() - INTERVAL '${interval}'` : '';
     const crmAgg = await query<{ total: number; with_note: number; with_psy: number }>(
       `SELECT count(*)::int AS total,
               count(*) FILTER (WHERE p.note_path IS NOT NULL)::int AS with_note,
@@ -2311,7 +2317,7 @@ router.get('/report', async (req, res) => {
                 WHERE bi.user_id = p.user_id
                   AND bi.path = 'people/' || p.slug || '.psy-profile.md'
               ))::int AS with_psy
-       FROM people p WHERE p.user_id=$1`, [userId],
+       FROM people p WHERE p.user_id=$1 ${sinceClauseCrm}`, [userId],
     ).catch(() => [{ total: 0, with_note: 0, with_psy: 0 }]);
     const peopleTotal = crmAgg[0]?.total ?? 0;
     const crmScore = peopleTotal === 0 ? 0 : Math.min(10, Math.round((
@@ -2319,10 +2325,11 @@ router.get('/report', async (req, res) => {
       ((crmAgg[0].with_psy / peopleTotal) * 4)
     ) * 10) / 10);
     // Memoria: reflection runs + tool_use brain accesses
+    const sinceClauseMem = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
     const memAgg = await query<{ refl: number; access: number }>(
       `SELECT
-         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND kind='reflection' AND status='ok') AS refl,
-         (SELECT count(*)::int FROM tool_events WHERE user_id=$1 AND name IN ('brain_search','agent_brain_search','people_get','people_search')) AS access`,
+         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND kind='reflection' AND status='ok' ${sinceClauseMem}) AS refl,
+         (SELECT count(*)::int FROM tool_events WHERE user_id=$1 AND name IN ('brain_search','agent_brain_search','people_get','people_search') ${sinceClauseMem}) AS access`,
       [userId],
     ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ refl: 0, access: 0 }]; });
     const reflCount = memAgg[0]?.refl ?? 0;
@@ -2330,11 +2337,12 @@ router.get('/report', async (req, res) => {
     const memScore = (reflCount === 0 && accessCount === 0) ? 0
                    : Math.min(10, Math.round((Math.log10(1 + reflCount) * 3 + Math.log10(1 + accessCount) * 3) * 10) / 10);
 
-    // Automazione: flows + scheduled_tasks attivi (enabled)
+    // Automazione: flows + scheduled_tasks attivi (enabled, filtrati per range)
+    const sinceClauseAuto = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
     const autoAgg = await query<{ flows: number; tasks: number }>(
       `SELECT
-         (SELECT count(*)::int FROM flows WHERE user_id=$1 AND enabled=true) AS flows,
-         (SELECT count(*)::int FROM scheduled_tasks WHERE user_id=$1 AND enabled=true) AS tasks`,
+         (SELECT count(*)::int FROM flows WHERE user_id=$1 AND enabled=true ${sinceClauseAuto}) AS flows,
+         (SELECT count(*)::int FROM scheduled_tasks WHERE user_id=$1 AND enabled=true ${sinceClauseAuto}) AS tasks`,
       [userId],
     ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ flows: 0, tasks: 0 }]; });
     const flowsCount = autoAgg[0]?.flows ?? 0;
@@ -2343,12 +2351,13 @@ router.get('/report', async (req, res) => {
                     : Math.min(10, Math.round(((flowsCount * 1.5) + (tasksCount * 1.2)) * 10) / 10);
 
     // Triage messaggi: % wa+ig elaborati (processed_at IS NOT NULL)
+    const sinceClauseTri = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
     const triageAgg = await query<{ wa_tot: number; wa_proc: number; ig_tot: number; ig_proc: number }>(
       `SELECT
-         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false) AS wa_tot,
-         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL) AS wa_proc,
-         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false) AS ig_tot,
-         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL) AS ig_proc`,
+         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false ${sinceClauseTri}) AS wa_tot,
+         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL ${sinceClauseTri}) AS wa_proc,
+         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false ${sinceClauseTri}) AS ig_tot,
+         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL ${sinceClauseTri}) AS ig_proc`,
       [userId],
     ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ wa_tot: 0, wa_proc: 0, ig_tot: 0, ig_proc: 0 }]; });
     const triageTot = (triageAgg[0]?.wa_tot ?? 0) + (triageAgg[0]?.ig_tot ?? 0);
@@ -2357,10 +2366,11 @@ router.get('/report', async (req, res) => {
                       : Math.min(10, Math.round((triageProc / triageTot) * 10 * 10) / 10);
 
     // Sub-agenti: numero di sub_agents completati con successo + custom agents/teams attivi
+    const sinceClauseSub = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
     const subAgg = await query<{ subs: number; teams: number }>(
       `SELECT
-         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND status='completed') AS subs,
-         (SELECT count(*)::int FROM custom_agents WHERE user_id=$1) AS teams`,
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND status='completed' ${sinceClauseSub}) AS subs,
+         (SELECT count(*)::int FROM custom_agents WHERE user_id=$1 ${sinceClauseSub}) AS teams`,
       [userId],
     ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ subs: 0, teams: 0 }]; });
     const subsCount = subAgg[0]?.subs ?? 0;
@@ -2369,10 +2379,12 @@ router.get('/report', async (req, res) => {
                    : Math.min(10, Math.round((Math.log10(1 + subsCount) * 4 + customAgents * 1) * 10) / 10);
 
     // Documentazione: snapshot count + log run total (storia preservata)
+    const sinceClauseDocSnap = interval ? `AND created_at >= now() - INTERVAL '${interval}'` : '';
+    const sinceClauseDocRun = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
     const docAgg = await query<{ snaps: number; runs: number }>(
       `SELECT
-         (SELECT count(*)::int FROM brain_snapshots WHERE user_id=$1 AND status='ok') AS snaps,
-         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND status='ok') AS runs`,
+         (SELECT count(*)::int FROM brain_snapshots WHERE user_id=$1 AND status='ok' ${sinceClauseDocSnap}) AS snaps,
+         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND status='ok' ${sinceClauseDocRun}) AS runs`,
       [userId],
     ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ snaps: 0, runs: 0 }]; });
     const snapsCount = docAgg[0]?.snaps ?? 0;

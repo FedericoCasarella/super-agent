@@ -439,18 +439,20 @@ export default function FlowDetail() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-3 flex-wrap h-9">
         <button onClick={() => nav('/flows')} className="text-muted-foreground hover:text-text"><ArrowLeft size={16} /></button>
         <Input value={flow.name} onChange={(e) => setFlow({ ...flow, name: e.target.value })} className="text-lg font-semibold !bg-transparent !border-transparent hover:!border-border focus:!border-accent max-w-xs" />
-        <Chip tone={flow.enabled ? 'on' : 'warn'}>{flow.enabled ? 'attivo' : 'spento'}</Chip>
-        <Toggle checked={flow.enabled} onChange={(v) => setFlow({ ...flow, enabled: v })} />
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex items-center gap-2">
           <div className="flex items-center gap-1 bg-surface2/70 border border-border rounded-md p-1">
             <Button size="sm" variant={tab === 'builder' ? 'primary' : 'ghost'} onClick={() => setTab('builder')}><Workflow size={13} className="inline mr-1 -mt-0.5" />Builder</Button>
             <Button size="sm" variant={tab === 'runs' ? 'primary' : 'ghost'} onClick={() => setTab('runs')}><ClipboardList size={13} className="inline mr-1 -mt-0.5" />Execution logs</Button>
           </div>
           <Button size="sm" variant="ghost" onClick={runNow}><Play size={13} className="inline mr-1 -mt-0.5" />Run now</Button>
           <Button size="sm" onClick={saveAll}><Save size={13} className="inline mr-1 -mt-0.5" />Salva</Button>
+          <div className="flex items-center gap-2 pl-2 ml-2 border-l border-border h-7">
+            <Toggle checked={flow.enabled} onChange={(v) => setFlow({ ...flow, enabled: v })} />
+            <span className="text-xs text-muted-foreground">{flow.enabled ? 'attivo' : 'spento'}</span>
+          </div>
         </div>
       </div>
 
@@ -487,7 +489,6 @@ export default function FlowDetail() {
               <button onClick={() => setZoom((z) => Math.min(2, z + 0.1))} className="w-7 h-7 rounded-md hover:bg-surface2 text-sm">+</button>
               <button onClick={() => setZoom(1)} className="w-7 h-7 rounded-md hover:bg-surface2 text-[10px]">1:1</button>
               <button onClick={() => setZoom((z) => Math.max(0.4, z - 0.1))} className="w-7 h-7 rounded-md hover:bg-surface2 text-sm">−</button>
-              <button onClick={() => setPan({ x: 0, y: 0 })} className="w-7 h-7 rounded-md hover:bg-surface2 text-[10px]" title="Reset pan">⌂</button>
             </div>
           </div>
         </Card>

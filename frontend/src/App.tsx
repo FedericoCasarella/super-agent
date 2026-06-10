@@ -44,18 +44,89 @@ import MessageSound from './components/MessageSound';
 import BrainLoading from './components/BrainLoading';
 
 export default function App() {
+  // Backend liveness probe — runs BEFORE auth so the app is blocked behind a
+  // full-screen overlay when the backend is unreachable (even on the auth
+  // page). Once /api/ping resolves, the rest of the app mounts as usual.
+  const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: any;
+    async function probe() {
+      try {
+        const r = await fetch('/api/ping', { credentials: 'include' });
+        if (cancelled) return;
+        if (r.ok) {
+          setBackendUp(true);
+          return;
+        }
+        setBackendUp(false);
+      } catch {
+        if (cancelled) return;
+        setBackendUp(false);
+      }
+      timer = setTimeout(probe, 2000);
+    }
+    probe();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, []);
+
+  // Once the backend comes back, kick the periodic probe again to detect
+  // outages mid-session.
+  useEffect(() => {
+    if (backendUp !== true) return;
+    const iv = setInterval(async () => {
+      try {
+        const r = await fetch('/api/ping', { credentials: 'include' });
+        if (!r.ok) setBackendUp(false);
+      } catch { setBackendUp(false); }
+    }, 10_000);
+    return () => clearInterval(iv);
+  }, [backendUp]);
+
+  if (backendUp !== true) {
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background">
+        <BrainLoading size={140} label="Ci sto lavorando…" />
+      </div>
+    );
+  }
+
+  return <AppInner />;
+}
+
+function AppInner() {
   const { user, loading } = useAuth();
   const [status, setStatus] = useState<any>(null);
+  const [backendDown, setBackendDown] = useState(false);
 
   async function refresh() {
     if (!user) return;
-    try { setStatus(await api.status()); } catch {}
+    try {
+      const s = await api.status();
+      setStatus(s);
+      setBackendDown(false);
+    } catch {
+      setBackendDown(true);
+    }
   }
   useEffect(() => { refresh(); }, [user]);
+  // Retry every 2s while the backend is unreachable. Cleared as soon as a
+  // successful /status response lands.
+  useEffect(() => {
+    if (!user) return;
+    if (status && !backendDown) return;
+    const id = setInterval(() => { refresh(); }, 2000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, status, backendDown]);
 
   if (loading) return <div className="h-full flex items-center justify-center"><BrainLoading size={140} /></div>;
   if (!user) return <AuthPage />;
-  if (!status) return <div className="h-full flex items-center justify-center"><BrainLoading size={140} /></div>;
+  if (!status) return (
+    <div className="h-full flex items-center justify-center">
+      <BrainLoading size={140} label={backendDown ? 'Backend non raggiungibile — riprovo…' : 'Connessione al backend…'} />
+    </div>
+  );
   if (!status.onboarded) return <Onboarding status={status} onDone={refresh} />;
 
   return (

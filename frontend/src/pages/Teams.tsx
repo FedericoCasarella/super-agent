@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
-import { Plus, Users, Trash2, Edit3 } from 'lucide-react';
+import { Plus, Users, Trash2 } from 'lucide-react';
+import DataTable, { Column } from '../components/DataTable';
 
-type Team = { id: number; name: string; description: string | null };
+type Team = { id: number; name: string; description: string | null; members_count?: number };
 type Member = { agent_id: number; role: 'lead' | 'member'; reports_to: number | null; position: number; agent?: any };
 type TeamFull = Team & { members: Member[] };
 type Agent = { id: number; name: string; role: string | null; icon: string | null; color: string | null };
@@ -73,95 +75,118 @@ export default function Teams() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Users className="text-accent" size={22} />
-          <h1 className="text-2xl font-semibold text-gradient">Teams</h1>
-          <Chip>{teams.length}</Chip>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={() => nav('/custom-agents')}>Custom Agents</Button>
-          <Button variant="ghost" size="sm" onClick={() => nav('/team-tasks')}>Task</Button>
-          <Button size="sm" onClick={createTeam}><Plus size={14} className="inline mr-1 -mt-0.5" />Nuovo team</Button>
-        </div>
+      <div className="flex items-center gap-3">
+        <Users className="text-accent" size={22} />
+        <h1 className="text-2xl font-semibold text-gradient">Teams</h1>
+        <Chip>{teams.length}</Chip>
       </div>
 
-      {!editing && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {teams.map((t) => (
-            <div key={t.id} onClick={() => openTeam(t)} className="cursor-pointer hover:translate-y-[-2px] transition"><Card>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="font-semibold truncate">{t.name}</div>
-                  {t.description && <div className="text-xs text-muted-foreground line-clamp-2 mt-1">{t.description}</div>}
-                </div>
-                <div className="flex gap-1">
-                  <button onClick={(e) => { e.stopPropagation(); openTeam(t); }} className="text-muted-foreground hover:text-accent p-1"><Edit3 size={13} /></button>
-                  <button onClick={(e) => { e.stopPropagation(); deleteTeam(t); }} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
+      <DataTable<Team>
+        persistKey="teams"
+        refreshKey={teams.length}
+        fetcher={async ({ q, page, pageSize, sort }) => {
+          let rows = teams;
+          if (q) {
+            const n = q.toLowerCase();
+            rows = rows.filter((r) => r.name.toLowerCase().includes(n) || (r.description ?? '').toLowerCase().includes(n));
+          }
+          if (sort) {
+            rows = [...rows].sort((a: any, b: any) => {
+              const av = a[sort.key]; const bv = b[sort.key];
+              if (av == null) return 1; if (bv == null) return -1;
+              return sort.dir === 'asc' ? (av > bv ? 1 : -1) : (av > bv ? -1 : 1);
+            });
+          }
+          const total = rows.length;
+          const start = page * pageSize;
+          return { rows: rows.slice(start, start + pageSize), total };
+        }}
+        rowKey={(t) => t.id}
+        onRowClick={(t) => openTeam(t)}
+        searchPlaceholder="Cerca per nome o descrizione…"
+        columns={[
+          { key: 'name', header: 'Nome', sortable: true, render: (t) => <span className="font-medium">{t.name}</span> },
+          { key: 'description', header: 'Descrizione', render: (t) => <span className="text-xs text-muted-foreground line-clamp-2">{t.description ?? '—'}</span> },
+          { key: 'members_count', header: 'Agenti', sortable: true, width: 'w-20', align: 'right', render: (t) => <span className="font-mono text-xs tabular-nums">{t.members_count ?? 0}</span> },
+          {
+            key: 'actions', header: '', width: 'w-12', align: 'right',
+            render: (t) => (
+              <button onClick={(e) => { e.stopPropagation(); deleteTeam(t); }} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
+            ),
+          },
+        ] as Column<Team>[]}
+        emptyText="Nessun team. Crea il primo."
+        toolbar={
+          <Button size="sm" onClick={createTeam}><Plus size={14} /> Nuovo team</Button>
+        }
+      />
+
+      {editing && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md p-4" onClick={() => setEditing(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xl max-h-[90vh] overflow-y-auto">
+            <Card className="space-y-4">
+              <div className="font-semibold text-lg">Edit team</div>
+
+              <Field label="Nome">
+                <Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+              </Field>
+
+              <Field label="Descrizione">
+                <Input value={editing.description ?? ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} />
+              </Field>
+
+              <div>
+                <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-2 font-semibold">Membri del team</div>
+                <div className="space-y-2">
+                  {editing.members.map((m) => {
+                    const ag = agents.find((a) => a.id === m.agent_id);
+                    return (
+                      <div key={m.agent_id} className="flex items-center gap-3 border border-border rounded-xl p-3 bg-surface2/40">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm" style={{ background: (ag?.color ?? '#c084fc') + '22', border: `1px solid ${ag?.color ?? '#c084fc'}55` }}>
+                          {ag?.icon || '🤖'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm truncate">{ag?.name ?? `#${m.agent_id}`}</div>
+                          {ag?.role && <div className="text-xs text-muted-foreground truncate">{ag.role}</div>}
+                        </div>
+                        <select value={m.role} onChange={(e) => patchMember(m.agent_id, { role: e.target.value as any })} className="bg-surface2 border border-border rounded-md px-2 py-1 text-xs">
+                          <option value="lead">Lead</option>
+                          <option value="member">Member</option>
+                        </select>
+                        <select value={m.reports_to ?? ''} onChange={(e) => patchMember(m.agent_id, { reports_to: e.target.value ? Number(e.target.value) : null })} className="bg-surface2 border border-border rounded-md px-2 py-1 text-xs max-w-[140px]">
+                          <option value="">no supervisor</option>
+                          {editing.members.filter((x) => x.agent_id !== m.agent_id).map((x) => (
+                            <option key={x.agent_id} value={x.agent_id}>↑ {agents.find((a) => a.id === x.agent_id)?.name ?? `#${x.agent_id}`}</option>
+                          ))}
+                        </select>
+                        <button onClick={() => removeMember(m.agent_id)} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
+                      </div>
+                    );
+                  })}
+                  {editing.members.length === 0 && <div className="text-xs text-muted-foreground">Nessun membro. Aggiungi dal selettore qui sotto.</div>}
                 </div>
               </div>
-            </Card></div>
-          ))}
-          {teams.length === 0 && <Card><div className="text-muted-foreground text-sm">Nessun team. Crea il primo.</div></Card>}
-        </div>
-      )}
 
-      {editing && (
-        <Card className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="font-semibold text-lg">Edit team</div>
-            <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setEditing(null)}>Annulla</Button>
-              <Button onClick={saveTeam}>Salva</Button>
-            </div>
+              <div>
+                <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-2 font-semibold">Aggiungi membro</div>
+                <div className="flex flex-wrap gap-2">
+                  {agents.filter((a) => !editing.members.some((m) => m.agent_id === a.id)).map((a) => (
+                    <button key={a.id} onClick={() => addMember(a.id)} className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-border bg-surface2/60 hover:border-accent/40 text-xs">
+                      <span>{a.icon || '🤖'}</span><span>{a.name}</span>
+                    </button>
+                  ))}
+                  {agents.filter((a) => !editing.members.some((m) => m.agent_id === a.id)).length === 0 && <div className="text-xs text-muted-foreground">Tutti gli agenti sono già nel team.</div>}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-border">
+                <Button variant="ghost" onClick={() => setEditing(null)}>Annulla</Button>
+                <Button onClick={saveTeam}>Salva</Button>
+              </div>
+            </Card>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Nome"><Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
-            <Field label="Descrizione"><Input value={editing.description ?? ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></Field>
-          </div>
-          <div>
-            <div className="text-xs uppercase text-muted-foreground tracking-wider mb-2">Membri del team</div>
-            <div className="space-y-2">
-              {editing.members.map((m) => {
-                const ag = agents.find((a) => a.id === m.agent_id);
-                return (
-                  <div key={m.agent_id} className="flex items-center gap-3 border border-border rounded-xl p-3 bg-surface2/40">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm" style={{ background: (ag?.color ?? '#c084fc') + '22', border: `1px solid ${ag?.color ?? '#c084fc'}55` }}>
-                      {ag?.icon || '🤖'}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm truncate">{ag?.name ?? `#${m.agent_id}`}</div>
-                      {ag?.role && <div className="text-xs text-muted-foreground truncate">{ag.role}</div>}
-                    </div>
-                    <select value={m.role} onChange={(e) => patchMember(m.agent_id, { role: e.target.value as any })} className="bg-surface2 border border-border rounded-md px-2 py-1 text-xs">
-                      <option value="lead">Lead</option>
-                      <option value="member">Member</option>
-                    </select>
-                    <select value={m.reports_to ?? ''} onChange={(e) => patchMember(m.agent_id, { reports_to: e.target.value ? Number(e.target.value) : null })} className="bg-surface2 border border-border rounded-md px-2 py-1 text-xs max-w-[140px]">
-                      <option value="">no supervisor</option>
-                      {editing.members.filter((x) => x.agent_id !== m.agent_id).map((x) => (
-                        <option key={x.agent_id} value={x.agent_id}>↑ {agents.find((a) => a.id === x.agent_id)?.name ?? `#${x.agent_id}`}</option>
-                      ))}
-                    </select>
-                    <button onClick={() => removeMember(m.agent_id)} className="text-muted-foreground hover:text-red-300 p-1"><Trash2 size={13} /></button>
-                  </div>
-                );
-              })}
-              {editing.members.length === 0 && <div className="text-xs text-muted-foreground">Nessun membro. Aggiungi dal selettore qui sotto.</div>}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs uppercase text-muted-foreground tracking-wider mb-2">Aggiungi membro</div>
-            <div className="flex flex-wrap gap-2">
-              {agents.filter((a) => !editing.members.some((m) => m.agent_id === a.id)).map((a) => (
-                <button key={a.id} onClick={() => addMember(a.id)} className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-border bg-surface2/60 hover:border-accent/40 text-xs">
-                  <span>{a.icon || '🤖'}</span><span>{a.name}</span>
-                </button>
-              ))}
-              {agents.filter((a) => !editing.members.some((m) => m.agent_id === a.id)).length === 0 && <div className="text-xs text-muted-foreground">Tutti gli agenti sono già nel team.</div>}
-            </div>
-          </div>
-        </Card>
+        </div>,
+        document.body,
       )}
     </div>
   );

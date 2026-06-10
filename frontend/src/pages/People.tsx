@@ -114,16 +114,10 @@ export default function PeoplePage() {
 
   return (
     <div className="space-y-4 h-full flex flex-col">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <UsersIcon className="text-accent" size={22} />
-          <h1 className="text-2xl font-semibold text-gradient">People</h1>
-          <Chip>{total} record</Chip>
-        </div>
-        <Button onClick={dedupe} disabled={dedupBusy}>
-          <Sparkles size={14} className="inline mr-1.5 -mt-0.5" />
-          {dedupBusy ? 'Lancio…' : 'Bonifica duplicati'}
-        </Button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <UsersIcon className="text-accent" size={22} />
+        <h1 className="text-2xl font-semibold text-gradient">People</h1>
+        <Chip>{total} record</Chip>
       </div>
 
       <DataTable<Person>
@@ -148,6 +142,12 @@ export default function PeoplePage() {
         rowKey={(p) => p.id}
         onRowClick={(p) => setOpenPerson(p)}
         emptyText="Nessuna persona trovata."
+        toolbar={
+          <Button size="sm" onClick={dedupe} disabled={dedupBusy}>
+            <Sparkles size={14} />
+            {dedupBusy ? 'Lancio…' : 'Bonifica duplicati'}
+          </Button>
+        }
       />
 
       {openPerson && (
