@@ -100,8 +100,12 @@ export default function Agents() {
         <DataTable<Agent>
           persistKey="agents"
           fetcher={async ({ q, page, pageSize, filters }) => {
-            // Client-side filter/paginate (perks list is small).
-            let rows = itemsRef.current;
+            // Client-side filter/paginate. Read directly from the `items`
+            // state closure (re-captured each render) instead of itemsRef —
+            // refs update in a parent effect that runs AFTER the child's
+            // DataTable effect, so the ref would be stale on the first
+            // post-load fetch and the table stayed empty.
+            let rows = items;
             if (q) {
               const t = q.toLowerCase();
               rows = rows.filter((a) => a.title.toLowerCase().includes(t) || a.name.toLowerCase().includes(t) || (a.description ?? '').toLowerCase().includes(t));
