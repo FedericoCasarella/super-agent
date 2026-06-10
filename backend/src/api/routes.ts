@@ -1911,6 +1911,88 @@ router.get('/settings', async (req, res) => {
 // ---------------------------------------------------------------------------
 // MAIL — full email client backed by mail_messages + mail_attachments.
 // ---------------------------------------------------------------------------
+// Per-account auto-sync preference. Stored in user settings under
+// `mail.autoSync.<accountLabel>`. When ON, the scheduler runs an
+// incremental sync + bonifica every cycle (so new mail lands in the
+// brain + people are linked without manual button presses).
+router.get('/mail/accounts/:label/auto-sync', async (req, res) => {
+  try {
+    const v = await getSetting<{ enabled: boolean }>(req.user!.id, `mail.autoSync.${req.params.label}`);
+    res.json({ enabled: !!v?.enabled });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+// Per-account HTML signature. Primary source = IMAP connector account config
+// (accounts[i].signature). Legacy fallback = settings key set by the older
+// dialog. Composer hits this at open time.
+router.get('/mail/accounts/:label/signature', async (req, res) => {
+  try {
+    const { listAccounts } = await import('../mail/service.js');
+    const accs = await listAccounts(req.user!.id);
+    const acc = accs.find((a) => a.label === req.params.label);
+    let html = (acc?.signature ?? '').trim();
+    let source = 'connector';
+    if (!html) {
+      const legacy = await getSetting<{ html: string }>(req.user!.id, `mail.signature.${req.params.label}`);
+      if (legacy?.html) { html = legacy.html; source = 'settings:legacy'; }
+    }
+    console.log(`[mail:sig:u${req.user!.id}] label="${req.params.label}" len=${html.length} source=${source}`);
+    res.json({ html });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+router.put('/mail/accounts/:label/auto-sync', async (req, res) => {
+  try {
+    await setSetting(req.user!.id, `mail.autoSync.${req.params.label}`, { enabled: !!req.body?.enabled });
+    res.json({ ok: true, enabled: !!req.body?.enabled });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Lookup person row by email address. Used by the mail UI to know whether
+// a sender is already linked to a brain person (and show the chip).
+router.get('/people/by-email', async (req, res) => {
+  try {
+    const addr = String(req.query.addr ?? '').toLowerCase().trim();
+    if (!addr) return res.json({ person: null });
+    const rows = await query<any>(
+      `SELECT id::int, slug, name, emails, phones, note_path
+       FROM people
+       WHERE user_id=$1 AND $2 = ANY(emails)
+       LIMIT 1`,
+      [req.user!.id, addr],
+    );
+    res.json({ person: rows[0] ?? null });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Bind an email address to an existing person. Adds it to people.emails[] if
+// not already there. Re-runs brain note write so "related" reflects the new
+// email mapping for downstream people_search lookups.
+router.post('/people/:slug/bind-email', async (req, res) => {
+  try {
+    const addr = String(req.body?.email ?? '').toLowerCase().trim();
+    if (!addr || !addr.includes('@')) return res.status(400).json({ error: 'email mancante o invalida' });
+    const { upsertPerson } = await import('../connectors/builtin/people/index.js');
+    // upsertPerson dedupes by email + name. We pass the existing slug as alias
+    // hint so the engine picks the right person; in practice just adding the
+    // email and letting downstream merge handle conflicts.
+    const slug = String(req.params.slug);
+    // Fetch existing person row
+    const rows = await query<{ id: number; emails: string[]; name: string }>(
+      `SELECT id::int, emails, name FROM people WHERE user_id=$1 AND slug=$2`,
+      [req.user!.id, slug],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'persona non trovata' });
+    const existing = new Set((rows[0].emails ?? []).map((e) => e.toLowerCase()));
+    if (!existing.has(addr)) {
+      const newEmails = [...(rows[0].emails ?? []), addr];
+      await query(`UPDATE people SET emails=$1, updated_at=now() WHERE id=$2`, [newEmails, rows[0].id]);
+      // Refresh the brain note for this person so the agent sees the new mapping.
+      try { await upsertPerson(req.user!.id, { name: rows[0].name, emails: [addr], note: `Email manualmente collegata via UI` }); } catch {}
+    }
+    res.json({ ok: true, slug, email: addr });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 router.get('/mail/accounts', async (req, res) => {
   try {
     const { listAccounts } = await import('../mail/service.js');
@@ -2122,6 +2204,10 @@ const REPORT_MIN = {
   brain_search: 4,            // every vault/people lookup
   ingest_per_msg: 0.3,         // bulk sync overhead per ingested message
   voice_baseline_min: 1,       // typing/edit overhead on top of clip length
+  // Email "read" = an email landed in the mail client and was either
+  // bonificata (filed in brain + people linked) or sorted by the agent.
+  // Estimated 2 min you would have spent opening / scanning / triaging it.
+  mail_read: 2,
 };
 
 router.get('/report', async (req, res) => {
@@ -2164,6 +2250,20 @@ router.get('/report', async (req, res) => {
     ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0 }]; });
     const ingestCount = (waIngest[0]?.c ?? 0) + (igIngest[0]?.c ?? 0);
 
+    // Email ingested via mail_messages (inbound only, not trashed).
+    // Subset that was auto/manual bonificata is counted separately so the
+    // user sees both "email lette" and "delle quali nel brain".
+    const sinceClauseMail = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const mailRead = await query<{ c: number; bonified: number }>(
+      `SELECT count(*)::int AS c,
+              count(*) FILTER (WHERE bonified_at IS NOT NULL)::int AS bonified
+       FROM mail_messages
+       WHERE user_id=$1 AND direction='in' AND trashed_at IS NULL ${sinceClauseMail}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0, bonified: 0 }]; });
+    const mailReadCount = mailRead[0]?.c ?? 0;
+    const mailBonifiedCount = mailRead[0]?.bonified ?? 0;
+
     // Voice transcribe runs — duration + baseline typing overhead
     const sinceClauseRun = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
     const voice = await query<{ c: number; total_dur: string | number }>(
@@ -2183,7 +2283,8 @@ router.get('/report', async (req, res) => {
     const tSearches = searchCount * REPORT_MIN.brain_search;
     const tIngest = ingestCount * REPORT_MIN.ingest_per_msg;
     const tVoice = voiceCount * REPORT_MIN.voice_baseline_min + voiceDurMin;
-    const totalMin = Math.round(tReplies + tSearches + tIngest + tVoice);
+    const tMailRead = mailReadCount * REPORT_MIN.mail_read;
+    const totalMin = Math.round(tReplies + tSearches + tIngest + tVoice + tMailRead);
 
     // === Radar (0-10) ===
     // Comunicazione: log-scale of total outbound, capped
@@ -2288,6 +2389,7 @@ router.get('/report', async (req, res) => {
           brain_searches: { min: Math.round(tSearches), count: searchCount },
           ingestion: { min: Math.round(tIngest), count: ingestCount },
           voice: { min: Math.round(tVoice), count: voiceCount, dur_min: Math.round(voiceDurMin) },
+          mail_read: { min: Math.round(tMailRead), count: mailReadCount, bonified: mailBonifiedCount },
         },
       },
       radar: {

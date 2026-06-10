@@ -54,6 +54,25 @@ async function main() {
     }
   } catch (e) { console.error('[wa] boot scan failed', e); }
 
+  // Pre-warm mail_folders so the first /mail visit shows labels instantly.
+  // Fire-and-forget per account; failures are logged but never block boot.
+  setImmediate(async () => {
+    try {
+      const { listActiveUsers } = await import('./db/index.js');
+      const users = await listActiveUsers();
+      const mail = await import('./mail/service.js');
+      for (const u of users) {
+        let accs: any[] = [];
+        try { accs = await mail.listAccounts(u.id); } catch { continue; }
+        for (const a of accs) {
+          mail.listFolders(u.id, a.label).then((r) => {
+            if (r.ok) console.log(`[mail:prewarm] u${u.id} ${a.label}: ${r.folders.length} folders`);
+          }).catch(() => {});
+        }
+      }
+    } catch (e) { console.error('[mail:prewarm] failed', e); }
+  });
+
   // Auto-restore Instagram sessions for users with persisted state.json
   try {
     const fs = await import('node:fs/promises');

@@ -112,6 +112,29 @@ export async function startScheduler() {
   });
   console.log('[scheduler] wa-watchdog armed (every 1m)');
 
+  // Mail auto-sync: react to `mail:new` events. When the IMAP cron's
+  // persistInbound fires for an account the user flagged `mail.autoSync=true`,
+  // immediately bonifica that single message (brain note + people linking).
+  // Per-message, NOT a polling loop.
+  bus.on('mail:new', async (m: any) => {
+    if (!m?.userId || !m?.account || !m?.id) return;
+    try {
+      const pref = await getSetting<{ enabled: boolean }>(m.userId, `mail.autoSync.${m.account}`);
+      if (!pref?.enabled) return;
+      bus.emit('mail:autosync', { userId: m.userId, account: m.account, mailId: m.id, phase: 'started' });
+      const { bonifyOne } = await import('../mail/service.js');
+      const r = await bonifyOne(m.userId, m.id, false);
+      bus.emit('mail:autosync', {
+        userId: m.userId, account: m.account, mailId: m.id,
+        phase: r.ok ? 'done' : 'error',
+        skipped: r.skipped, subj: r.subj, error: r.error,
+      });
+    } catch (e: any) {
+      bus.emit('mail:autosync', { userId: m.userId, account: m.account, mailId: m.id, phase: 'error', error: String(e?.message ?? e) });
+    }
+  });
+  console.log('[scheduler] mail auto-sync armed (per-message, on mail:new)');
+
   // Brain snapshots: 00:00 nightly per-user vault copy + counts.
   // Pin to Europe/Rome so it fires at midnight LOCAL regardless of system TZ
   // (default would be process TZ — if running in UTC container, "00:00" =

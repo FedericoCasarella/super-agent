@@ -18,6 +18,8 @@ const KIND_TONE: Record<string, 'on' | 'warn' | 'err' | 'default'> = {
   reflection: 'warn',
   proactive: 'default',
   voice_transcribe: 'default',
+  mail_bonify: 'on',
+  mail_suggest: 'default',
 };
 
 function fmtUsd(v: number | null | undefined) {
@@ -61,6 +63,8 @@ export default function Logs() {
         { value: 'reflection', label: 'reflection', tone: 'warn' },
         { value: 'proactive', label: 'proactive' },
         { value: 'voice_transcribe', label: 'voice' },
+        { value: 'mail_bonify', label: 'mail → brain', tone: 'on' },
+        { value: 'mail_suggest', label: 'mail AI draft' },
       ],
     },
     {

@@ -27,6 +27,7 @@ export type Account = {
   smtpUser?: string;
   smtpPass?: string;
   smtpFromName?: string;
+  signature?: string;
 };
 
 export const MAIL_ATTACH_ROOT = path.join(os.homedir(), 'super-agent-mail-attachments');
@@ -183,7 +184,7 @@ export async function persistInbound(opts: {
 export async function listMessages(userId: number, opts: {
   account?: string; folder?: string; q?: string; unread?: boolean;
   limit?: number; offset?: number;
-} = {}): Promise<{ rows: any[]; total: number }> {
+} = {}): Promise<{ rows: any[]; total: number; diag?: any }> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const offset = Math.max(opts.offset ?? 0, 0);
   const where: string[] = ['user_id=$1'];
@@ -206,16 +207,50 @@ export async function listMessages(userId: number, opts: {
   const w = `WHERE ${where.join(' AND ')}`;
   const totalRows = await query<{ c: number }>(`SELECT count(*)::int AS c FROM mail_messages ${w}`, params);
   const rows = await query<any>(
-    `SELECT id, account_label, uid, message_id, thread_key, folder, direction, from_addr, from_name,
-            to_addrs, cc_addrs, subject, preview, ts, seen, flagged, starred,
-            (SELECT count(*)::int FROM mail_attachments WHERE message_id=m.id) AS attach_count
+    `SELECT m.id, m.account_label, m.uid, m.message_id, m.thread_key, m.folder, m.direction,
+            m.from_addr, m.from_name, m.to_addrs, m.cc_addrs, m.subject, m.preview, m.ts,
+            m.seen, m.flagged, m.starred,
+            (SELECT count(*)::int FROM mail_attachments WHERE message_id=m.id) AS attach_count,
+            -- Brain person link: pick a single person whose emails[] contains
+            -- the from_addr. Lets the UI show a chip per list row.
+            (SELECT p.slug FROM people p
+              WHERE p.user_id = m.user_id AND lower(m.from_addr) = ANY(p.emails)
+              LIMIT 1) AS from_person_slug,
+            (SELECT p.name FROM people p
+              WHERE p.user_id = m.user_id AND lower(m.from_addr) = ANY(p.emails)
+              LIMIT 1) AS from_person_name
      FROM mail_messages m
      ${w}
      ORDER BY ts DESC
      LIMIT ${limit} OFFSET ${offset}`,
     params,
   );
-  return { rows, total: totalRows[0]?.c ?? 0 };
+  const total = totalRows[0]?.c ?? 0;
+  // Diagnostic when zero hits — tell the UI which folder values DO have rows
+  // for this account, so the user can spot mailbox-name mismatches (e.g.
+  // server uses "Inbox" / "INBOX" / "[Gmail]/Inbox").
+  let diag: any = undefined;
+  if (total === 0 && opts.account) {
+    try {
+      const folderStats = await query<{ folder: string; cnt: number }>(
+        `SELECT folder, count(*)::int AS cnt
+         FROM mail_messages
+         WHERE user_id=$1 AND account_label=$2 AND trashed_at IS NULL
+         GROUP BY folder ORDER BY cnt DESC LIMIT 20`,
+        [userId, opts.account],
+      );
+      const accTotal = await query<{ c: number }>(
+        `SELECT count(*)::int AS c FROM mail_messages WHERE user_id=$1 AND account_label=$2 AND trashed_at IS NULL`,
+        [userId, opts.account],
+      );
+      diag = {
+        appliedFolder: opts.folder ?? null,
+        accountTotal: accTotal[0]?.c ?? 0,
+        folders: folderStats,
+      };
+    } catch {}
+  }
+  return { rows, total, diag };
 }
 
 // Get all messages in a thread, ordered chronologically (oldest first) so
@@ -348,7 +383,27 @@ export async function sendMail(userId: number, opts: {
     );
     return { ok: true, messageId: mid, id: rows[0]?.id };
   } catch (e: any) {
-    return { ok: false, error: String(e?.message ?? e) };
+    // Log the FULL nodemailer payload so we can spot creds / DNS / port
+    // problems in the backend console instead of guessing from a generic
+    // 400 in the browser.
+    console.error('[mail:sendMail] FAIL', {
+      account: opts.accountLabel,
+      to: opts.to,
+      smtpHost: s.host,
+      smtpPort: s.port,
+      smtpSecure: s.secure,
+      err: e?.message ?? e,
+      code: e?.code,
+      response: e?.response,
+      responseCode: e?.responseCode,
+      command: e?.command,
+    });
+    return {
+      ok: false,
+      error: e?.code
+        ? `${e.code} — ${e?.response ?? e?.message ?? e}`
+        : String(e?.message ?? e),
+    };
   }
 }
 
@@ -382,18 +437,20 @@ function folderKindFor(spec: any): Folder['kind'] {
   return 'custom';
 }
 
-export async function listFolders(userId: number, accountLabel: string): Promise<{ ok: boolean; folders: Folder[]; error?: string }> {
-  const accs = await listAccounts(userId);
-  if (!accs.length) return { ok: false, folders: [], error: 'nessun account configurato' };
-  const acc = pickAccount(accs, accountLabel);
+// Folders are persisted in `mail_folders`. Reads are pure SQL = instant.
+// We trigger a background IMAP refresh when the stored rows are older than
+// FOLDER_STALE_MS so the user sees up-to-date labels without ever waiting.
+const FOLDER_STALE_MS = 30 * 60_000;                  // 30min freshness target
+const refreshingFolders = new Set<string>();          // per user+account in-flight guard
+const folderKey = (uid: number, label: string) => `${uid}:${label}`;
+
+async function fetchFoldersLive(acc: Account): Promise<{ ok: boolean; folders: Folder[]; error?: string }> {
   const client = new ImapFlow({ host: acc.host, port: acc.port ?? 993, secure: true, auth: { user: acc.user, pass: acc.pass }, logger: false });
   try {
     await client.connect();
     const list: any[] = await client.list();
     const folders: Folder[] = list
       .filter((m) => {
-        // Skip \Noselect parents (e.g. Gmail's "[Gmail]" container).
-        // m.flags is a Set on imapflow; fall back to array indexOf.
         const f = m.flags;
         if (f && typeof f.has === 'function') return !f.has('\\Noselect');
         if (Array.isArray(f)) return !f.includes('\\Noselect');
@@ -410,12 +467,84 @@ export async function listFolders(userId: number, accountLabel: string): Promise
     folders.sort((a, b) => order[a.kind] - order[b.kind] || a.label.localeCompare(b.label));
     return { ok: true, folders };
   } catch (e: any) {
-    console.error('[mail:listFolders] failed', accountLabel, e?.message ?? e);
+    console.error('[mail:listFolders] failed', acc.label, e?.message ?? e);
     return { ok: false, folders: [], error: String(e?.message ?? e) };
   } finally {
     await client.logout().catch(() => {});
   }
 }
+
+async function persistFolders(userId: number, accountLabel: string, folders: Folder[]): Promise<void> {
+  // Atomic refresh: wipe old rows, insert new. mail_folders has PK
+  // (user_id, account_label, name) so multi-row insert in a single tx avoids
+  // partial states. Use a server-side transaction-equivalent via two calls.
+  await query(`DELETE FROM mail_folders WHERE user_id=$1 AND account_label=$2`, [userId, accountLabel]).catch(() => {});
+  if (!folders.length) return;
+  // Build a single multi-row INSERT for speed.
+  const values: any[] = [];
+  const placeholders: string[] = [];
+  let p = 0;
+  for (const f of folders) {
+    placeholders.push(`($${++p},$${++p},$${++p},$${++p},$${++p},$${++p})`);
+    values.push(userId, accountLabel, f.name, f.label, f.kind, f.subscribed);
+  }
+  await query(
+    `INSERT INTO mail_folders(user_id, account_label, name, label, kind, subscribed)
+     VALUES ${placeholders.join(',')}
+     ON CONFLICT (user_id, account_label, name) DO UPDATE
+       SET label=EXCLUDED.label, kind=EXCLUDED.kind, subscribed=EXCLUDED.subscribed, updated_at=now()`,
+    values,
+  ).catch((e) => console.warn('[mail:persistFolders] insert failed', e?.message ?? e));
+}
+
+async function readFoldersFromDb(userId: number, accountLabel: string): Promise<{ folders: Folder[]; ageMs: number } | null> {
+  const rows = await query<{ name: string; label: string; kind: string; subscribed: boolean; updated_at: string }>(
+    `SELECT name, label, kind, subscribed, updated_at
+     FROM mail_folders
+     WHERE user_id=$1 AND account_label=$2
+     ORDER BY
+       CASE kind
+         WHEN 'inbox' THEN 0 WHEN 'sent' THEN 1 WHEN 'drafts' THEN 2
+         WHEN 'archive' THEN 3 WHEN 'junk' THEN 4 WHEN 'trash' THEN 5
+         WHEN 'all' THEN 6 ELSE 7
+       END, label`,
+    [userId, accountLabel],
+  ).catch(() => []);
+  if (!rows.length) return null;
+  const newest = Math.max(...rows.map((r) => new Date(r.updated_at).getTime()));
+  return {
+    folders: rows.map((r) => ({ name: r.name, label: r.label, kind: r.kind as Folder['kind'], subscribed: !!r.subscribed })),
+    ageMs: Date.now() - newest,
+  };
+}
+
+export async function listFolders(userId: number, accountLabel: string, opts: { force?: boolean } = {}): Promise<{ ok: boolean; folders: Folder[]; error?: string; cached?: boolean }> {
+  const accs = await listAccounts(userId);
+  if (!accs.length) return { ok: false, folders: [], error: 'nessun account configurato' };
+  const acc = pickAccount(accs, accountLabel);
+  const key = folderKey(userId, accountLabel);
+
+  // DB read first — instant. Trigger a background refresh if stale or stub.
+  const fromDb = !opts.force ? await readFoldersFromDb(userId, accountLabel) : null;
+  if (fromDb) {
+    if (fromDb.ageMs > FOLDER_STALE_MS && !refreshingFolders.has(key)) {
+      refreshingFolders.add(key);
+      fetchFoldersLive(acc).then((r) => {
+        if (r.ok) return persistFolders(userId, accountLabel, r.folders);
+      }).catch(() => {}).finally(() => refreshingFolders.delete(key));
+    }
+    return { ok: true, folders: fromDb.folders, cached: true };
+  }
+
+  // Cold path: first-ever fetch for this account → wait for IMAP, then store.
+  refreshingFolders.add(key);
+  try {
+    const r = await fetchFoldersLive(acc);
+    if (r.ok) await persistFolders(userId, accountLabel, r.folders);
+    return r;
+  } finally { refreshingFolders.delete(key); }
+}
+
 
 // ---------------------------------------------------------------------------
 // Bonifica — feed a stored mail row through brain/ingestEmail so it lands as
@@ -453,12 +582,46 @@ export async function bonifyOne(userId: number, mailId: number, force = false): 
   const row = rows[0];
   if (!row) return { ok: false, error: 'message not found' };
   if (row.bonified_at && !force) return { ok: true, subj: row.subject, skipped: true };
+  const t0 = Date.now();
   try {
     const { ingestEmail } = await import('../brain/email.js');
     const ev = await ingestEmail({ userId, accountLabel: row.account_label, uid: row.uid ?? 0, parsed: reconstructParsed(row) });
     await query(`UPDATE mail_messages SET bonified_at=now() WHERE id=$1`, [row.id]);
+    // Log to agent_runs so it surfaces in the /logs page UI.
+    try {
+      await query(
+        `INSERT INTO agent_runs(user_id, kind, status, duration_ms, prompt, result, meta)
+         VALUES($1, 'mail_bonify', 'ok', $2, $3, $4, $5::jsonb)`,
+        [
+          userId,
+          Date.now() - t0,
+          `mail:${row.account_label}:${row.id}`,
+          `${row.from_name ?? ''} <${row.from_addr ?? ''}> · ${ev.subj}`,
+          JSON.stringify({
+            mail_id: row.id, account: row.account_label, from: row.from_addr,
+            subject: ev.subj, people_linked: ev.people?.length ?? 0,
+          }),
+        ],
+      );
+    } catch {}
+    console.log(`[mail:bonify:u${userId}] ok · ${row.account_label} · ${row.from_addr ?? '?'} · "${ev.subj}"`);
     return { ok: true, subj: ev.subj };
   } catch (e: any) {
+    // Log failures too so users can see why a message didn't make it in.
+    try {
+      await query(
+        `INSERT INTO agent_runs(user_id, kind, status, duration_ms, prompt, result, error, meta)
+         VALUES($1, 'mail_bonify', 'error', $2, $3, NULL, $4, $5::jsonb)`,
+        [
+          userId,
+          Date.now() - t0,
+          `mail:${row.account_label}:${row.id}`,
+          String(e?.message ?? e).slice(0, 1000),
+          JSON.stringify({ mail_id: row.id, account: row.account_label, from: row.from_addr, subject: row.subject }),
+        ],
+      );
+    } catch {}
+    console.warn(`[mail:bonify:u${userId}] FAIL · ${row.account_label} · ${row.from_addr ?? '?'} · ${String(e?.message ?? e)}`);
     return { ok: false, error: String(e?.message ?? e) };
   }
 }

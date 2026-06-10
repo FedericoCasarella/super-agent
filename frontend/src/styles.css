@@ -126,6 +126,29 @@
 }
 
 @layer utilities {
+  /* contenteditable placeholder: rendered when the body is empty so the
+     composer shows a "Inserisci testo" hint like a native input. */
+  .mail-composer-body:empty::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground) / 0.5);
+    pointer-events: none;
+  }
+
+  /* The signature HTML the user typed in /connectors usually targets a
+     LIGHT canvas (color:#444 etc.). In dark mode the editor canvas is dark,
+     so that copy disappears. Override inline color/background just for the
+     EDITING view — the outbound `innerHTML` still keeps the user's
+     original styles so recipients see the design as intended. */
+  .dark .mail-composer-body,
+  .dark .mail-composer-body * {
+    color: hsl(var(--foreground)) !important;
+    background-color: transparent !important;
+  }
+  .dark .mail-composer-body a,
+  .dark .mail-composer-body a * {
+    color: hsl(var(--accent)) !important;
+  }
+
   /* Force readable text inside rendered email HTML when the app theme is dark.
      Email senders set their own inline color/background (light-mode assumption);
      without overrides the body becomes a gray-on-black blob. We:

@@ -803,3 +803,19 @@ DO $$ BEGIN
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS mail_messages_user_bonified_idx ON mail_messages(user_id, bonified_at);
+
+-- Persisted IMAP folder cache. Fills on first /mail/folders call per account,
+-- subsequent requests read from here so the UI never waits on an IMAP LIST
+-- handshake. Background refresh is triggered when `updated_at` is older than
+-- the freshness window in the service layer.
+CREATE TABLE IF NOT EXISTS mail_folders (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_label TEXT NOT NULL,
+  name TEXT NOT NULL,
+  label TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  subscribed BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, account_label, name)
+);
+CREATE INDEX IF NOT EXISTS mail_folders_user_account_idx ON mail_folders(user_id, account_label);

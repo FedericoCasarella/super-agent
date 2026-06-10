@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { useWS } from '../ws';
 import { Button } from '@/components/ui/button';
@@ -7,8 +8,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Toggle, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
-import { Mail as MailIcon, Inbox, Send, Star, Trash2, RefreshCw, Reply, ReplyAll, Forward, Sparkles, Paperclip, X, Search, AlertCircle, Loader2, Wand2, MailOpen, CheckCheck, ChevronDown, FileEdit, Archive, ShieldAlert, Tag, FolderIcon, Bold as BoldIcon, Italic as ItalicIcon, Underline as UnderlineIcon, List as ListIcon, Link2 as LinkIcon, MoreHorizontal } from 'lucide-react';
+import { Mail as MailIcon, Inbox, Send, Star, Trash2, RefreshCw, Reply, ReplyAll, Forward, Sparkles, Paperclip, X, Search, AlertCircle, Loader2, Wand2, MailOpen, CheckCheck, ChevronDown, FileEdit, Archive, ShieldAlert, Tag, FolderIcon, Bold as BoldIcon, Italic as ItalicIcon, Underline as UnderlineIcon, List as ListIcon, Link2 as LinkIcon, MoreHorizontal, User as UserIcon, UserPlus, Strikethrough as StrikeIcon, Heading1 as H1Icon, ListOrdered as OrderedListIcon, Quote as QuoteIcon, IndentIncrease as IndentInIcon, IndentDecrease as IndentOutIcon } from 'lucide-react';
 
 type Account = { label: string; address: string; host: string; mailbox: string };
 type MsgRow = {
@@ -17,6 +19,8 @@ type MsgRow = {
   subject: string | null; preview: string | null; ts: string; seen: boolean; flagged: boolean; starred: boolean;
   direction: 'in' | 'out'; folder: string; attach_count?: number;
   thread_key?: string | null;
+  from_person_slug?: string | null;
+  from_person_name?: string | null;
 };
 type FullMsg = MsgRow & {
   in_reply_to: string | null;
@@ -176,6 +180,13 @@ export default function MailPage() {
   const dlg = useDialog();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [imapFolders, setImapFolders] = useState<{ name: string; label: string; kind: string }[]>([]);
+  // Real IMAP folder names per account — used to map the virtual "INBOX" /
+  // "Sent" sidebar entries to the actual DB folder column when filtering.
+  const [inboxName, setInboxName] = useState<string>('INBOX');
+  const [sentName, setSentName] = useState<string>('Sent');
+  // Per-account auto-sync toggle + live "running" indicator triggered by WS
+  const [autoSync, setAutoSync] = useState(false);
+  const [autoSyncBusy, setAutoSyncBusy] = useState<{ mailId?: number; ts: number } | null>(null);
   const [foldersError, setFoldersError] = useState<string | null>(null);
   const [foldersLoading, setFoldersLoading] = useState(false);
   const [accountsDiag, setAccountsDiag] = useState<any>(null);
@@ -205,9 +216,11 @@ export default function MailPage() {
 
   const buildListOpts = (offset: number) => {
     const o: any = { account, limit: PAGE_SIZE, offset };
-    if (folder === 'unread') { o.unread = true; o.folder = 'INBOX'; }
+    if (folder === 'unread') { o.unread = true; o.folder = inboxName; }
     else if (folder === 'starred') { /* client-side filter below */ }
     else if (folder === 'trash') { o.folder = 'trash'; }
+    else if (folder === 'INBOX') { o.folder = inboxName; }
+    else if (folder === 'Sent') { o.folder = sentName; }
     else { o.folder = folder; }
     if (q) o.q = q;
     return o;
@@ -216,17 +229,37 @@ export default function MailPage() {
   // `silent` = no loading spinner; used by 30s poll, WS pushes, focus refresh.
   // The initial filter-change fetch still shows the spinner so the user gets
   // immediate visual feedback when switching folders / typing in search.
+  const [listDiag, setListDiag] = useState<any>(null);
   const fetchList = useMemo(() => async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const r = await api.mailList(buildListOpts(0));
+      const r: any = await api.mailList(buildListOpts(0));
       let rs = r.rows as MsgRow[];
       if (folder === 'starred') rs = rs.filter((x) => x.starred);
       setRows(rs);
       setTotal(r.total);
+      setListDiag(r.diag ?? null);
+      // Auto-fallback: if the user lands on "In arrivo" and it's empty BUT
+      // there are saved emails in another folder, jump there. Spares the
+      // user the "perché non vedo nulla" confusion.
+      if (
+        folder === 'INBOX'
+        && rs.length === 0
+        && r.diag?.accountTotal > 0
+        && Array.isArray(r.diag.folders)
+        && r.diag.folders.length > 0
+      ) {
+        // Pick the folder with the most rows. If it's already the resolved
+        // inbox name (which we just queried via folder=inboxName), don't loop.
+        const top = r.diag.folders[0];
+        if (top?.folder && top.folder !== inboxName) {
+          setFolder(top.folder);
+          return;
+        }
+      }
     } catch (e) { console.error(e); }
     finally { if (!silent) setLoading(false); }
-  }, [account, folder, q]);
+  }, [account, folder, q, inboxName]);
 
   async function loadMore() {
     if (loadingMore || loading) return;
@@ -245,6 +278,12 @@ export default function MailPage() {
 
   useEffect(() => { if (account) fetchList(); }, [account, folder, q, fetchList]);
 
+  // Load the per-account auto-sync flag whenever the account changes.
+  useEffect(() => {
+    if (!account) { setAutoSync(false); return; }
+    api.mailAutoSyncGet(account).then((r) => setAutoSync(!!r.enabled)).catch(() => setAutoSync(false));
+  }, [account]);
+
   // Discover IMAP folders for the selected account.
   // We hide only kinds that have a fixed slot already (inbox/sent/trash).
   // Everything else — Drafts, Spam, Archive, All Mail, Important, Starred,
@@ -253,7 +292,6 @@ export default function MailPage() {
     if (!account) { setImapFolders([]); setFoldersError(null); setFoldersLoading(false); return; }
     setFoldersLoading(true);
     const cleanErr = (raw: string) => {
-      // Express returns raw HTML on 404 → strip tags and pick "Cannot GET ..." line.
       const m = raw.match(/Cannot (GET|POST|PUT|DELETE) [^\s<]+/);
       if (m) return `${m[0]} — backend non aggiornato? Riavvia.`;
       return raw.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -261,6 +299,12 @@ export default function MailPage() {
     api.mailFolders(account).then((r) => {
       if (r.ok) {
         setImapFolders(r.folders.filter((f) => !['inbox', 'sent', 'trash'].includes(f.kind)));
+        // Track the REAL inbox folder name for this account so the virtual
+        // "In arrivo" filter actually matches stored rows.
+        const inbox = r.folders.find((f) => f.kind === 'inbox');
+        setInboxName(inbox?.name ?? 'INBOX');
+        const sent = r.folders.find((f) => f.kind === 'sent');
+        setSentName(sent?.name ?? 'Sent');
         setFoldersError(null);
       } else {
         setImapFolders([]);
@@ -270,9 +314,15 @@ export default function MailPage() {
     .finally(() => setFoldersLoading(false));
   }, [account]);
 
-  // WS push: new mail / seen change → silent refresh
+  // WS push: new mail / seen change → silent refresh.
+  // mail:autosync drives the "Sincronizzazione…" chip near the account select.
   useWS((m) => {
     if ((m?.type === 'mail:new' || m?.type === 'mail:flags') && account) fetchList(true);
+    if (m?.type === 'mail:autosync' && m.payload?.account === account) {
+      const p = m.payload;
+      if (p.phase === 'started') setAutoSyncBusy({ mailId: p.mailId, ts: Date.now() });
+      else setAutoSyncBusy(null);
+    }
   });
 
   // 30s silent safety-net poll. Skipped while a sync or full-blocking load
@@ -433,6 +483,7 @@ export default function MailPage() {
     openComposer({
       to: toList, cc: ccList, subject: subjPrefixed, body: '',
       quoted: quoteOriginal(m),
+      quotedHtml: buildQuotedHtml(m, 'reply'),
       showCc: !!ccList, inReplyTo: m.message_id ?? undefined, references: refs,
     });
   }
@@ -444,6 +495,7 @@ export default function MailPage() {
       to: '', subject: subjPrefixed,
       body: '',
       quoted: quoteOriginal(m),
+      quotedHtml: buildQuotedHtml(m, 'forward'),
       inReplyTo: undefined, references: [],
     });
   }
@@ -454,7 +506,15 @@ export default function MailPage() {
         {/* Left rail: accounts + folders */}
         <aside className="w-56 shrink-0 border-r border-border bg-background/40 flex flex-col">
           <div className="p-3 border-b border-border space-y-2">
-            <Select value={account ?? ''} onValueChange={(v) => { setAccount(v); setSelected(null); }}>
+            <Select value={account ?? ''} onValueChange={(v) => {
+              setAccount(v);
+              setSelected(null);
+              // Reset folder to the canonical INBOX of the freshly-picked
+              // account; the imapFolders effect will refine it to the real
+              // inbox path (e.g. "[Gmail]/Inbox") once labels load.
+              setFolder('INBOX');
+              setQ('');
+            }}>
               <SelectTrigger className="w-full h-9 text-xs"><SelectValue placeholder="Account" /></SelectTrigger>
               <SelectContent>
                 {accounts.map((a) => (
@@ -484,6 +544,27 @@ firstMissing: ${(accountsDiag.firstMissing ?? []).join(', ') || '—'}`}
             <Button size="sm" className="w-full" onClick={() => openComposer({})} disabled={!account}>
               <Sparkles size={14} /> Nuova email
             </Button>
+            {account && (
+              <>
+                <div className="flex items-center justify-between gap-2 px-1 pt-1">
+                  <span className="text-[11px] text-muted-foreground">Auto-sync brain</span>
+                  <div className="flex items-center gap-2">
+                    {autoSyncBusy && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-accent px-1.5 py-0.5 rounded-full bg-accent/10 border border-accent/30">
+                        <Loader2 size={10} className="animate-spin" /> sync…
+                      </span>
+                    )}
+                    <Toggle
+                      checked={autoSync}
+                      onChange={(v) => {
+                        setAutoSync(v);
+                        api.mailAutoSyncSet(account, v).catch((e) => console.warn('[mail] autoSync save failed', e));
+                      }}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
           <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
             {FIXED_FOLDERS.map((f) => {
@@ -631,13 +712,36 @@ firstMissing: ${(accountsDiag.firstMissing ?? []).join(', ') || '—'}`}
           <div className="flex-1 min-h-0 overflow-y-auto">
             {loading && <div className="p-4 text-xs text-muted-foreground flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Caricamento…</div>}
             {!loading && !rows.length && (
-              <div className="p-8 text-center text-xs text-muted-foreground flex flex-col items-center gap-2">
+              <div className="p-6 text-center text-xs text-muted-foreground flex flex-col items-center gap-2">
                 <Inbox size={28} className="opacity-40" />
                 <div>Nessuna email in questa cartella.</div>
                 <div className="text-[10px] text-muted-foreground/70">Il sync della casella scarica tutte le cartelle.</div>
                 {account && <Button size="sm" variant="outline" onClick={sync} disabled={syncing}>
                   {syncing ? <><Loader2 size={13} className="animate-spin" /> Sync…</> : <><RefreshCw size={13} /> Sincronizza casella</>}
                 </Button>}
+                {listDiag && listDiag.accountTotal > 0 && (listDiag.folders ?? []).length > 0 && (
+                  <div className="mt-2 w-full">
+                    <div className="text-[11px] text-muted-foreground mb-1.5">
+                      Trovate <span className="text-foreground font-semibold">{listDiag.accountTotal}</span> email in altre cartelle:
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {listDiag.folders.map((f: any) => (
+                        <button
+                          key={f.folder}
+                          onClick={() => { setFolder(f.folder); setSelected(null); }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-accent/15 border border-accent/40 hover:bg-accent/25 transition text-xs font-medium text-accent"
+                        >
+                          <FolderIcon size={12} />
+                          <span>{f.folder}</span>
+                          <span className="text-accent/70 text-[10px]">{f.cnt}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {listDiag && listDiag.accountTotal === 0 && (
+                  <div className="mt-2 text-[11px] text-amber-400/80">Questo account non ha ancora email scaricate. Premi Sync.</div>
+                )}
               </div>
             )}
             {/* List rendering — date sections + thread grouping */}
@@ -699,6 +803,14 @@ firstMissing: ${(accountsDiag.firstMissing ?? []).join(', ') || '—'}`}
                           </div>
                           <div className="text-[11px] text-muted-foreground/80 line-clamp-1 mt-0.5">{m.preview ?? ''}</div>
                           <div className="flex items-center gap-1.5 mt-1">
+                            {m.from_person_slug && (
+                              <span
+                                title={`Cablato a ${m.from_person_name ?? m.from_person_slug}`}
+                                className="inline-flex items-center justify-center h-3.5 w-3.5 rounded-full bg-accent/15 border border-accent/40"
+                              >
+                                <UserIcon size={9} className="text-accent" />
+                              </span>
+                            )}
                             {m.starred && <Star size={11} className="text-amber-400 fill-amber-400" />}
                             {t.hasAttach && <Paperclip size={11} className="text-muted-foreground" />}
                             {t.hasUnread && <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent ml-auto" />}
@@ -894,7 +1006,21 @@ function MailBodyFrame({ html }: { html: string }) {
 // One message inside a conversation. Header always visible; body collapses.
 function ThreadMessage({ msg, defaultOpen }: { msg: FullMsg; defaultOpen: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [linkedPerson, setLinkedPerson] = useState<{ slug: string; name: string } | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const isMine = msg.direction === 'out';
+  const fromAddr = (msg.from_addr ?? '').toLowerCase();
+
+  useEffect(() => {
+    if (!fromAddr || isMine) { setLinkedPerson(null); return; }
+    let cancelled = false;
+    api.peopleByEmail(fromAddr).then((r) => {
+      if (cancelled) return;
+      setLinkedPerson(r.person ? { slug: r.person.slug, name: r.person.name } : null);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [fromAddr, isMine]);
+
   return (
     <div className={`rounded-lg border ${open ? 'border-border bg-card/40' : 'border-border/60'} overflow-hidden`}>
       <button
@@ -905,7 +1031,7 @@ function ThreadMessage({ msg, defaultOpen }: { msg: FullMsg; defaultOpen: boolea
         <Avatar seed={senderSeed(msg)} label={initialsOf(msg.from_name, msg.from_addr)} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-semibold text-foreground truncate">
+            <span className="text-sm font-semibold text-foreground truncate flex items-center gap-1.5">
               {isMine ? 'Io' : (msg.from_name || msg.from_addr || '—')}
               {!isMine && msg.from_name && msg.from_addr && (
                 <span className="font-normal text-muted-foreground"> &lt;{msg.from_addr}&gt;</span>
@@ -923,8 +1049,47 @@ function ThreadMessage({ msg, defaultOpen }: { msg: FullMsg; defaultOpen: boolea
         </div>
         {(msg.attachments?.length ?? 0) > 0 && <Paperclip size={13} className="text-muted-foreground mt-1" />}
       </button>
+      {pickerOpen && (
+        <PersonPickerDialog
+          email={fromAddr}
+          fromName={msg.from_name ?? ''}
+          onClose={() => setPickerOpen(false)}
+          onBound={(slug, name) => { setLinkedPerson({ slug, name }); setPickerOpen(false); }}
+        />
+      )}
       {open && (
         <div className="px-3 pb-3">
+          {/* Action bar: link sender → person */}
+          {!isMine && fromAddr && (
+            <div className="flex items-center gap-2 pb-2 mb-2 border-b border-border/40">
+              <span className="text-[11px] text-muted-foreground">Mittente:</span>
+              {linkedPerson ? (
+                <a
+                  href={`/people?slug=${encodeURIComponent(linkedPerson.slug)}`}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-accent/15 border border-accent/30 text-xs text-accent hover:bg-accent/25 transition"
+                  title={`Collegato a ${linkedPerson.name} — apri scheda`}
+                >
+                  <UserIcon size={12} /> {linkedPerson.name}
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent/10 border border-accent/30 text-xs text-accent hover:bg-accent/20 transition font-medium"
+                >
+                  <UserPlus size={12} /> Collega a una persona
+                </button>
+              )}
+              {linkedPerson && (
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen(true)}
+                  className="text-[10px] text-muted-foreground hover:text-foreground"
+                  title="Cambia collegamento"
+                >Cambia</button>
+              )}
+            </div>
+          )}
           {msg.body_html ? (
             <MailBodyFrame html={msg.body_html} />
           ) : (
@@ -950,6 +1115,133 @@ function ThreadMessage({ msg, defaultOpen }: { msg: FullMsg; defaultOpen: boolea
   );
 }
 
+// Picker dialog for binding a mail sender to a person in the brain. Lists
+// existing people (live-search) + offers "crea nuova persona" with the email
+// pre-filled. Posts to /people/:slug/bind-email and informs the caller.
+function PersonPickerDialog({ email, fromName, onClose, onBound }: { email: string; fromName: string; onClose: () => void; onBound: (slug: string, name: string) => void }) {
+  const [q, setQ] = useState(fromName || '');
+  const [rows, setRows] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBusy(true);
+    api.people({ q, limit: 12 })
+      .then((r) => { if (!cancelled) setRows(r.rows); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setBusy(false); });
+    return () => { cancelled = true; };
+  }, [q]);
+
+  async function bind(slug: string, name: string) {
+    setError(null);
+    try {
+      await api.peopleBindEmail(slug, email);
+      onBound(slug, name);
+    } catch (e: any) { setError(String(e.message ?? e)); }
+  }
+
+  async function createNew() {
+    setError(null);
+    try {
+      // Use upsertPerson via /tools/people_upsert (existing connector tool)
+      // Simpler: use people list and create via a quick MCP call. Fallback to
+      // the same bind endpoint after creating the row.
+      const name = q.trim() || email.split('@')[0];
+      const r: any = await api.callTool('mcp__super_agent__people_upsert', { name, emails: [email], note: 'Creato da Mail UI' });
+      const slug = r?.slug ?? r?.person?.slug;
+      if (!slug) throw new Error('upsert non ha ritornato uno slug');
+      onBound(slug, name);
+    } catch (e: any) { setError(String(e?.message ?? e)); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md flex flex-col max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <div className="text-sm font-semibold">Collega <span className="text-accent font-mono">{email}</span> a una persona</div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={15} /></button>
+        </div>
+        <div className="p-3 border-b border-border">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Cerca persona…"
+            className="w-full bg-transparent border border-border rounded-md px-3 py-1.5 text-sm outline-none focus:border-accent"
+            autoFocus
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+          {busy && <div className="px-3 py-2 text-xs text-muted-foreground flex items-center gap-2"><Loader2 size={12} className="animate-spin" /> Caricamento…</div>}
+          {!busy && rows.length === 0 && <div className="px-3 py-4 text-xs text-muted-foreground text-center">Nessun risultato.</div>}
+          {rows.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => bind(p.slug, p.name)}
+              className="w-full text-left px-3 py-2 rounded-md hover:bg-surface2/40 transition flex items-center gap-2"
+            >
+              <Avatar seed={p.emails?.[0] ?? p.slug} label={initialsOf(p.name, p.slug)} />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{p.name}</div>
+                <div className="text-[11px] text-muted-foreground truncate">
+                  {(p.emails ?? []).slice(0, 2).join(' · ') || p.slug}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+        <div className="p-3 border-t border-border flex items-center justify-between gap-2">
+          <button
+            onClick={createNew}
+            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-surface2"
+          >
+            <UserPlus size={12} /> Crea nuova persona &quot;{q || email.split('@')[0]}&quot;
+          </button>
+          {error && <div className="text-[11px] text-destructive truncate">{error}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Build the HTML quoted-original block we splice into outbound forwards/replies.
+// For forwards we always include the full ORIGINAL `body_html` verbatim so the
+// recipient sees the message exactly as it was (markup, inline images, etc.).
+// For replies we use the same fidelity strategy when HTML is available; if
+// only text is present we fall back to escaped lines.
+function buildQuotedHtml(m: FullMsg, kind: 'reply' | 'forward'): string {
+  const when = new Date(m.ts).toLocaleString('it-IT');
+  const fromTxt = (m.from_name || m.from_addr || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const fromAddr = (m.from_addr ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const toAddrs = (m.to_addrs ?? []).join(', ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const subject = (m.subject ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const innerHtml = m.body_html
+    ? String(m.body_html)
+    : (m.body_text ?? '')
+        .split('\n')
+        .map((l) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || '<br>')
+        .join('<br>');
+
+  if (kind === 'forward') {
+    // Gmail-style "---------- Forwarded message ----------" header + verbatim body
+    const head = `
+<div style="margin:1em 0;border-top:1px solid #e5e7eb;padding-top:1em;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#555;">
+  <div style="font-weight:bold;color:#222;margin-bottom:8px;">---------- Messaggio inoltrato ----------</div>
+  <div><b>Da:</b> ${fromTxt}${fromAddr ? ` &lt;${fromAddr}&gt;` : ''}</div>
+  <div><b>Data:</b> ${when}</div>
+  <div><b>Oggetto:</b> ${subject}</div>
+  <div><b>A:</b> ${toAddrs}</div>
+</div>`;
+    return `${head}<div>${innerHtml}</div>`;
+  }
+
+  // Reply: blockquote-wrap so most mail clients render an indent + sidebar
+  const head = `<div style="margin-top:1em;color:#555;font-size:13px;">Il ${when}, ${fromTxt} ha scritto:</div>`;
+  return `${head}<blockquote style="border-left:3px solid #ccc;margin:0.5em 0 1em 0;padding:0 1em;color:#666;">${innerHtml}</blockquote>`;
+}
+
 function quoteOriginal(m: FullMsg): string {
   const body = (m.body_text ?? '').slice(0, 4000);
   const head = `Il ${new Date(m.ts).toLocaleString('it-IT')}, ${m.from_name || m.from_addr} ha scritto:`;
@@ -960,9 +1252,11 @@ function quoteOriginal(m: FullMsg): string {
 type ComposerState = {
   account: string;
   to: string; cc: string; bcc: string; subject: string; body: string;
-  // Pre-quoted original message text. Hidden behind "•••" collapsed chip until
-  // the user expands it, mimicking Spark's compact reply UX.
+  // Pre-quoted original message — text for the collapsed "•••" preview chip,
+  // and an optional HTML version that we splice into the outbound `html`
+  // payload verbatim so forwards preserve the original markup, images, etc.
   quoted?: string;
+  quotedHtml?: string;
   showCc: boolean; showBcc: boolean;
   attachments: File[];
   inReplyTo?: string;
@@ -970,48 +1264,131 @@ type ComposerState = {
 };
 
 function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState; setState: (s: ComposerState | null) => void; onSent: () => void; onSuggest?: () => Promise<string | null> }) {
+  const toast = useToast();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  // Initialize the contenteditable HTML once from `state.body`. Subsequent
-  // edits sync via onInput. Avoid React rewriting innerHTML mid-edit
-  // (would lose caret position).
+  // Initialize the contenteditable HTML once from `state.body`. Append the
+  // account's saved HTML signature at the bottom so the user sees it
+  // rendered while writing. The send-path picks up whatever the user left
+  // in the editor (signature included → goes out as part of `html`).
   useEffect(() => {
-    if (bodyRef.current && bodyRef.current.innerHTML !== state.body) {
-      bodyRef.current.innerHTML = state.body || '';
-    }
+    if (!bodyRef.current) return;
+    let mounted = true;
+    (async () => {
+      let sigHtml = '';
+      try {
+        const r = await api.mailSignatureGet(state.account);
+        sigHtml = (r.html ?? '').trim();
+      } catch {}
+      if (!mounted || !bodyRef.current) return;
+      const baseBody = state.body || '<div><br></div>';
+      const sigBlock = sigHtml
+        ? `<div class="mail-signature" data-signature="1" style="margin-top:24px;color:#444;font-size:13px;">${sigHtml}</div>`
+        : '';
+      bodyRef.current.innerHTML = baseBody + sigBlock;
+      // Move caret to the beginning so the user types ABOVE the signature.
+      try {
+        const range = document.createRange();
+        range.setStart(bodyRef.current, 0);
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      } catch {}
+    })();
+    return () => { mounted = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Quoted-original toggle. Collapsed by default like Spark — three-dots chip.
   const [quotedOpen, setQuotedOpen] = useState(false);
+  // Drag-and-drop overlay for attachments. Counter handles nested dragenter
+  // events firing on child elements (which would otherwise flicker the hint).
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+  function onDragEnter(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return;
+    e.preventDefault();
+    dragDepth.current++;
+    setDragOver(true);
+  }
+  function onDragOver(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+  function onDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOver(false);
+  }
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragOver(false);
+    const files = e.dataTransfer?.files;
+    if (files && files.length) {
+      setState({ ...state, attachments: [...state.attachments, ...Array.from(files)] });
+    }
+  }
   // Focus tracking for the "A" field — drives inline +Cc / +Ccn visibility.
   const [toFocused, setToFocused] = useState(false);
 
   async function send() {
-    setSending(true); setError(null);
-    try {
-      const editableHtml = bodyRef.current?.innerHTML ?? state.body;
-      const editableText = bodyRef.current?.innerText ?? state.body;
-      const quotedText = state.quoted ?? '';
-      const quotedHtml = quotedText
+    setError(null);
+    // Force-commit any pending recipient text still in the input buffer.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    await new Promise((r) => setTimeout(r, 30));
+    const to = state.to?.trim();
+    if (!to) { setError('Specifica almeno un destinatario.'); return; }
+
+    // Snapshot the payload now — we close the composer before the network
+    // request finishes so the user gets instant feedback. State is gone by
+    // the time the await resolves.
+    const editableHtml = bodyRef.current?.innerHTML ?? state.body;
+    const editableText = bodyRef.current?.innerText ?? state.body;
+    const quotedText = state.quoted ?? '';
+    // Prefer the rich HTML quote (set by startReply/startForward) so
+    // forwarded emails preserve their original markup. Fall back to the
+    // escaped-text blockquote only when no HTML version exists.
+    const quotedHtml = state.quotedHtml
+      ? state.quotedHtml
+      : quotedText
         ? '<br><blockquote style="border-left:3px solid #ccc;margin:1em 0;padding:0 1em;color:#666;">'
           + quotedText.split('\n').map((l) => l.replace(/^>\s?/, '')).map((l) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || '<br>').join('<br>')
           + '</blockquote>'
         : '';
-      const finalText = editableText + (quotedText ? '\n\n' + quotedText : '');
-      const finalHtml = editableHtml + quotedHtml;
-      await api.mailSend({
-        account: state.account, to: state.to, cc: state.cc, bcc: state.bcc,
-        subject: state.subject, body: finalText, html: finalHtml,
-        inReplyTo: state.inReplyTo, references: state.references, attachments: state.attachments,
-      });
-      onSent();
-    } catch (e: any) { setError(String(e.message ?? e)); }
-    finally { setSending(false); }
+    const finalText = editableText + (quotedText ? '\n\n' + quotedText : '');
+    const finalHtml = editableHtml + quotedHtml;
+    const payload = {
+      account: state.account, to, cc: state.cc, bcc: state.bcc,
+      subject: state.subject, body: finalText, html: finalHtml,
+      inReplyTo: state.inReplyTo, references: state.references, attachments: state.attachments,
+    };
+    const summary = state.subject || '(senza oggetto)';
+
+    // Optimistic close + toast. The actual SMTP work continues in the
+    // background; user sees the failure (if any) via a destructive toast.
+    toast.push(`Invio in corso · ${summary}`, 'on');
+    onSent();
+    (async () => {
+      try {
+        const sendPromise = api.mailSend(payload);
+        const timeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout 60s — server SMTP non risponde')), 60_000),
+        );
+        const r: any = await Promise.race([sendPromise, timeout]);
+        if (r && r.ok === false) throw new Error(r.error || 'Errore invio');
+        toast.push(`Email inviata · ${summary}`, 'on');
+      } catch (e: any) {
+        console.error('[mail:send] failed', e);
+        toast.push(`Invio fallito · ${String(e.message ?? e)}`, 'err');
+      }
+    })();
   }
 
   async function generateAI() {
@@ -1028,9 +1405,55 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
     } finally { setAiBusy(false); }
   }
 
+  // Restore the editor's selection before running the command. When the
+  // floating toolbar is portal-rendered to <body>, clicking a button can
+  // momentarily move the active range out of the editor — execCommand then
+  // becomes a no-op (formatBlock / lists / etc.). We snapshot the range on
+  // every selectionchange that targets the editor and rehydrate it here.
+  const savedRangeRef = useRef<Range | null>(null);
+  useEffect(() => {
+    const onSel = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const r = sel.getRangeAt(0);
+      const editor = bodyRef.current;
+      if (!editor) return;
+      const node = r.commonAncestorContainer;
+      const el = node.nodeType === 1 ? (node as Element) : node.parentElement;
+      if (el && editor.contains(el)) savedRangeRef.current = r.cloneRange();
+    };
+    document.addEventListener('selectionchange', onSel);
+    return () => document.removeEventListener('selectionchange', onSel);
+  }, []);
+
   function exec(cmd: string, value?: string) {
-    document.execCommand(cmd, false, value);
-    bodyRef.current?.focus();
+    const editor = bodyRef.current;
+    if (!editor) return;
+    // ALWAYS reinstate the user's last in-editor range. We don't call
+    // editor.focus() first because that collapses the selection to the end
+    // of the editor — which is why list / H1 / blockquote felt like no-ops:
+    // they wrapped an empty cursor position instead of the highlighted text.
+    const sel = window.getSelection();
+    if (savedRangeRef.current) {
+      try {
+        sel?.removeAllRanges();
+        sel?.addRange(savedRangeRef.current);
+      } catch {}
+    }
+    // formatBlock needs the tag wrapped in angle brackets on most browsers.
+    let v = value;
+    if (cmd === 'formatBlock' && v && !/^<.*>$/.test(v)) v = `<${v}>`;
+    try { document.execCommand(cmd, false, v); } catch (e) { console.warn('[exec]', cmd, e); }
+    // Refresh saved range to point at the post-mutation selection so back-to-back
+    // commands work.
+    const after = window.getSelection();
+    if (after && after.rangeCount > 0) {
+      const r = after.getRangeAt(0);
+      if (editor.contains(r.commonAncestorContainer as Node) || r.commonAncestorContainer === editor) {
+        savedRangeRef.current = r.cloneRange();
+      }
+    }
+    setState({ ...state, body: editor.innerHTML });
   }
 
   function addFiles(files: FileList | null) {
@@ -1045,35 +1468,50 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end justify-end p-4">
-      <Card className="w-full max-w-2xl max-h-[88vh] flex flex-col shadow-2xl border-border rounded-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card/60">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-semibold">{state.inReplyTo ? 'Rispondi' : 'Nuovo messaggio'}</span>
-            {state.subject && <span className="text-sm text-muted-foreground truncate max-w-[260px]">· {state.subject}</span>}
+      <Card
+        className={`relative w-full max-w-2xl h-[640px] max-h-[88vh] flex flex-col shadow-2xl border-border rounded-2xl overflow-hidden transition-all ${dragOver ? 'ring-2 ring-accent ring-offset-2 ring-offset-background' : ''}`}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {dragOver && (
+          <div className="absolute inset-0 z-40 bg-accent/15 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+            <div className="flex flex-col items-center gap-3 px-8 py-6 rounded-2xl border-2 border-dashed border-accent bg-card/80 shadow-xl">
+              <Paperclip size={32} className="text-accent" />
+              <div className="text-base font-semibold text-foreground">Rilascia per allegare</div>
+              <div className="text-xs text-muted-foreground">i file verranno aggiunti al messaggio</div>
+            </div>
           </div>
-          <Button variant="ghost" size="icon" onClick={() => setState(null)} className="h-8 w-8"><X size={15} /></Button>
+        )}
+        <div className="flex items-center gap-2 px-4 py-3 bg-card/60">
+          <input
+            value={state.subject}
+            onChange={(e) => setState({ ...state, subject: e.target.value })}
+            placeholder="Oggetto"
+            className="flex-1 min-w-0 bg-transparent border-0 outline-none text-base font-semibold placeholder:text-muted-foreground/50"
+            autoComplete="off"
+          />
+          <Button variant="ghost" size="icon" onClick={() => setState(null)} className="h-8 w-8 shrink-0"><X size={15} /></Button>
         </div>
 
         {/* Headers */}
-        <div className="px-4 pt-3 pb-2 space-y-1.5 border-b border-border/50">
+        <div className="px-4 pt-1 pb-2 space-y-1.5">
           <RecipientField
-            label="A"
+            label=""
+            placeholder="A, Cc, Ccn"
             value={state.to}
             onChange={(v) => setState({ ...state, to: v })}
             pills={parsePills(state.to)}
             onRemovePill={(p) => setState({ ...state, to: parsePills(state.to).filter((x) => x !== p).join(', ') })}
             onFocus={() => setToFocused(true)}
             onBlur={() => {
+              // ⚠️ Do NOT call setState here. The RecipientField's own
+              // commit() runs INSIDE its blur and already pushes the pending
+              // text into `state.to`. A second setState({...state,...}) here
+              // would clobber it with the pre-blur snapshot (closure capture)
+              // and the just-typed email would silently disappear.
               setToFocused(false);
-              // Hide empty Cc/Ccn rows on blur (use the latest state ref via setTimeout
-              // so any pending pill-commit from the field runs first).
-              setTimeout(() => {
-                setState({
-                  ...state,
-                  showCc: parsePills(state.cc).length > 0 ? state.showCc : false,
-                  showBcc: parsePills(state.bcc).length > 0 ? state.showBcc : false,
-                });
-              }, 0);
             }}
             trailing={
               toFocused && (
@@ -1120,37 +1558,20 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
               }}
             />
           )}
-          {/* Oggetto — no label, just placeholder */}
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-7 shrink-0" />
-            <input
-              value={state.subject}
-              onChange={(e) => setState({ ...state, subject: e.target.value })}
-              placeholder="Oggetto"
-              className="flex-1 bg-transparent border-0 outline-none text-sm font-medium placeholder:text-muted-foreground/60 py-1"
-            />
-          </div>
         </div>
 
-        {/* Formatting toolbar — lucide icons, no emoji */}
-        <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-border/50 bg-card/30 text-muted-foreground">
-          <ToolbarBtn onClick={() => exec('bold')} title="Grassetto"><BoldIcon size={14} /></ToolbarBtn>
-          <ToolbarBtn onClick={() => exec('italic')} title="Corsivo"><ItalicIcon size={14} /></ToolbarBtn>
-          <ToolbarBtn onClick={() => exec('underline')} title="Sottolineato"><UnderlineIcon size={14} /></ToolbarBtn>
-          <ToolbarBtn onClick={() => exec('insertUnorderedList')} title="Elenco"><ListIcon size={14} /></ToolbarBtn>
-          <ToolbarBtn onClick={() => { const u = prompt('URL link:'); if (u) exec('createLink', u); }} title="Link"><LinkIcon size={14} /></ToolbarBtn>
-        </div>
-
-        {/* Body editor — auto-grows to content. Quoted original lives below it
-            as a collapsed "•••" chip (click to expand). */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+        {/* Body editor — formatting toolbar appears only on text selection
+            (see FloatingFormatBar below). Quoted original sits as a "•••" chip. */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 relative">
           <div
             ref={bodyRef}
             contentEditable
             suppressContentEditableWarning
+            data-placeholder="Inserisci testo"
             onInput={(e) => setState({ ...state, body: (e.target as HTMLDivElement).innerHTML })}
-            className="min-h-[120px] outline-none text-sm text-foreground leading-relaxed prose prose-sm prose-invert max-w-none [&_a]:text-accent"
+            className="mail-composer-body min-h-[120px] outline-none text-sm text-foreground leading-relaxed prose prose-sm prose-invert max-w-none [&_a]:text-accent"
           />
+          <FloatingFormatBar bodyRef={bodyRef} exec={exec} />
           {state.quoted && (
             <div className="mt-3">
               {!quotedOpen ? (
@@ -1179,20 +1600,6 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
               )}
             </div>
           )}
-          {state.attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-3 mt-3 border-t border-border/40">
-              {state.attachments.map((f, i) => (
-                <div key={i} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-border bg-card/40 text-[11px]">
-                  <Paperclip size={11} className="text-accent" />
-                  <span>{f.name}</span>
-                  <span className="text-muted-foreground">{fmtBytes(f.size)}</span>
-                  <button onClick={() => setState({ ...state, attachments: state.attachments.filter((_, j) => j !== i) })} className="text-muted-foreground hover:text-destructive">
-                    <X size={11} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
           {error && (
             <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md p-2 mt-3">
               <AlertCircle size={13} className="shrink-0 mt-0.5" />
@@ -1200,6 +1607,23 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
             </div>
           )}
         </div>
+
+        {/* Attachments tray — pinned above the footer so it never eats the
+            scroll body. Hidden until at least one file is queued. */}
+        {state.attachments.length > 0 && (
+          <div className="px-3 py-2 border-t border-border/40 bg-card/30 flex flex-wrap gap-2">
+            {state.attachments.map((f, i) => (
+              <div key={i} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-border bg-card/40 text-[11px]">
+                <Paperclip size={11} className="text-accent" />
+                <span className="max-w-[200px] truncate">{f.name}</span>
+                <span className="text-muted-foreground">{fmtBytes(f.size)}</span>
+                <button onClick={() => setState({ ...state, attachments: state.attachments.filter((_, j) => j !== i) })} className="text-muted-foreground hover:text-destructive">
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="flex items-center justify-between p-3 border-t border-border bg-card/40 gap-2">
           <div className="flex items-center gap-1">
@@ -1228,14 +1652,84 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => setState(null)}>Annulla</Button>
-            <Button size="sm" onClick={send} disabled={sending || !state.to || !state.subject} className="gap-1.5">
-              {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-              {sending ? 'Invio…' : 'Invia'}
+            <Button size="sm" onClick={send} disabled={!state.to || !state.subject} className="gap-1.5">
+              <Send size={13} />
+              Invia
             </Button>
           </div>
         </div>
       </Card>
     </div>
+  );
+}
+
+// Floating selection toolbar — appears above the current text selection
+// inside the contenteditable body. Hidden when selection is collapsed or
+// happens outside the editor. Spark-style mini chip.
+function FloatingFormatBar({ bodyRef, exec }: { bodyRef: React.RefObject<HTMLDivElement>; exec: (cmd: string, value?: string) => void }) {
+  // We position the bar with `position: fixed` so it can overflow the modal
+  // Card. To stick *visually* to the selection, anchor with the bar's own
+  // bottom edge (transform translateY(-100%)) — that way we don't need to
+  // guess the bar height, and the gap stays 0/MARGIN regardless of icon size.
+  const [pos, setPos] = useState<{ top: number; left: number; placement: 'above' | 'below' } | null>(null);
+
+  useEffect(() => {
+    function update() {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) { setPos(null); return; }
+      const range = sel.getRangeAt(0);
+      const node = range.commonAncestorContainer;
+      const editor = bodyRef.current;
+      if (!editor) { setPos(null); return; }
+      const editorNode = node.nodeType === 1 ? node as Element : node.parentElement;
+      if (!editorNode || !editor.contains(editorNode)) { setPos(null); return; }
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) { setPos(null); return; }
+      const MARGIN = 2;
+      // Above unless too close to viewport top
+      const placement: 'above' | 'below' = rect.top < 60 ? 'below' : 'above';
+      // For 'above': anchor at the line top minus MARGIN; bar's own height
+      // is removed via CSS transform.
+      // For 'below': anchor at line bottom + MARGIN, no transform needed.
+      const top = placement === 'above' ? rect.top - MARGIN : rect.bottom + MARGIN;
+      const left = Math.min(
+        Math.max(rect.left + rect.width / 2, 100),
+        window.innerWidth - 100,
+      );
+      setPos({ top, left, placement });
+    }
+    document.addEventListener('selectionchange', update);
+    return () => document.removeEventListener('selectionchange', update);
+  }, [bodyRef]);
+
+  if (!pos) return null;
+  const transform = pos.placement === 'above'
+    ? 'translate(-50%, -100%)'  // anchor bar bottom at pos.top
+    : 'translate(-50%, 0)';     // anchor bar top at pos.top
+  // Render via portal so the bar escapes the modal Card's backdrop-blur /
+  // overflow-hidden context — without this `position: fixed` is anchored to
+  // the nearest filtered ancestor, not the viewport.
+  return createPortal(
+    <div
+      style={{ position: 'fixed', top: pos.top, left: pos.left, transform, zIndex: 999 }}
+      className="flex items-center gap-0.5 px-1 py-1 rounded-lg shadow-xl border border-border bg-popover text-foreground"
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <ToolbarBtn onClick={() => exec('bold')} title="Grassetto"><BoldIcon size={14} /></ToolbarBtn>
+      <ToolbarBtn onClick={() => exec('italic')} title="Corsivo"><ItalicIcon size={14} /></ToolbarBtn>
+      <ToolbarBtn onClick={() => exec('underline')} title="Sottolineato"><UnderlineIcon size={14} /></ToolbarBtn>
+      <ToolbarBtn onClick={() => exec('strikeThrough')} title="Barrato"><StrikeIcon size={14} /></ToolbarBtn>
+      <ToolbarBtn onClick={() => { const u = prompt('URL link:'); if (u) exec('createLink', u); }} title="Link"><LinkIcon size={14} /></ToolbarBtn>
+      <span className="mx-0.5 h-4 w-px bg-border" />
+      <ToolbarBtn onClick={() => exec('formatBlock', 'H1')} title="Titolo H1"><H1Icon size={14} /></ToolbarBtn>
+      <ToolbarBtn onClick={() => exec('formatBlock', 'BLOCKQUOTE')} title="Citazione"><QuoteIcon size={14} /></ToolbarBtn>
+      <ToolbarBtn onClick={() => exec('insertUnorderedList')} title="Elenco puntato"><ListIcon size={14} /></ToolbarBtn>
+      <ToolbarBtn onClick={() => exec('insertOrderedList')} title="Elenco numerato"><OrderedListIcon size={14} /></ToolbarBtn>
+      <span className="mx-0.5 h-4 w-px bg-border" />
+      <ToolbarBtn onClick={() => exec('outdent')} title="Riduci rientro"><IndentOutIcon size={14} /></ToolbarBtn>
+      <ToolbarBtn onClick={() => exec('indent')} title="Aumenta rientro"><IndentInIcon size={14} /></ToolbarBtn>
+    </div>,
+    document.body,
   );
 }
 
@@ -1310,7 +1804,7 @@ function RecipientField({
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-7 shrink-0">{label}</span>
+      {label && <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-7 shrink-0">{label}</span>}
       <div
         className="flex-1 min-w-0 flex flex-wrap items-center gap-1.5 py-0.5"
         onClick={() => inputRef.current?.focus()}

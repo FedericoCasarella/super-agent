@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Clock, MessageSquare, Search, Mic, Inbox, Sparkles } from 'lucide-react';
+import { Clock, MessageSquare, Search, Mic, Inbox, Sparkles, Mail } from 'lucide-react';
 
 type Range = '7d' | '30d' | '90d' | 'all';
 
@@ -15,6 +15,7 @@ type ReportData = {
       brain_searches: { min: number; count: number };
       ingestion: { min: number; count: number };
       voice: { min: number; count: number; dur_min: number };
+      mail_read: { min: number; count: number; bonified: number };
     };
   };
   radar: {
@@ -90,7 +91,7 @@ export default function ReportPage() {
       </Card>
 
       {/* Breakdown */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         <BreakdownCard
           icon={<MessageSquare size={16} />}
           label="Risposte automatiche"
@@ -119,6 +120,14 @@ export default function ReportPage() {
           min={data?.timeSaved.breakdown.voice.min ?? 0}
           sub={`${data?.timeSaved.breakdown.voice.count ?? 0} clip · ${data?.timeSaved.breakdown.voice.dur_min ?? 0} min audio`}
           tone="accent"
+        />
+        <BreakdownCard
+          icon={<Mail size={16} />}
+          label="Email lette"
+          min={data?.timeSaved.breakdown.mail_read.min ?? 0}
+          sub={`${data?.timeSaved.breakdown.mail_read.count ?? 0} email triagiate`}
+          tone="accent2"
+          detail={data ? `${data.timeSaved.breakdown.mail_read.bonified} nel brain` : ''}
         />
       </div>
 

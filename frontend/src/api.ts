@@ -89,6 +89,8 @@ export const api = {
     return req<{ rows: any[]; total: number; limit: number; offset: number }>(`/people?${p}`);
   },
   peopleDedupeAgent: () => req<{ ok: boolean; subAgentId: number }>('/people/dedupe-agent', { method: 'POST' }),
+  peopleByEmail: (addr: string) => req<{ person: { id: number; slug: string; name: string; emails: string[]; phones: string[]; note_path: string | null } | null }>(`/people/by-email?addr=${encodeURIComponent(addr)}`),
+  peopleBindEmail: (slug: string, email: string) => req<{ ok: boolean; slug: string; email: string }>(`/people/${encodeURIComponent(slug)}/bind-email`, { method: 'POST', body: JSON.stringify({ email }) }),
   peopleDelete: (slug: string, opts: { keep_note?: boolean; keep_refs?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (opts.keep_note) q.set('keep_note', '1');
@@ -277,6 +279,9 @@ export const api = {
   mailBonify: (opts: { account?: string; force?: boolean; limit?: number } = {}) => req<any>('/mail/bonify', { method: 'POST', body: JSON.stringify(opts) }),
   mailBonifyOne: (id: number, force = false) => req<any>(`/mail/messages/${id}/bonify`, { method: 'POST', body: JSON.stringify({ force }) }),
   mailFolders: (account: string) => req<{ ok: boolean; folders: { name: string; label: string; kind: string; subscribed: boolean }[]; error?: string }>(`/mail/folders?account=${encodeURIComponent(account)}`),
+  mailAutoSyncGet: (account: string) => req<{ enabled: boolean }>(`/mail/accounts/${encodeURIComponent(account)}/auto-sync`),
+  mailAutoSyncSet: (account: string, enabled: boolean) => req<{ ok: boolean; enabled: boolean }>(`/mail/accounts/${encodeURIComponent(account)}/auto-sync`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  mailSignatureGet: (account: string) => req<{ html: string }>(`/mail/accounts/${encodeURIComponent(account)}/signature`),
   waUnread: () => req<{ count: number }>('/whatsapp/unread'),
   igUnread: () => req<{ count: number }>('/instagram/unread'),
   mailSuggest: (id: number, hint?: string) => req<any>(`/mail/messages/${id}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
