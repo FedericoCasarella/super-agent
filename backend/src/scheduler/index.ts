@@ -87,6 +87,31 @@ export async function startScheduler() {
   });
   console.log('[scheduler] reflection loop armed (every 2m, all users)');
 
+  // WA watchdog: every 60s scan active users and restart any WA session that
+  // is missing or in a stale 'closed' state. Prevents the agent from sitting
+  // on `status=idle` after a backend restart, network drop, or phone-side
+  // disconnect (Baileys' own auto-retry path doesn't fire on every disconnect
+  // reason).
+  let waWatchRunning = false;
+  cron.schedule('* * * * *', async () => {
+    if (waWatchRunning) return;
+    waWatchRunning = true;
+    try {
+      const wa = await import('../connectors/builtin/whatsapp/index.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try {
+          const st = wa.getWaStatus(u.id);
+          if (st.status === 'starting' || st.status === 'closed' || st.status === 'idle') {
+            await wa.startWaForUser(u.id).catch(() => {});
+          }
+        } catch {}
+      }
+    } catch (e) { console.error('[wa-watchdog]', e); }
+    finally { waWatchRunning = false; }
+  });
+  console.log('[scheduler] wa-watchdog armed (every 1m)');
+
   // Brain snapshots: 00:00 nightly per-user vault copy + counts.
   // Pin to Europe/Rome so it fires at midnight LOCAL regardless of system TZ
   // (default would be process TZ — if running in UTC container, "00:00" =

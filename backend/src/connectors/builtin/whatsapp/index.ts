@@ -1224,7 +1224,12 @@ export async function syncOneChat(userId: number, chatJid: string, batches = 3):
 async function ensureWaConnected(userId: number, timeoutMs = 12_000): Promise<boolean> {
   const start = Date.now();
   let s = sessions.get(userId);
-  if (!s) {
+  // No session OR session is closed/stale → kick off a fresh start. Without
+  // this branch a previously-closed session (phone-side disconnect, network
+  // drop) would sit in `status='closed'` forever and the agent would keep
+  // replying "WA idle/disconnected".
+  if (!s || s.status === 'closed') {
+    if (s && s.status === 'closed') sessions.delete(userId);
     try { await startWaForUser(userId); } catch {}
     s = sessions.get(userId);
   }
@@ -1233,6 +1238,11 @@ async function ensureWaConnected(userId: number, timeoutMs = 12_000): Promise<bo
     if (s?.status === 'connected') return true;
     // Status 'qr' means awaiting pairing — no point waiting further.
     if (s?.status === 'qr') return false;
+    // Closed mid-wait → trigger another restart and keep polling.
+    if (s?.status === 'closed') {
+      sessions.delete(userId);
+      try { await startWaForUser(userId); } catch {}
+    }
     await new Promise((r) => setTimeout(r, 350));
   }
   return sessions.get(userId)?.status === 'connected';
@@ -1305,7 +1315,18 @@ export async function logoutWaForUser(userId: number): Promise<void> {
 
 export function getWaStatus(userId: number): { status: string; qr?: string; me?: any } {
   const s = sessions.get(userId);
-  if (!s) return { status: 'idle' };
+  if (!s) {
+    // Auto-recover: fire-and-forget restart so the NEXT status check finds an
+    // active session. Avoids the agent looping on "idle → tell user QR".
+    startWaForUser(userId).catch(() => {});
+    return { status: 'starting' };
+  }
+  if (s.status === 'closed') {
+    // Stale/closed → kick a restart and report 'starting' to the caller.
+    sessions.delete(userId);
+    startWaForUser(userId).catch(() => {});
+    return { status: 'starting' };
+  }
   return { status: s.status, qr: s.qrDataUrl, me: s.me };
 }
 
@@ -1403,9 +1424,18 @@ const connector: Connector = {
   tools: [
     {
       name: 'status',
-      description: 'Stato della sessione WhatsApp (idle/qr/connected).',
+      description: 'Stato sessione WhatsApp. Riconnette attivamente se chiusa. Ritorna {status, recovering, action_required}. action_required="scan_qr" SOLO quando status="qr" — in TUTTI gli altri casi NON dire all\'utente di scansionare il QR. Se status="starting"/"connecting" la sessione si sta riconnettendo da sola (~10s), riprova dopo. Se status="connected" puoi mandare messaggi.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      handler: async (ctx) => getWaStatus(ctx.userId),
+      handler: async (ctx) => {
+        // Active recovery: try up to 8s to reach 'connected' before reporting.
+        await ensureWaConnected(ctx.userId, 8_000).catch(() => {});
+        const r = getWaStatus(ctx.userId);
+        return {
+          ...r,
+          recovering: r.status === 'starting' || r.status === 'connecting',
+          action_required: r.status === 'qr' ? 'scan_qr' : 'none',
+        };
+      },
     },
     {
       name: 'list_chats',

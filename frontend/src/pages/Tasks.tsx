@@ -4,7 +4,7 @@ import { api } from '../api';
 import { Button, Card, Chip, Field, Input, Textarea, Toggle, Modal, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { useI18n } from '../i18n';
-import { Calendar, Users as UsersIcon } from 'lucide-react';
+import { Calendar, Users as UsersIcon, PlayCircle, CheckCircle2, XCircle, Plus, AlertCircle } from 'lucide-react';
 import { TeamTasksPanel } from './TeamTasks';
 
 type Task = {
@@ -17,7 +17,22 @@ type Task = {
   last_run_at: string | null;
   last_status: string | null;
   last_result: string | null;
+  created_at: string;
 };
+
+function fmtAgo(iso: string): string {
+  const d = new Date(iso);
+  const diff = Date.now() - d.getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return 'pochi secondi fa';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min fa`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h fa`;
+  const dd = Math.floor(h / 24);
+  if (dd < 7) return `${dd}g fa`;
+  return d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
 
 export default function Tasks() {
   const [items, setItems] = useState<Task[]>([]);
@@ -144,10 +159,34 @@ export default function Tasks() {
                   <Chip>{task.action_type}</Chip>
                 </div>
                 <div className="text-xs text-muted-foreground font-mono mt-1">{task.cron}</div>
+                {/* Creazione reminder — quando l'utente l'ha aggiunto */}
+                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-2">
+                  <Plus size={11} className="text-muted-foreground" />
+                  <span>Aggiunto {fmtAgo(task.created_at)}</span>
+                  <span className="text-muted-foreground/50">·</span>
+                  <span className="font-mono text-[10px] text-muted-foreground/70">{new Date(task.created_at).toLocaleString('it-IT')}</span>
+                </div>
                 {task.last_run_at && (
-                  <div className="text-xs text-muted-foreground mt-2">
-                    {t('tasks.last')}: {new Date(task.last_run_at).toLocaleString()} ·{' '}
-                    <span className={task.last_status === 'ok' ? 'text-ok' : 'text-err'}>{task.last_status}</span>
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-1">
+                    <PlayCircle size={11} className="text-accent" />
+                    <span>Ultima esecuzione: {fmtAgo(task.last_run_at)}</span>
+                    {task.last_status === 'ok' ? (
+                      <span className="inline-flex items-center gap-0.5 text-[hsl(var(--success))]">
+                        <CheckCircle2 size={11} /> riuscita
+                      </span>
+                    ) : task.last_status === 'cleared' ? (
+                      <span className="inline-flex items-center gap-0.5 text-muted-foreground">
+                        <XCircle size={11} /> ignorata
+                      </span>
+                    ) : task.last_status === 'sent' ? (
+                      <span className="inline-flex items-center gap-0.5 text-accent2">
+                        <CheckCircle2 size={11} /> notificata
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-0.5 text-destructive">
+                        <AlertCircle size={11} /> {task.last_status}
+                      </span>
+                    )}
                   </div>
                 )}
                 {task.last_result && <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{task.last_result}</div>}

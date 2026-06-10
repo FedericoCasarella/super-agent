@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useWS, useLiveData } from '../ws';
 import { Button, Card, Chip, useToast } from '../components/ui';
 import { useI18n } from '../i18n';
-import { AlarmClock, Moon, BellOff, Clock, MessageSquare, Hash, Zap, Activity, Coffee, Bot, Wrench, Plug } from 'lucide-react';
+import { AlarmClock, Moon, BellOff, Clock, MessageSquare, Hash, Zap, Activity, Coffee, Bot, Wrench, Plug, Users, Calendar, MessageCircle, Mail, Send, Camera, UserPlus, MessagesSquare, Megaphone } from 'lucide-react';
 import Tooltip from '../components/Tooltip';
 import { describeTool } from '../toolLabels';
 
@@ -18,6 +18,41 @@ function fmtRelative(date: Date): string {
 }
 
 type Msg = { id?: number; ts: string; direction: 'in'|'out'|'system'; channel: string; content: string };
+
+function UpcomingRow({ c }: { c: { id: number; name: string; cron: string; next_run_at: string; channel: string; modality: string } }) {
+  const channelMeta: Record<string, { Icon: any; color: string; label: string }> = {
+    whatsapp: { Icon: MessageCircle, color: 'text-emerald-400', label: 'WhatsApp' },
+    email:    { Icon: Mail,          color: 'text-sky-300',     label: 'Email' },
+    telegram: { Icon: Send,          color: 'text-blue-300',    label: 'Telegram' },
+    instagram:{ Icon: Camera,        color: 'text-pink-300',    label: 'Instagram' },
+    agent:    { Icon: Bot,           color: 'text-muted-foreground', label: 'Agent' },
+  };
+  const m = channelMeta[c.channel] ?? channelMeta.agent;
+  const modMeta: Record<string, { Icon: any; tone: string }> = {
+    '1:1':    { Icon: UserPlus,       tone: 'bg-accent/15 text-accent' },
+    'thread': { Icon: MessagesSquare, tone: 'bg-accent2/15 text-accent2' },
+    '1:many': { Icon: Megaphone,      tone: 'bg-amber-500/15 text-amber-400' },
+  };
+  const mm = modMeta[c.modality] ?? modMeta['1:1'];
+  const when = new Date(c.next_run_at);
+  const rel = fmtRelative(when);
+  return (
+    <div className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-surface2/40 transition">
+      <m.Icon size={14} className={m.color} />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">{c.name}</div>
+        <div className="text-[10px] text-muted-foreground font-mono truncate">{m.label} · {c.cron}</div>
+      </div>
+      <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${mm.tone}`}>
+        <mm.Icon size={10} /> {c.modality}
+      </span>
+      <div className="text-[10px] text-right shrink-0 tabular-nums">
+        <div className="text-foreground">{rel}</div>
+        <div className="text-muted-foreground/70">{when.toLocaleString('it-IT', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}</div>
+      </div>
+    </div>
+  );
+}
 
 function Kpi({ icon, label, value, mono, highlight }: { icon: React.ReactNode; label: string; value: string; mono?: boolean; highlight?: boolean }) {
   return (
@@ -73,11 +108,15 @@ export default function Dashboard() {
   // was capping h24/d7/d30 at 100 (constant).
   const [msgCounts, setMsgCounts] = useState<{ h24: number; d7: number; d30: number; total: number } | null>(null);
   const loadMsgCounts = useCallback(async () => { try { setMsgCounts(await api.messageCounts()); } catch {} }, []);
+  // Live KPI bundle: active agents, people touched, upcoming scheduled contacts
+  const [liveKpis, setLiveKpis] = useState<any>(null);
+  const loadLiveKpis = useCallback(async () => { try { setLiveKpis(await api.liveKpis()); } catch {} }, []);
   const loadStateCb = useCallback(loadState, [loadState]);
   // State refreshes on any agent event; msgs on inbound message-ish events.
   useLiveData(loadStateCb, { refreshOn: ['team_task', 'subagent', 'internal_agent', 'flow', 'task'], fallbackMs: 60_000 });
   useLiveData(loadMsgs, { refreshOn: ['wa:message', 'ig:message', 'outbound'], fallbackMs: 120_000 });
   useLiveData(loadMsgCounts, { refreshOn: ['wa:message', 'ig:message', 'outbound', 'message', 'mail:new'], fallbackMs: 60_000 });
+  useLiveData(loadLiveKpis, { refreshOn: ['team_task', 'subagent', 'internal_agent', 'outbound', 'task', 'mail:new'], fallbackMs: 30_000 });
 
   async function wake() { await api.agentWake(); toast.push(t('dash.woken'), 'on'); loadState(); }
 
@@ -216,11 +255,27 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
             <Kpi icon={<Clock size={14} />} label="Sessione" value={fmtUptime} />
             <Kpi icon={<MessageSquare size={14} />} label="Msg 24h" value={String(msg24h)} />
-            <Kpi icon={<MessageSquare size={14} />} label="Msg 7gg" value={String(msg7d)} />
-            <Kpi icon={<MessageSquare size={14} />} label="Msg 30gg" value={String(msg30d)} />
-            <Kpi icon={<Zap size={14} />} label="Agenti" value={`${running}▸${pending}⏳`} highlight={running > 0} />
+            <Kpi
+              icon={<Zap size={14} />}
+              label="Agenti attivi ora"
+              value={String(liveKpis?.agentsNow ?? running)}
+              highlight={(liveKpis?.agentsNow ?? running) > 0}
+            />
+            <Kpi icon={<Bot size={14} />} label="Agenti 24h" value={String(liveKpis?.agents24h ?? '—')} />
+            <Kpi icon={<Users size={14} />} label="Persone coinvolte 24h" value={String(liveKpis?.peopleTouched24h ?? '—')} />
             <Kpi icon={<Hash size={14} />} label="Chat ID" value={chatId ? String(chatId) : '—'} mono />
           </div>
+          {liveKpis?.upcoming?.length > 0 && (
+            <div className="mb-4 rounded-md border border-border bg-card/40 p-3">
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                <Calendar size={12} /> Prossimi contatti pianificati
+                <span className="ml-auto text-[10px] normal-case tracking-normal">{liveKpis.upcoming.length}</span>
+              </div>
+              <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                {liveKpis.upcoming.map((c: any) => <UpcomingRow key={c.id} c={c} />)}
+              </div>
+            </div>
+          )}
           <div
             ref={streamRef}
             onScroll={onStreamScroll}

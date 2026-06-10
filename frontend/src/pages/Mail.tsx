@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDialog } from '../components/dialog';
-import { Mail as MailIcon, Inbox, Send, Star, Trash2, RefreshCw, Reply, ReplyAll, Forward, Sparkles, Paperclip, X, Search, AlertCircle, Loader2, Wand2, MailOpen, CheckCheck, ChevronDown, FileEdit, Archive, ShieldAlert, Tag, FolderIcon } from 'lucide-react';
+import { Mail as MailIcon, Inbox, Send, Star, Trash2, RefreshCw, Reply, ReplyAll, Forward, Sparkles, Paperclip, X, Search, AlertCircle, Loader2, Wand2, MailOpen, CheckCheck, ChevronDown, FileEdit, Archive, ShieldAlert, Tag, FolderIcon, Bold as BoldIcon, Italic as ItalicIcon, Underline as UnderlineIcon, List as ListIcon, Link2 as LinkIcon, MoreHorizontal } from 'lucide-react';
 
 type Account = { label: string; address: string; host: string; mailbox: string };
 type MsgRow = {
@@ -415,6 +415,7 @@ export default function MailPage() {
     if (!account) return;
     setComposer({
       account, to: '', cc: '', bcc: '', subject: '', body: '',
+      quoted: undefined,
       showCc: false, showBcc: false, attachments: [], inReplyTo: undefined, references: [],
       ...initial,
     });
@@ -429,9 +430,9 @@ export default function MailPage() {
       ? [...m.to_addrs, ...m.cc_addrs].filter((a) => a && a !== fromAddr && a !== m.account_label).join(', ')
       : '';
     const refs = [...(m.refs ?? []), m.message_id ?? ''].filter(Boolean);
-    const quoted = quoteOriginal(m);
     openComposer({
-      to: toList, cc: ccList, subject: subjPrefixed, body: `\n\n${quoted}`,
+      to: toList, cc: ccList, subject: subjPrefixed, body: '',
+      quoted: quoteOriginal(m),
       showCc: !!ccList, inReplyTo: m.message_id ?? undefined, references: refs,
     });
   }
@@ -441,7 +442,8 @@ export default function MailPage() {
     const subjPrefixed = /^fwd?:/i.test(subj) ? subj : `Fwd: ${subj}`;
     openComposer({
       to: '', subject: subjPrefixed,
-      body: `\n\n${quoteOriginal(m)}`,
+      body: '',
+      quoted: quoteOriginal(m),
       inReplyTo: undefined, references: [],
     });
   }
@@ -958,6 +960,9 @@ function quoteOriginal(m: FullMsg): string {
 type ComposerState = {
   account: string;
   to: string; cc: string; bcc: string; subject: string; body: string;
+  // Pre-quoted original message text. Hidden behind "•••" collapsed chip until
+  // the user expands it, mimicking Spark's compact reply UX.
+  quoted?: string;
   showCc: boolean; showBcc: boolean;
   attachments: File[];
   inReplyTo?: string;
@@ -981,14 +986,27 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Quoted-original toggle. Collapsed by default like Spark — three-dots chip.
+  const [quotedOpen, setQuotedOpen] = useState(false);
+  // Focus tracking for the "A" field — drives inline +Cc / +Ccn visibility.
+  const [toFocused, setToFocused] = useState(false);
+
   async function send() {
     setSending(true); setError(null);
     try {
-      const bodyHtml = bodyRef.current?.innerHTML ?? state.body;
-      const bodyText = bodyRef.current?.innerText ?? state.body;
+      const editableHtml = bodyRef.current?.innerHTML ?? state.body;
+      const editableText = bodyRef.current?.innerText ?? state.body;
+      const quotedText = state.quoted ?? '';
+      const quotedHtml = quotedText
+        ? '<br><blockquote style="border-left:3px solid #ccc;margin:1em 0;padding:0 1em;color:#666;">'
+          + quotedText.split('\n').map((l) => l.replace(/^>\s?/, '')).map((l) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || '<br>').join('<br>')
+          + '</blockquote>'
+        : '';
+      const finalText = editableText + (quotedText ? '\n\n' + quotedText : '');
+      const finalHtml = editableHtml + quotedHtml;
       await api.mailSend({
         account: state.account, to: state.to, cc: state.cc, bcc: state.bcc,
-        subject: state.subject, body: bodyText, html: bodyHtml,
+        subject: state.subject, body: finalText, html: finalHtml,
         inReplyTo: state.inReplyTo, references: state.references, attachments: state.attachments,
       });
       onSent();
@@ -1027,7 +1045,7 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end justify-end p-4">
-      <Card className="w-full max-w-3xl h-[88vh] flex flex-col shadow-2xl border-border rounded-2xl overflow-hidden">
+      <Card className="w-full max-w-2xl max-h-[88vh] flex flex-col shadow-2xl border-border rounded-2xl overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card/60">
           <div className="flex items-center gap-2">
             <span className="text-base font-semibold">{state.inReplyTo ? 'Rispondi' : 'Nuovo messaggio'}</span>
@@ -1037,48 +1055,130 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
         </div>
 
         {/* Headers */}
-        <div className="px-4 pt-3 pb-2 space-y-2 border-b border-border/50">
-          <RecipientField label="A" value={state.to} onChange={(v) => setState({ ...state, to: v })} pills={parsePills(state.to)} onRemovePill={(p) => setState({ ...state, to: parsePills(state.to).filter((x) => x !== p).join(', ') })} />
+        <div className="px-4 pt-3 pb-2 space-y-1.5 border-b border-border/50">
+          <RecipientField
+            label="A"
+            value={state.to}
+            onChange={(v) => setState({ ...state, to: v })}
+            pills={parsePills(state.to)}
+            onRemovePill={(p) => setState({ ...state, to: parsePills(state.to).filter((x) => x !== p).join(', ') })}
+            onFocus={() => setToFocused(true)}
+            onBlur={() => {
+              setToFocused(false);
+              // Hide empty Cc/Ccn rows on blur (use the latest state ref via setTimeout
+              // so any pending pill-commit from the field runs first).
+              setTimeout(() => {
+                setState({
+                  ...state,
+                  showCc: parsePills(state.cc).length > 0 ? state.showCc : false,
+                  showBcc: parsePills(state.bcc).length > 0 ? state.showBcc : false,
+                });
+              }, 0);
+            }}
+            trailing={
+              toFocused && (
+                <div className="flex items-center gap-2 text-[11px] shrink-0">
+                  {!state.showCc && (
+                    <button
+                      type="button"
+                      onMouseDown={(e) => { e.preventDefault(); setState({ ...state, showCc: true }); }}
+                      className="text-muted-foreground hover:text-accent"
+                    >Cc</button>
+                  )}
+                  {!state.showBcc && (
+                    <button
+                      type="button"
+                      onMouseDown={(e) => { e.preventDefault(); setState({ ...state, showBcc: true }); }}
+                      className="text-muted-foreground hover:text-accent"
+                    >Ccn</button>
+                  )}
+                </div>
+              )
+            }
+          />
           {state.showCc && (
-            <RecipientField label="Cc" value={state.cc} onChange={(v) => setState({ ...state, cc: v })} pills={parsePills(state.cc)} onRemovePill={(p) => setState({ ...state, cc: parsePills(state.cc).filter((x) => x !== p).join(', ') })} />
+            <RecipientField
+              label="Cc"
+              value={state.cc}
+              onChange={(v) => setState({ ...state, cc: v })}
+              pills={parsePills(state.cc)}
+              onRemovePill={(p) => setState({ ...state, cc: parsePills(state.cc).filter((x) => x !== p).join(', ') })}
+              onBlur={() => {
+                if (parsePills(state.cc).length === 0) setState({ ...state, showCc: false });
+              }}
+            />
           )}
           {state.showBcc && (
-            <RecipientField label="Ccn" value={state.bcc} onChange={(v) => setState({ ...state, bcc: v })} pills={parsePills(state.bcc)} onRemovePill={(p) => setState({ ...state, bcc: parsePills(state.bcc).filter((x) => x !== p).join(', ') })} />
+            <RecipientField
+              label="Ccn"
+              value={state.bcc}
+              onChange={(v) => setState({ ...state, bcc: v })}
+              pills={parsePills(state.bcc)}
+              onRemovePill={(p) => setState({ ...state, bcc: parsePills(state.bcc).filter((x) => x !== p).join(', ') })}
+              onBlur={() => {
+                if (parsePills(state.bcc).length === 0) setState({ ...state, showBcc: false });
+              }}
+            />
           )}
-          <div className="flex items-center gap-3 text-[11px]">
-            {!state.showCc && <button onClick={() => setState({ ...state, showCc: true })} className="text-muted-foreground hover:text-accent">+ Cc</button>}
-            {!state.showBcc && <button onClick={() => setState({ ...state, showBcc: true })} className="text-muted-foreground hover:text-accent">+ Ccn</button>}
-          </div>
-          <div className="flex items-center gap-3 pt-1">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-12 shrink-0">Oggetto</span>
+          {/* Oggetto — no label, just placeholder */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-7 shrink-0" />
             <input
               value={state.subject}
               onChange={(e) => setState({ ...state, subject: e.target.value })}
-              placeholder="Oggetto…"
-              className="flex-1 bg-transparent border-0 outline-none text-sm font-medium placeholder:text-muted-foreground/60"
+              placeholder="Oggetto"
+              className="flex-1 bg-transparent border-0 outline-none text-sm font-medium placeholder:text-muted-foreground/60 py-1"
             />
           </div>
         </div>
 
-        {/* Formatting toolbar */}
-        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border/50 bg-card/30 text-muted-foreground">
-          <button onClick={() => exec('bold')} className="px-2 py-1 hover:bg-surface2 rounded font-bold text-sm" title="Grassetto">B</button>
-          <button onClick={() => exec('italic')} className="px-2 py-1 hover:bg-surface2 rounded italic text-sm" title="Corsivo">I</button>
-          <button onClick={() => exec('underline')} className="px-2 py-1 hover:bg-surface2 rounded underline text-sm" title="Sottolineato">U</button>
-          <button onClick={() => exec('insertUnorderedList')} className="px-2 py-1 hover:bg-surface2 rounded text-sm" title="Elenco">•</button>
-          <button onClick={() => { const u = prompt('URL link:'); if (u) exec('createLink', u); }} className="px-2 py-1 hover:bg-surface2 rounded text-sm" title="Link">🔗</button>
-          <div className="flex-1" />
+        {/* Formatting toolbar — lucide icons, no emoji */}
+        <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-border/50 bg-card/30 text-muted-foreground">
+          <ToolbarBtn onClick={() => exec('bold')} title="Grassetto"><BoldIcon size={14} /></ToolbarBtn>
+          <ToolbarBtn onClick={() => exec('italic')} title="Corsivo"><ItalicIcon size={14} /></ToolbarBtn>
+          <ToolbarBtn onClick={() => exec('underline')} title="Sottolineato"><UnderlineIcon size={14} /></ToolbarBtn>
+          <ToolbarBtn onClick={() => exec('insertUnorderedList')} title="Elenco"><ListIcon size={14} /></ToolbarBtn>
+          <ToolbarBtn onClick={() => { const u = prompt('URL link:'); if (u) exec('createLink', u); }} title="Link"><LinkIcon size={14} /></ToolbarBtn>
         </div>
 
-        {/* Body editor */}
+        {/* Body editor — auto-grows to content. Quoted original lives below it
+            as a collapsed "•••" chip (click to expand). */}
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
           <div
             ref={bodyRef}
             contentEditable
             suppressContentEditableWarning
             onInput={(e) => setState({ ...state, body: (e.target as HTMLDivElement).innerHTML })}
-            className="min-h-[280px] outline-none text-sm text-foreground leading-relaxed prose prose-sm prose-invert max-w-none [&_a]:text-accent"
+            className="min-h-[120px] outline-none text-sm text-foreground leading-relaxed prose prose-sm prose-invert max-w-none [&_a]:text-accent"
           />
+          {state.quoted && (
+            <div className="mt-3">
+              {!quotedOpen ? (
+                <button
+                  type="button"
+                  onClick={() => setQuotedOpen(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface2 hover:bg-surface2/80 text-muted-foreground border border-border"
+                  title="Mostra messaggio precedente"
+                  aria-label="Mostra messaggio precedente"
+                >
+                  <MoreHorizontal size={14} />
+                </button>
+              ) : (
+                <div className="relative border-l-2 border-border pl-3 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setQuotedOpen(false)}
+                    className="absolute -left-1 -top-2 h-5 w-5 rounded-full bg-surface2 border border-border flex items-center justify-center text-muted-foreground hover:text-foreground"
+                    title="Nascondi messaggio precedente"
+                    aria-label="Nascondi messaggio precedente"
+                  >
+                    <X size={11} />
+                  </button>
+                  <pre className="text-[12px] whitespace-pre-wrap font-sans text-muted-foreground/80 m-0">{state.quoted}</pre>
+                </div>
+              )}
+            </div>
+          )}
           {state.attachments.length > 0 && (
             <div className="flex flex-wrap gap-2 pt-3 mt-3 border-t border-border/40">
               {state.attachments.map((f, i) => (
@@ -1101,31 +1201,36 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
           )}
         </div>
 
-        {/* AI pill — prominent generate-reply CTA, like Spark */}
-        {onSuggest && (
-          <div className="px-4 pt-3">
-            <button
-              type="button"
-              onClick={generateAI}
-              disabled={aiBusy}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-primary to-[hsl(var(--accent-2))] text-primary-foreground text-sm font-medium shadow-sm hover:opacity-90 disabled:opacity-60"
-            >
-              {aiBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-              {aiBusy ? 'Generazione…' : 'Genera una risposta'}
-            </button>
-          </div>
-        )}
-        <div className="flex items-center justify-between p-3 border-t border-border">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between p-3 border-t border-border bg-card/40 gap-2">
+          <div className="flex items-center gap-1">
             <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => addFiles(e.target.files)} />
-            <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
-              <Paperclip size={13} /> Allega
-            </Button>
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => fileRef.current?.click()}>
+                    <Paperclip size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Allega file</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            {onSuggest && (
+              <button
+                type="button"
+                onClick={generateAI}
+                disabled={aiBusy}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-primary to-[hsl(var(--accent-2))] text-primary-foreground text-xs font-medium shadow-sm hover:opacity-90 disabled:opacity-60 ml-1"
+              >
+                {aiBusy ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                {aiBusy ? 'Generazione…' : 'Genera risposta'}
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => setState(null)}>Annulla</Button>
-            <Button size="sm" onClick={send} disabled={sending || !state.to || !state.subject}>
-              {sending ? <><Loader2 size={13} className="animate-spin" /> Invio…</> : <><Send size={13} /> Invia</>}
+            <Button size="sm" onClick={send} disabled={sending || !state.to || !state.subject} className="gap-1.5">
+              {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              {sending ? 'Invio…' : 'Invia'}
             </Button>
           </div>
         </div>
@@ -1134,27 +1239,104 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
   );
 }
 
-// Inline chip field: typed addresses display as pills + free input at the end.
-function RecipientField({ label, value, onChange, pills, onRemovePill }: { label: string; value: string; onChange: (v: string) => void; pills: string[]; onRemovePill: (p: string) => void }) {
+function ToolbarBtn({ children, onClick, title }: { children: React.ReactNode; onClick: () => void; title: string }) {
   return (
-    <div className="flex items-start gap-3">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-12 pt-1.5 shrink-0">{label}</span>
-      <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1.5 py-1">
+    <button
+      type="button"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      className="h-7 w-7 inline-flex items-center justify-center rounded hover:bg-surface2 text-muted-foreground hover:text-foreground transition"
+      title={title}
+      aria-label={title}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Inline chip field: typed addresses display as pills + free input at the end.
+// Recipient field with chip-on-space/enter, focus tracking, and an optional
+// trailing slot for inline "+Cc / +Ccn" toggles (shown only while focused).
+function RecipientField({
+  label, value, onChange, pills, onRemovePill, onFocus, onBlur, trailing, placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  pills: string[];
+  onRemovePill: (p: string) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  trailing?: React.ReactNode;
+  placeholder?: string;
+}) {
+  const [pending, setPending] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Commit pending text as a new pill (appends to comma-list `value`).
+  function commit() {
+    const v = pending.trim().replace(/[,;]+$/, '');
+    if (!v) return false;
+    const next = pills.includes(v) ? pills : [...pills, v];
+    onChange(next.join(', '));
+    setPending('');
+    return true;
+  }
+
+  function handleKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter' || e.key === ',' || e.key === ';' || e.key === ' ') {
+      // Only commit if there's something email-like in the pending buffer.
+      if (pending.trim().length > 0) {
+        e.preventDefault();
+        commit();
+      }
+    } else if (e.key === 'Backspace' && pending === '' && pills.length > 0) {
+      // Backspace at empty input removes the last pill — standard mail UX.
+      const last = pills[pills.length - 1];
+      onRemovePill(last);
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const text = e.clipboardData.getData('text');
+    if (!/[,;\s]/.test(text)) return; // single token → let default handle
+    e.preventDefault();
+    const tokens = text.split(/[,;\s]+/).map((t) => t.trim()).filter(Boolean);
+    if (!tokens.length) return;
+    const merged = [...pills];
+    for (const t of tokens) if (!merged.includes(t)) merged.push(t);
+    onChange(merged.join(', '));
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-7 shrink-0">{label}</span>
+      <div
+        className="flex-1 min-w-0 flex flex-wrap items-center gap-1.5 py-0.5"
+        onClick={() => inputRef.current?.focus()}
+      >
         {pills.map((p) => (
           <span key={p} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-accent/10 border border-accent/30 text-[12px]">
             <span className="text-foreground">{p}</span>
-            <button onClick={() => onRemovePill(p)} className="text-muted-foreground hover:text-destructive">
+            <button onClick={(e) => { e.stopPropagation(); onRemovePill(p); }} className="text-muted-foreground hover:text-destructive">
               <X size={11} />
             </button>
           </span>
         ))}
         <input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={pills.length ? '' : 'dest@x.it, …'}
-          className="flex-1 min-w-[140px] bg-transparent border-0 outline-none text-sm placeholder:text-muted-foreground/60"
+          ref={inputRef}
+          value={pending}
+          onChange={(e) => setPending(e.target.value)}
+          onKeyDown={handleKey}
+          onPaste={handlePaste}
+          onFocus={onFocus}
+          onBlur={() => { commit(); onBlur?.(); }}
+          placeholder={pills.length ? '' : (placeholder ?? 'dest@x.it')}
+          className="flex-1 min-w-[60px] bg-transparent border-0 outline-none text-sm placeholder:text-muted-foreground/60"
+          autoComplete="off"
         />
       </div>
+      {trailing}
     </div>
   );
 }

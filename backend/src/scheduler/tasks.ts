@@ -18,6 +18,7 @@ export type ScheduledTaskRow = {
   last_run_at: string | null;
   last_status: string | null;
   last_result: string | null;
+  created_at: string;
 };
 
 const live = new Map<number, ScheduledTask>();
@@ -25,7 +26,7 @@ const live = new Map<number, ScheduledTask>();
 export async function listTasks(userId: number): Promise<ScheduledTaskRow[]> {
   return query<ScheduledTaskRow>(
     `SELECT id::int, user_id::int, name, cron, action_type, action_payload, enabled,
-            last_run_at, last_status, last_result
+            last_run_at, last_status, last_result, created_at
      FROM scheduled_tasks WHERE user_id=$1 ORDER BY id DESC`, [userId]
   );
 }

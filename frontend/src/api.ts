@@ -29,6 +29,7 @@ export const api = {
   setTelegram: (token: string) => req<any>('/onboarding/telegram', { method: 'POST', body: JSON.stringify({ token }) }),
   messages: (limit = 100) => req<any[]>(`/messages?limit=${limit}`),
   messageCounts: () => req<{ h24: number; d7: number; d30: number; total: number }>('/messages/counts'),
+  liveKpis: () => req<{ agentsNow: number; agents24h: number; peopleTouched24h: number; upcoming: { id: number; name: string; cron: string; next_run_at: string; channel: string; modality: string }[] }>('/live/kpis'),
   connectors: () => req<any[]>('/connectors'),
   updateConnector: (name: string, body: any) => req(`/connectors/${name}`, { method: 'PUT', body: JSON.stringify(body) }),
   runConnector: (name: string) => req(`/connectors/${name}/run`, { method: 'POST' }),

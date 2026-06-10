@@ -90,6 +90,92 @@ router.get('/messages', async (req, res) => {
   res.json(rows.reverse());
 });
 
+// Live page KPIs — agents-now, agents-24h, people-touched-24h, upcoming
+// scheduled contacts (channel + modality). Single round-trip; client renders.
+router.get('/live/kpis', async (req, res) => {
+  try {
+    const u = req.user!.id;
+    // Active agents NOW: running sub_agents + running team_tasks
+    const nowAgg = await query<{ sub_now: number; team_now: number; internal_now: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND status='running') AS sub_now,
+         (SELECT count(*)::int FROM team_tasks WHERE user_id=$1 AND status='running') AS team_now,
+         (SELECT count(*)::int FROM internal_agents WHERE user_id=$1 AND status='running') AS internal_now`,
+      [u],
+    ).catch(() => [{ sub_now: 0, team_now: 0, internal_now: 0 }]);
+
+    // Agents activated in last 24h
+    const last24Agg = await query<{ sub_24h: number; team_24h: number; internal_24h: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS sub_24h,
+         (SELECT count(*)::int FROM team_tasks WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS team_24h,
+         (SELECT count(*)::int FROM internal_agents WHERE user_id=$1 AND created_at > now() - INTERVAL '24 hours') AS internal_24h`,
+      [u],
+    ).catch(() => [{ sub_24h: 0, team_24h: 0, internal_24h: 0 }]);
+
+    // People involved in agentic work last 24h — distinct recipients from
+    // outbound_log filtered to agent / sub-agent / perk origins.
+    const peopleAgg = await query<{ c: number }>(
+      `SELECT count(DISTINCT recipient)::int AS c
+       FROM outbound_log
+       WHERE user_id=$1
+         AND status='sent'
+         AND ts > now() - INTERVAL '24 hours'
+         AND recipient IS NOT NULL
+         AND (origin = 'agent' OR origin LIKE 'subagent:%' OR origin LIKE 'perk:%' OR origin LIKE 'team:%')`,
+      [u],
+    ).catch(() => [{ c: 0 }]);
+
+    // Upcoming scheduled contacts — compute next_run_at from cron expression
+    // since scheduled_tasks doesn't materialize it.
+    const upcoming = await query<{ id: number; name: string; cron: string; action_type: string; action_payload: any }>(
+      `SELECT id, name, cron, action_type, action_payload
+       FROM scheduled_tasks
+       WHERE user_id=$1 AND enabled=true
+       LIMIT 50`,
+      [u],
+    ).catch(() => []);
+    function inferChannel(t: any): string {
+      const blob = (`${t.name ?? ''} ${JSON.stringify(t.action_payload ?? {})}`).toLowerCase();
+      if (/whatsapp|wa\b/.test(blob)) return 'whatsapp';
+      if (/instagram|\big\b/.test(blob)) return 'instagram';
+      if (/telegram|\btg\b/.test(blob)) return 'telegram';
+      if (/gmail|email|mail|imap|smtp/.test(blob)) return 'email';
+      return 'agent';
+    }
+    function inferModality(t: any): string {
+      const blob = (`${t.name ?? ''} ${JSON.stringify(t.action_payload ?? {})}`).toLowerCase();
+      if (/community|broadcast|gruppo|group|many/.test(blob)) return '1:many';
+      if (/thread|conversazione|conversation/.test(blob)) return 'thread';
+      return '1:1';
+    }
+    const { CronExpressionParser } = await import('cron-parser');
+    const upcomingMapped = upcoming
+      .map((t) => {
+        let next: string | null = null;
+        try { next = CronExpressionParser.parse(t.cron, { tz: 'Europe/Rome' }).next().toISOString(); } catch {}
+        return {
+          id: t.id, name: t.name, cron: t.cron, next_run_at: next,
+          channel: inferChannel(t), modality: inferModality(t),
+        };
+      })
+      .filter((t) => !!t.next_run_at)
+      .sort((a, b) => (a.next_run_at! < b.next_run_at! ? -1 : 1))
+      .slice(0, 12);
+
+    res.json({
+      agentsNow: (nowAgg[0]?.sub_now ?? 0) + (nowAgg[0]?.team_now ?? 0) + (nowAgg[0]?.internal_now ?? 0),
+      agents24h: (last24Agg[0]?.sub_24h ?? 0) + (last24Agg[0]?.team_24h ?? 0) + (last24Agg[0]?.internal_24h ?? 0),
+      peopleTouched24h: peopleAgg[0]?.c ?? 0,
+      upcoming: upcomingMapped,
+      breakdown: {
+        now: nowAgg[0] ?? {},
+        last24h: last24Agg[0] ?? {},
+      },
+    });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 // Message counts for KPI cards — backend computes from full table so values
 // don't cap at /messages?limit=100 (which was producing the "Msg 24h = 100"
 // constant on the live dashboard).
