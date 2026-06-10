@@ -1786,6 +1786,239 @@ router.get('/settings', async (req, res) => {
   res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message });
 });
 // Branding (per-user customizable title + logo)
+// ---------------------------------------------------------------------------
+// REPORT — time saved aggregates + PRIMA vs ADESSO radar.
+// PRIMA = cold-start vector [0,1,0,0] (Comunicazione, Brain, CRM, Memoria).
+// ADESSO = derived from real usage in the selected window.
+// Time-saved minutes are estimates (per-channel), not measured wall-clock.
+// ---------------------------------------------------------------------------
+const REPORT_MIN = {
+  reply_whatsapp: 3,
+  reply_telegram: 2,
+  reply_email: 8,
+  reply_instagram: 2,
+  brain_search: 4,            // every vault/people lookup
+  ingest_per_msg: 0.3,         // bulk sync overhead per ingested message
+  voice_baseline_min: 1,       // typing/edit overhead on top of clip length
+};
+
+router.get('/report', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const range = String(req.query.range ?? '30d');
+    const interval = range === '7d' ? "7 days"
+                   : range === '30d' ? "30 days"
+                   : range === '90d' ? "90 days"
+                   : null; // all-time
+    const sinceClause = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    // Outbound by channel (sent only) — drives reply time saved + Comunicazione score
+    const outbound = await query<{ channel: string; c: number }>(
+      `SELECT channel, count(*)::int AS c FROM outbound_log
+       WHERE user_id=$1 AND status='sent' ${sinceClause}
+       GROUP BY channel`, [userId],
+    );
+    const outboundBy: Record<string, number> = {};
+    let outboundTotal = 0;
+    for (const r of outbound) { outboundBy[r.channel] = r.c; outboundTotal += r.c; }
+
+    // Brain/people searches via tool_events
+    const sinceClauseTool = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const brainSearches = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM tool_events
+       WHERE user_id=$1 AND name IN ('brain_search','people_search','people_get','agent_brain_search') ${sinceClauseTool}`,
+      [userId],
+    );
+    const searchCount = brainSearches[0]?.c ?? 0;
+
+    // Ingestion: count of inbound messages stored in window (WA/IG/Telegram inbound)
+    const sinceClauseMsg = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const waIngest = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM wa_messages WHERE user_id=$1 AND from_me=false ${sinceClauseMsg}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0 }]; });
+    const igIngest = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM ig_messages WHERE user_id=$1 AND from_me=false ${sinceClauseMsg}`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ c: 0 }]; });
+    const ingestCount = (waIngest[0]?.c ?? 0) + (igIngest[0]?.c ?? 0);
+
+    // Voice transcribe runs — duration + baseline typing overhead
+    const sinceClauseRun = interval ? `AND ts >= now() - INTERVAL '${interval}'` : '';
+    const voice = await query<{ c: number; total_dur: string | number }>(
+      `SELECT count(*)::int AS c, COALESCE(sum(duration_ms),0)::bigint AS total_dur
+       FROM agent_runs WHERE user_id=$1 AND kind='voice_transcribe' AND status='ok' ${sinceClauseRun}`,
+      [userId],
+    );
+    const voiceCount = voice[0]?.c ?? 0;
+    const voiceDurMin = Number(voice[0]?.total_dur ?? 0) / 60000;
+
+    // === Time saved (minutes) ===
+    const tReplies =
+      (outboundBy.whatsapp ?? 0) * REPORT_MIN.reply_whatsapp
+    + (outboundBy.telegram ?? 0) * REPORT_MIN.reply_telegram
+    + (outboundBy.email ?? 0) * REPORT_MIN.reply_email
+    + (outboundBy.instagram ?? 0) * REPORT_MIN.reply_instagram;
+    const tSearches = searchCount * REPORT_MIN.brain_search;
+    const tIngest = ingestCount * REPORT_MIN.ingest_per_msg;
+    const tVoice = voiceCount * REPORT_MIN.voice_baseline_min + voiceDurMin;
+    const totalMin = Math.round(tReplies + tSearches + tIngest + tVoice);
+
+    // === Radar (0-10) ===
+    // Comunicazione: log-scale of total outbound, capped
+    const commScore = outboundTotal === 0 ? 0
+                    : Math.min(10, Math.round(Math.log10(1 + outboundTotal) * 4 * 10) / 10);
+    // Brain: notes count + link density
+    const brainAgg = await query<{ notes: number; refs_with_data: number }>(
+      `SELECT count(*)::int AS notes,
+              count(*) FILTER (WHERE jsonb_typeof(refs) = 'object' AND refs <> '{}'::jsonb)::int AS refs_with_data
+       FROM brain_index WHERE user_id=$1`, [userId],
+    ).catch(() => [{ notes: 0, refs_with_data: 0 }]);
+    const notes = brainAgg[0]?.notes ?? 0;
+    const linkedRatio = notes === 0 ? 0 : (brainAgg[0].refs_with_data ?? 0) / notes;
+    const brainScore = notes === 0 ? 0
+                     : Math.min(10, Math.round((Math.log10(1 + notes) * 3 + linkedRatio * 4) * 10) / 10);
+    // CRM: coverage (people with note) + psy-profile share
+    // has_psy lives in brain_index (file `people/<slug>.psy-profile.md`), not in
+    // people.meta. Compute via EXISTS join, same as /people route.
+    const crmAgg = await query<{ total: number; with_note: number; with_psy: number }>(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE p.note_path IS NOT NULL)::int AS with_note,
+              count(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM brain_index bi
+                WHERE bi.user_id = p.user_id
+                  AND bi.path = 'people/' || p.slug || '.psy-profile.md'
+              ))::int AS with_psy
+       FROM people p WHERE p.user_id=$1`, [userId],
+    ).catch(() => [{ total: 0, with_note: 0, with_psy: 0 }]);
+    const peopleTotal = crmAgg[0]?.total ?? 0;
+    const crmScore = peopleTotal === 0 ? 0 : Math.min(10, Math.round((
+      ((crmAgg[0].with_note / peopleTotal) * 6) +
+      ((crmAgg[0].with_psy / peopleTotal) * 4)
+    ) * 10) / 10);
+    // Memoria: reflection runs + tool_use brain accesses
+    const memAgg = await query<{ refl: number; access: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND kind='reflection' AND status='ok') AS refl,
+         (SELECT count(*)::int FROM tool_events WHERE user_id=$1 AND name IN ('brain_search','agent_brain_search','people_get','people_search')) AS access`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ refl: 0, access: 0 }]; });
+    const reflCount = memAgg[0]?.refl ?? 0;
+    const accessCount = memAgg[0]?.access ?? 0;
+    const memScore = (reflCount === 0 && accessCount === 0) ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + reflCount) * 3 + Math.log10(1 + accessCount) * 3) * 10) / 10);
+
+    // Automazione: flows + scheduled_tasks attivi (enabled)
+    const autoAgg = await query<{ flows: number; tasks: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM flows WHERE user_id=$1 AND enabled=true) AS flows,
+         (SELECT count(*)::int FROM scheduled_tasks WHERE user_id=$1 AND enabled=true) AS tasks`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ flows: 0, tasks: 0 }]; });
+    const flowsCount = autoAgg[0]?.flows ?? 0;
+    const tasksCount = autoAgg[0]?.tasks ?? 0;
+    const autoScore = (flowsCount + tasksCount) === 0 ? 0
+                    : Math.min(10, Math.round(((flowsCount * 1.5) + (tasksCount * 1.2)) * 10) / 10);
+
+    // Triage messaggi: % wa+ig elaborati (processed_at IS NOT NULL)
+    const triageAgg = await query<{ wa_tot: number; wa_proc: number; ig_tot: number; ig_proc: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false) AS wa_tot,
+         (SELECT count(*)::int FROM wa_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL) AS wa_proc,
+         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false) AS ig_tot,
+         (SELECT count(*)::int FROM ig_messages WHERE user_id=$1 AND from_me=false AND processed_at IS NOT NULL) AS ig_proc`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ wa_tot: 0, wa_proc: 0, ig_tot: 0, ig_proc: 0 }]; });
+    const triageTot = (triageAgg[0]?.wa_tot ?? 0) + (triageAgg[0]?.ig_tot ?? 0);
+    const triageProc = (triageAgg[0]?.wa_proc ?? 0) + (triageAgg[0]?.ig_proc ?? 0);
+    const triageScore = triageTot === 0 ? 0
+                      : Math.min(10, Math.round((triageProc / triageTot) * 10 * 10) / 10);
+
+    // Sub-agenti: numero di sub_agents completati con successo + custom agents/teams attivi
+    const subAgg = await query<{ subs: number; teams: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM sub_agents WHERE user_id=$1 AND status='completed') AS subs,
+         (SELECT count(*)::int FROM custom_agents WHERE user_id=$1) AS teams`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ subs: 0, teams: 0 }]; });
+    const subsCount = subAgg[0]?.subs ?? 0;
+    const customAgents = subAgg[0]?.teams ?? 0;
+    const subScore = (subsCount + customAgents) === 0 ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + subsCount) * 4 + customAgents * 1) * 10) / 10);
+
+    // Documentazione: snapshot count + log run total (storia preservata)
+    const docAgg = await query<{ snaps: number; runs: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM brain_snapshots WHERE user_id=$1 AND status='ok') AS snaps,
+         (SELECT count(*)::int FROM agent_runs WHERE user_id=$1 AND status='ok') AS runs`,
+      [userId],
+    ).catch((e) => { console.warn('[report] sub-query failed', e?.message ?? e); return [{ snaps: 0, runs: 0 }]; });
+    const snapsCount = docAgg[0]?.snaps ?? 0;
+    const runsCount = docAgg[0]?.runs ?? 0;
+    const docScore = (snapsCount + runsCount) === 0 ? 0
+                   : Math.min(10, Math.round((Math.log10(1 + snapsCount) * 5 + Math.log10(1 + runsCount) * 2) * 10) / 10);
+
+    res.json({
+      range,
+      timeSaved: {
+        totalMin,
+        breakdown: {
+          replies: { min: Math.round(tReplies), count: outboundTotal, byChannel: outboundBy },
+          brain_searches: { min: Math.round(tSearches), count: searchCount },
+          ingestion: { min: Math.round(tIngest), count: ingestCount },
+          voice: { min: Math.round(tVoice), count: voiceCount, dur_min: Math.round(voiceDurMin) },
+        },
+      },
+      radar: {
+        axes: [
+          'Comunicazione',
+          'Brain',
+          'CRM / People',
+          'Memoria',
+          'Automazione',
+          'Triage messaggi',
+          'Sub-agenti',
+          'Documentazione',
+        ],
+        prima: [0, 1, 0, 0, 0, 0, 0, 1],
+        adesso: [commScore, brainScore, crmScore, memScore, autoScore, triageScore, subScore, docScore],
+        metrics: {
+          comunicazione: { outbound: outboundTotal },
+          brain: { notes, linked_ratio: Math.round(linkedRatio * 100) / 100 },
+          crm: { total: peopleTotal, with_note: crmAgg[0]?.with_note ?? 0, with_psy: crmAgg[0]?.with_psy ?? 0 },
+          memoria: { reflections: reflCount, brain_accesses: accessCount },
+          automazione: { flows: flowsCount, tasks: tasksCount },
+          triage: { total: triageTot, processed: triageProc },
+          sub_agenti: { completed: subsCount, custom: customAgents },
+          documentazione: { snapshots: snapsCount, runs: runsCount },
+        },
+      },
+    });
+  } catch (e: any) {
+    console.error('[report] outer fail', e);
+    // Never 500 — surface a zero-shape so the page renders + the user sees the
+    // structure. error string included for diagnosis.
+    res.json({
+      range: String(req.query.range ?? '30d'),
+      error: String(e?.message ?? e),
+      timeSaved: {
+        totalMin: 0,
+        breakdown: {
+          replies: { min: 0, count: 0, byChannel: {} },
+          brain_searches: { min: 0, count: 0 },
+          ingestion: { min: 0, count: 0 },
+          voice: { min: 0, count: 0, dur_min: 0 },
+        },
+      },
+      radar: {
+        axes: ['Comunicazione clienti', 'Organizzazione second brain', 'CRM / People', 'Memoria contestuale'],
+        prima: [0, 1, 0, 0],
+        adesso: [0, 0, 0, 0],
+        metrics: {},
+      },
+    });
+  }
+});
+
 router.get('/branding', async (req, res) => {
   const b = (await getSetting<any>(req.user!.id, 'branding')) ?? null;
   res.json(b ?? { title: 'super-agent', subtitle: 'personal · brain', logoDataUrl: null });

@@ -254,4 +254,5 @@ export const api = {
   igPending: () => req<any>('/instagram/pending'),
   igSync: (pages = 3) => req<any>('/instagram/sync', { method: 'POST', body: JSON.stringify({ pages }) }),
   igSyncThread: (id: string, pages = 5) => req<any>(`/instagram/threads/${encodeURIComponent(id)}/sync`, { method: 'POST', body: JSON.stringify({ pages }) }),
+  report: (range: '7d' | '30d' | '90d' | 'all' = '30d') => req<any>(`/report?range=${range}`),
 };
