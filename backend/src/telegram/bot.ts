@@ -82,7 +82,7 @@ async function startBotForUser(userId: number) {
     await ctx.reply(`🤖 Comandi disponibili:\n\n${body}`);
   });
 
-  // ── Thought Analyzer (sess.8266) ───────────────────────────────────────────
+  // ── Thought Analyzer ───────────────────────────────────────────────────────
   // Cattura DB-first (ack istantaneo), poi analisi leggera asincrona che non blocca.
   const captureAndReply = async (ctx: any, text: string) => {
     const { captureThought, analyzeThoughtLight, lightReplyLine } = await import('../brain/thoughts.js');

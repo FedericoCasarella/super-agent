@@ -1,4 +1,4 @@
-// Thought Analyzer core (sess.8266).
+// Thought Analyzer core.
 // A+C: ogni pensiero viene (A) analizzato — tema, emozione, loop — e (C) trasformato
 // in un nodo connesso nel vault con backlink alle sinapsi esistenti.
 //

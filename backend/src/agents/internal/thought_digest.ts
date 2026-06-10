@@ -1,4 +1,4 @@
-// Thought Digest — internal agent (sess.8266).
+// Thought Digest — internal agent.
 // Il livello 3 del Thought Analyzer: la sera aggrega i pensieri del giorno e trova
 // il pattern che nei singoli pensieri non si vede (emozione dominante, loop ricorrente,
 // contraddizione viva, una domanda per domani). Scrive un nodo digest nel vault e
