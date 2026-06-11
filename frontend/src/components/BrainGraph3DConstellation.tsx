@@ -41,9 +41,99 @@ function originColor(email: string): string {
   return `hsl(${hashHue(email)}, 70%, 65%)`;
 }
 import { colorForNode as paletteColor } from '../brainColors';
+
+// Cluster key = top folder of the relative path (id format: "<vault>::<rel>" or "<rel>").
+// "agents/foo.md" → "agents", "Companies/Bora/note.md" → "companies", root files → "_misc".
+function clusterOf(n: any): string {
+  if (n?.__isRoot) return '_root';
+  if (n?.__cluster) return n.__cluster;
+  const id: string = String(n?.id ?? '');
+  const rel = id.includes('::') ? id.split('::').slice(1).join('::') : id;
+  const parts = rel.split('/').filter(Boolean);
+  return parts.length > 1 ? parts[0].toLowerCase() : '_misc';
+}
+function clusterColor(c: string): string {
+  if (c === '_root') return '#ff5577';
+  if (c === '_misc') return '#888aa0';
+  return `hsl(${hashHue(c)}, 75%, 62%)`;
+}
+
 function colorFor(node: any): string {
+  if (node.__isRoot) return '#ff6680';
+  if (node.__isHub) return clusterColor(node.__cluster);
   if (node.origin_email) return originColor(node.origin_email);
-  return paletteColor(node);
+  // Cluster color takes precedence over palette → cluster cohesion visible.
+  return clusterColor(clusterOf(node));
+}
+
+// Build hub-of-cluster + root nodes, link every real node to its hub, every hub to root.
+// Keeps original real nodes/links intact for click resolution.
+function enhanceGraph(g: { nodes: any[]; links: any[]; origins?: string[]; vaults?: string[] }) {
+  const realNodes = (g.nodes ?? []).map((n) => ({ ...n, __cluster: clusterOf(n) }));
+  const clusters = Array.from(new Set(realNodes.map((n) => n.__cluster))).filter((c) => c !== '_root').sort();
+  // Fibonacci sphere distribution → hubs spread evenly in 3D
+  const dirs = new Map<string, [number, number, number]>();
+  const N = Math.max(1, clusters.length);
+  clusters.forEach((c, i) => {
+    const phi = Math.acos(1 - 2 * (i + 0.5) / N);
+    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+    dirs.set(c, [
+      Math.cos(theta) * Math.sin(phi),
+      Math.sin(theta) * Math.sin(phi),
+      Math.cos(phi),
+    ]);
+  });
+  // Galaxy layout: root pinned at center, hubs pinned on sphere surface at
+  // Fibonacci positions. d3's fx/fy/fz freeze a node's position — NOTHING
+  // (charge, links, custom force) can move it. This guarantees:
+  //   - BRAIN always at exact center
+  //   - cluster hubs evenly spread on sphere surface, fixed forever
+  //   - cross-cluster wikilinks can't drag clusters together
+  const HUB_R = 480;
+  const hubs = clusters.map((c) => {
+    const d = dirs.get(c)!;
+    const x = d[0] * HUB_R, y = d[1] * HUB_R, z = d[2] * HUB_R;
+    return {
+      id: `__hub__:${c}`,
+      title: c.toUpperCase(),
+      kind: 'hub',
+      size: 9,
+      __isHub: true,
+      __cluster: c,
+      x, y, z,
+      fx: x, fy: y, fz: z, // PINNED
+    };
+  });
+  const root = {
+    id: '__root__',
+    title: 'BRAIN',
+    kind: 'root',
+    size: 16,
+    __isRoot: true,
+    __cluster: '_root',
+    x: 0, y: 0, z: 0,
+    fx: 0, fy: 0, fz: 0, // PINNED at origin
+  };
+  // Seed leaves near their hub so initial frame already looks clustered.
+  for (const n of realNodes) {
+    const d = dirs.get(n.__cluster);
+    if (!d) continue;
+    const jitter = () => (Math.random() - 0.5) * 40;
+    n.x = d[0] * HUB_R + jitter();
+    n.y = d[1] * HUB_R + jitter();
+    n.z = d[2] * HUB_R + jitter();
+  }
+  const extraLinks: any[] = [];
+  for (const n of realNodes) extraLinks.push({ source: n.id, target: `__hub__:${n.__cluster}`, __synthetic: true });
+  for (const h of hubs) extraLinks.push({ source: h.id, target: '__root__', __synthetic: true });
+  return {
+    nodes: [root, ...hubs, ...realNodes],
+    links: [...(g.links ?? []), ...extraLinks],
+    origins: g.origins ?? [],
+    vaults: g.vaults ?? [],
+    clusters,
+    dirs,
+  };
 }
 
 // Particles per node emitter (firing axons) — selectable density
@@ -102,7 +192,7 @@ export default function BrainGraph3DConstellation({
   onToggleExplorer?: () => void;
   focusId?: string | null;
 }) {
-  const [data, setData] = useState<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] });
+  const [data, setData] = useState<{ nodes: Node[]; links: Link[]; clusters?: string[]; dirs?: Map<string, [number, number, number]> }>({ nodes: [], links: [] });
   // degree map kept in a ref so nodeVisibility callback doesn't allocate.
   const degreeRef = useRef<Map<string, number>>(new Map());
   const [hover, setHover] = useState<string | null>(null);
@@ -220,9 +310,10 @@ export default function BrainGraph3DConstellation({
   useEffect(() => {
     setLoaded(false);
     api.brainGraphFiltered(visibilityFilter, originFilter, vaultFilter).then((g: any) => {
-      setData(g);
-      if (onOriginsChange) onOriginsChange(g.origins ?? []);
-      if (onVaultsChange) onVaultsChange(g.vaults ?? []);
+      const enhanced = enhanceGraph(g);
+      setData(enhanced as any);
+      if (onOriginsChange) onOriginsChange(enhanced.origins ?? []);
+      if (onVaultsChange) onVaultsChange(enhanced.vaults ?? []);
     }).catch(() => {}).finally(() => setLoaded(true));
   }, [visibilityFilter, originFilter, vaultFilter]);
 
@@ -242,16 +333,82 @@ export default function BrainGraph3DConstellation({
     return () => { ro.disconnect(); window.removeEventListener('resize', measure); };
   }, []);
 
-  // Spread nodes via forces
+  // Force layout — clusters as compact balls around each hub, hubs anchored
+  // far apart on a Fibonacci sphere, root pinned at origin. Key insights:
+  //
+  // 1. Leaves orbit their hub DYNAMICALLY (follow hub position each tick), not
+  //    a static direction → as hubs settle, leaves stay attached.
+  // 2. Generic charge dropped HARD on leaves (-25) so they don't push their
+  //    own siblings out of the cluster ball. Hubs/root get strong repulsion
+  //    so clusters never overlap.
+  // 3. Real wikilinks across clusters get strength 0.02 (≈zero) → they don't
+  //    drag clusters together. Same-cluster wikilinks stay strong (0.5) →
+  //    related notes tighten further inside the ball.
+  // 4. Synthetic leaf→hub links short + strong → cluster cohesion.
   useEffect(() => {
     const fg: any = fgRef.current;
     if (!fg) return;
     try {
       const charge = fg.d3Force?.('charge');
-      if (charge?.strength) charge.strength(-260).distanceMax(800);
+      if (charge?.strength) {
+        charge
+          .strength((n: any) => n?.__isRoot ? -9000 : n?.__isHub ? -6000 : -25)
+          .distanceMax(2200)
+          .theta(0.9);
+      }
       const link = fg.d3Force?.('link');
-      if (link?.distance) link.distance(110);
+      if (link?.distance) {
+        link.distance((l: any) => {
+          const srcObj = typeof l.source === 'object' ? l.source : null;
+          const tgtObj = typeof l.target === 'object' ? l.target : null;
+          if (tgtObj?.__isRoot || srcObj?.__isRoot) return 380; // hub → root: long
+          if (tgtObj?.__isHub || srcObj?.__isHub) return 38;    // leaf → hub: tight
+          // Real wikilink: same-cluster = tight, cross-cluster = ignore distance
+          const sc = srcObj?.__cluster;
+          const tc = tgtObj?.__cluster;
+          return sc && sc === tc ? 28 : 400;
+        }).strength((l: any) => {
+          const srcObj = typeof l.source === 'object' ? l.source : null;
+          const tgtObj = typeof l.target === 'object' ? l.target : null;
+          if (tgtObj?.__isHub || srcObj?.__isHub) return 0.95;  // leaf → hub: anchor
+          if (tgtObj?.__isRoot || srcObj?.__isRoot) return 0.7;
+          // Real wikilink: same cluster cohesion vs cross-cluster ≈zero so
+          // clusters never get dragged into each other. Render link stays
+          // visible (drawn from raw geometry), just doesn't apply force.
+          const sc = srcObj?.__cluster;
+          const tc = tgtObj?.__cluster;
+          return sc && sc === tc ? 0.4 : 0;
+        });
+      }
+      // Kill d3 center force — root is pinned at origin via fx/fy/fz already.
+      const center = fg.d3Force?.('center');
+      if (center?.strength) center.strength(0);
+      // Bounding-sphere clamp: any leaf drifting past MAX_R gets pulled back
+      // hard, so the entire graph stays INSIDE the wireframe globe. Hubs/root
+      // are pinned via fx/fy/fz so they're skipped automatically.
+      const MAX_R = 640;
+      fg.d3Force?.('bound', (_alpha: number) => {
+        const nodes = (data.nodes as any[]);
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          if (n.__isHub || n.__isRoot) continue; // pinned
+          const x = n.x ?? 0, y = n.y ?? 0, z = n.z ?? 0;
+          const r = Math.sqrt(x * x + y * y + z * z);
+          if (r > MAX_R) {
+            const k = MAX_R / r;
+            n.x = x * k; n.y = y * k; n.z = z * k;
+            // Damp outward velocity component
+            n.vx = (n.vx ?? 0) * 0.3;
+            n.vy = (n.vy ?? 0) * 0.3;
+            n.vz = (n.vz ?? 0) * 0.3;
+          }
+        }
+      });
       fg.d3ReheatSimulation?.();
+      // One-shot camera framing so the whole sphere fits on screen.
+      setTimeout(() => {
+        try { fg.cameraPosition?.({ x: 0, y: 0, z: 1500 }, { x: 0, y: 0, z: 0 }, 800); } catch {}
+      }, 100);
     } catch {}
   }, [data]);
 
@@ -595,6 +752,22 @@ export default function BrainGraph3DConstellation({
       linesRef.current = null;
     }
     if (data.nodes.length === 0) return;
+    // Globe wireframe — thin grid sphere wrapping the whole graph, gives the
+    // "celestial map" look from the reference screenshots. Pure decoration,
+    // 1 draw call, frustum-culled.
+    {
+      const SPHERE_R = 680;
+      const geom = new THREE.SphereGeometry(SPHERE_R, 36, 24);
+      const wf = new THREE.WireframeGeometry(geom);
+      const mat = new THREE.LineBasicMaterial({ color: 0x4a5573, transparent: true, opacity: 0.13, depthWrite: false });
+      const wire = new THREE.LineSegments(wf, mat);
+      wire.frustumCulled = false;
+      wire.name = 'brain-globe';
+      // Remove old globe if any
+      const old = scene.getObjectByName('brain-globe');
+      if (old) scene.remove(old);
+      scene.add(wire);
+    }
     // Instanced node mesh
     const mat = new THREE.MeshBasicMaterial({ vertexColors: false });
     const inst = new THREE.InstancedMesh(sharedSphereGeom, mat, data.nodes.length);
@@ -612,7 +785,7 @@ export default function BrainGraph3DConstellation({
     const _mat = new THREE.Matrix4();
     for (let i = 0; i < data.nodes.length; i++) {
       const n: any = data.nodes[i];
-      const r = 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
+      const r = n.__isRoot ? 16 : n.__isHub ? 9 : 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
       _mat.makeScale(r, r, r);
       _mat.setPosition(n.x ?? 0, n.y ?? 0, n.z ?? 0);
       inst.setMatrixAt(i, _mat);
@@ -702,6 +875,16 @@ export default function BrainGraph3DConstellation({
       }
       const n: any = (data.nodes as any[])[idx];
       if (!n) return;
+      // Synthetic hub/root: zoom only, don't open as note.
+      if (n.__isRoot || n.__isHub) {
+        if (n.x != null) {
+          const dist = n.__isRoot ? 600 : 280;
+          const len = Math.hypot(n.x, n.y, n.z) || 1;
+          const ratio = 1 + dist / len;
+          fg.cameraPosition({ x: n.x * ratio, y: n.y * ratio, z: n.z * ratio }, n.__isRoot ? { x: 0, y: 0, z: 0 } : n, 900);
+        }
+        return;
+      }
       setSelected(n.id);
       onSelect(n.id);
       if (n.x != null) {
@@ -721,7 +904,8 @@ export default function BrainGraph3DConstellation({
       if (idx !== lastHoverIdx) {
         lastHoverIdx = idx;
         const n: any = idx >= 0 ? (data.nodes as any[])[idx] : null;
-        setHover(n?.id ?? null);
+        // Synthetic nodes hover separately (visualized via always-on chip).
+        setHover(n && !n.__isRoot && !n.__isHub ? n.id : null);
       }
     };
     dom.addEventListener('pointerdown', onDown);
@@ -737,7 +921,7 @@ export default function BrainGraph3DConstellation({
   // Label overlay state — list of {id, title, x, y} computed by projecting
   // node world position to screen each animation frame. Rendered as absolute
   // HTML divs over the canvas.
-  type LabelHit = { id: string; title: string; x: number; y: number; mode: 'hover' | 'zoom' };
+  type LabelHit = { id: string; title: string; x: number; y: number; mode: 'hover' | 'zoom' | 'hub' | 'root'; color?: string };
   const [labels, setLabels] = useState<LabelHit[]>([]);
   useEffect(() => {
     let raf = 0;
@@ -766,6 +950,20 @@ export default function BrainGraph3DConstellation({
         if (x < -PAD || x > rect.width + PAD || y < -PAD || y > rect.height + PAD) return null;
         return { x, y, depth: tmpV.z };
       };
+      // Always-on hub + root pills — these visually mark each cluster center.
+      for (const n of (data.nodes as any[])) {
+        if (!n.__isHub && !n.__isRoot) continue;
+        const p = project(n);
+        if (!p) continue;
+        out.push({
+          id: n.id,
+          title: n.title || n.id,
+          x: p.x,
+          y: p.y,
+          mode: n.__isRoot ? 'root' : 'hub',
+          color: n.__isRoot ? '#ff6680' : clusterColor(n.__cluster),
+        });
+      }
       // Selected label — sticks until user clicks empty space.
       if (selected) {
         const n: any = (data.nodes as any[]).find((x: any) => x.id === selected);
@@ -787,6 +985,7 @@ export default function BrainGraph3DConstellation({
         const projected: { n: any; p: { x: number; y: number; depth: number } }[] = [];
         for (const n of (data.nodes as any[])) {
           if (n.id === hover) continue;
+          if (n.__isHub || n.__isRoot) continue; // already rendered as pills
           const p = project(n);
           if (!p) continue;
           projected.push({ n, p });
@@ -823,7 +1022,12 @@ export default function BrainGraph3DConstellation({
     const nodes = data.nodes as any[];
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
-      const r = 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
+      // Special sizes: root sphere big, hubs medium-big, leaves scaled by size.
+      const r = n.__isRoot
+        ? 16
+        : n.__isHub
+        ? 9
+        : 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
       tmpMat4.makeScale(r, r, r);
       tmpMat4.setPosition(n.x ?? 0, n.y ?? 0, n.z ?? 0);
       inst.setMatrixAt(i, tmpMat4);
@@ -1050,41 +1254,101 @@ export default function BrainGraph3DConstellation({
           // handler; don't wire force-graph's events here.
           enableNodeDrag={false}
           enablePointerInteraction={false}
-          cooldownTicks={400}
-          warmupTicks={60}
-          d3AlphaDecay={0.05}
-          d3VelocityDecay={0.55}
+          cooldownTicks={800}
+          warmupTicks={120}
+          d3AlphaDecay={0.025}
+          d3VelocityDecay={0.45}
         />
       )}
       {/* Label overlay — absolute-positioned DOM, super cheap vs Three sprites. */}
       <div className="absolute inset-0 pointer-events-none select-none" style={{ overflow: 'hidden' }}>
-        {labels.map((lab) => (
-          <div
-            key={`${lab.mode}-${lab.id}`}
-            style={{
-              position: 'absolute',
-              left: lab.x,
-              top: lab.y,
-              transform: 'translate(-50%, calc(-100% - 12px))',
-              fontFamily: 'Inter, system-ui, sans-serif',
-              fontSize: lab.mode === 'hover' ? 12 : 10,
-              fontWeight: lab.mode === 'hover' ? 600 : 500,
-              lineHeight: 1,
-              padding: lab.mode === 'hover' ? '5px 9px' : '3px 6px',
-              borderRadius: 6,
-              background: lab.mode === 'hover' ? 'rgba(8,16,28,0.95)' : 'rgba(8,16,28,0.65)',
-              border: lab.mode === 'hover' ? '1px solid #4b6bff' : '1px solid rgba(120,140,180,0.25)',
-              color: lab.mode === 'hover' ? '#e8e8f0' : 'rgba(220,225,240,0.85)',
-              whiteSpace: 'normal',
-              wordBreak: 'break-word',
-              boxShadow: lab.mode === 'hover' ? '0 4px 14px rgba(0,0,0,0.6)' : 'none',
-              maxWidth: 260,
-              zIndex: lab.mode === 'hover' ? 20 : 10,
-            }}
-          >
-            {lab.title}
-          </div>
-        ))}
+        {labels.map((lab) => {
+          // Cluster-hub pill — always-on, vivid chip with cluster color border.
+          if (lab.mode === 'hub') {
+            return (
+              <div
+                key={`${lab.mode}-${lab.id}`}
+                style={{
+                  position: 'absolute',
+                  left: lab.x,
+                  top: lab.y,
+                  transform: 'translate(-50%, -50%)',
+                  fontFamily: 'Inter, system-ui, sans-serif',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  padding: '5px 11px',
+                  borderRadius: 999,
+                  background: `linear-gradient(135deg, ${lab.color}33, rgba(8,16,28,0.92))`,
+                  border: `1.5px solid ${lab.color}`,
+                  color: '#fff',
+                  boxShadow: `0 0 12px ${lab.color}77, inset 0 0 4px ${lab.color}55`,
+                  whiteSpace: 'nowrap',
+                  zIndex: 15,
+                }}
+              >
+                <span style={{ opacity: 0.7, marginRight: 6, fontSize: 9 }}>MOC</span>
+                {lab.title}
+              </div>
+            );
+          }
+          // Root pill — fat central anchor label.
+          if (lab.mode === 'root') {
+            return (
+              <div
+                key={`${lab.mode}-${lab.id}`}
+                style={{
+                  position: 'absolute',
+                  left: lab.x,
+                  top: lab.y,
+                  transform: 'translate(-50%, -50%)',
+                  fontFamily: 'Inter, system-ui, sans-serif',
+                  fontSize: 13,
+                  fontWeight: 800,
+                  letterSpacing: '0.08em',
+                  padding: '7px 14px',
+                  borderRadius: 8,
+                  background: 'linear-gradient(135deg, rgba(255,102,128,0.35), rgba(8,16,28,0.92))',
+                  border: '2px solid #ff6680',
+                  color: '#fff',
+                  boxShadow: '0 0 24px rgba(255,102,128,0.6)',
+                  whiteSpace: 'nowrap',
+                  zIndex: 18,
+                }}
+              >
+                {lab.title}
+              </div>
+            );
+          }
+          return (
+            <div
+              key={`${lab.mode}-${lab.id}`}
+              style={{
+                position: 'absolute',
+                left: lab.x,
+                top: lab.y,
+                transform: 'translate(-50%, calc(-100% - 12px))',
+                fontFamily: 'Inter, system-ui, sans-serif',
+                fontSize: lab.mode === 'hover' ? 12 : 10,
+                fontWeight: lab.mode === 'hover' ? 600 : 500,
+                lineHeight: 1,
+                padding: lab.mode === 'hover' ? '5px 9px' : '3px 6px',
+                borderRadius: 6,
+                background: lab.mode === 'hover' ? 'rgba(8,16,28,0.95)' : 'rgba(8,16,28,0.65)',
+                border: lab.mode === 'hover' ? '1px solid #4b6bff' : '1px solid rgba(120,140,180,0.25)',
+                color: lab.mode === 'hover' ? '#e8e8f0' : 'rgba(220,225,240,0.85)',
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+                boxShadow: lab.mode === 'hover' ? '0 4px 14px rgba(0,0,0,0.6)' : 'none',
+                maxWidth: 260,
+                zIndex: lab.mode === 'hover' ? 20 : 10,
+              }}
+            >
+              {lab.title}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
