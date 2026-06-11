@@ -239,27 +239,9 @@ export default function MailPage() {
       setRows(rs);
       setTotal(r.total);
       setListDiag(r.diag ?? null);
-      // Auto-fallback: if the user lands on "In arrivo" and it's empty BUT
-      // there are saved emails in another folder, jump there. Spares the
-      // user the "perché non vedo nulla" confusion.
-      if (
-        folder === 'INBOX'
-        && rs.length === 0
-        && r.diag?.accountTotal > 0
-        && Array.isArray(r.diag.folders)
-        && r.diag.folders.length > 0
-      ) {
-        // Pick the folder with the most rows. If it's already the resolved
-        // inbox name (which we just queried via folder=inboxName), don't loop.
-        const top = r.diag.folders[0];
-        if (top?.folder && top.folder !== inboxName) {
-          setFolder(top.folder);
-          return;
-        }
-      }
     } catch (e) { console.error(e); }
     finally { if (!silent) setLoading(false); }
-  }, [account, folder, q, inboxName]);
+  }, [account, folder, q, inboxName, sentName]);
 
   async function loadMore() {
     if (loadingMore || loading) return;
@@ -1405,6 +1387,44 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
     } finally { setAiBusy(false); }
   }
 
+  // Ex-novo AI compose — asks the user what to say, generates subject + body
+  // in the user's tone (backend learns it from sent mail), inserts the body
+  // BEFORE the signature block.
+  const [aiComposeOpen, setAiComposeOpen] = useState(false);
+  const [aiIntent, setAiIntent] = useState('');
+  const [aiComposeBusy, setAiComposeBusy] = useState(false);
+  async function generateCompose() {
+    const intent = aiIntent.trim();
+    if (!intent) return;
+    setAiComposeBusy(true);
+    try {
+      const r = await api.mailCompose(intent, state.to);
+      if (!r.ok) throw new Error(r.error || 'Errore generazione');
+      const editor = bodyRef.current;
+      if (editor) {
+        const html = r.body.split('\n').map((l) => `<div>${l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || '<br>'}</div>`).join('');
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = html;
+        const sig = editor.querySelector('.mail-signature');
+        if (sig) {
+          // Insert generated body right before the signature, replacing any
+          // empty placeholder divs that precede it.
+          while (sig.previousSibling) sig.previousSibling.remove();
+          sig.before(...Array.from(wrapper.childNodes));
+        } else {
+          editor.innerHTML = html;
+        }
+        setState({ ...state, subject: state.subject || r.subject, body: editor.innerHTML });
+      } else {
+        setState({ ...state, subject: state.subject || r.subject, body: r.body });
+      }
+      setAiComposeOpen(false);
+      setAiIntent('');
+    } catch (e: any) {
+      toast.push(String(e?.message ?? e), 'err');
+    } finally { setAiComposeBusy(false); }
+  }
+
   // Restore the editor's selection before running the command. When the
   // floating toolbar is portal-rendered to <body>, clicking a button can
   // momentarily move the active range out of the editor — execCommand then
@@ -1649,6 +1669,37 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
                 {aiBusy ? 'Generazione…' : 'Genera risposta'}
               </button>
             )}
+            <div className="relative ml-1">
+              <button
+                type="button"
+                onClick={() => setAiComposeOpen((v) => !v)}
+                disabled={aiComposeBusy}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-primary to-[hsl(var(--accent-2))] text-primary-foreground text-xs font-medium shadow-sm hover:opacity-90 disabled:opacity-60"
+              >
+                {aiComposeBusy ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                {aiComposeBusy ? 'Scrittura…' : 'Scrivi con AI'}
+              </button>
+              {aiComposeOpen && (
+                <div className="absolute bottom-full left-0 mb-2 w-[340px] rounded-xl border border-border bg-popover shadow-xl p-3 z-50">
+                  <div className="text-xs font-medium mb-2">Cosa vuoi dire in questa email?</div>
+                  <textarea
+                    autoFocus
+                    value={aiIntent}
+                    onChange={(e) => setAiIntent(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) generateCompose(); }}
+                    placeholder="Es: chiedi a Marco se può spostare la call di domani alle 15, tono amichevole"
+                    className="w-full h-20 text-xs bg-surface2/60 border border-border rounded-lg p-2 resize-none focus:outline-none focus:border-primary/60"
+                  />
+                  <div className="flex items-center justify-end gap-2 mt-2">
+                    <Button variant="ghost" size="sm" onClick={() => { setAiComposeOpen(false); setAiIntent(''); }}>Annulla</Button>
+                    <Button size="sm" disabled={!aiIntent.trim() || aiComposeBusy} onClick={generateCompose} className="gap-1.5">
+                      {aiComposeBusy ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                      Genera
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => setState(null)}>Annulla</Button>
@@ -1767,9 +1818,18 @@ function RecipientField({
   const [pending, setPending] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Strip wrapping punctuation users drag in when copy-pasting from text:
+  // "(addr@x.it)", "<addr@x.it>", "addr@x.it," etc. If an email-like token
+  // exists inside, extract exactly it.
+  function cleanAddr(raw: string): string {
+    const t = raw.trim().replace(/^[\s<(\["']+|[\s>)\]"',;.]+$/g, '');
+    const m = t.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+    return m ? m[0] : t;
+  }
+
   // Commit pending text as a new pill (appends to comma-list `value`).
   function commit() {
-    const v = pending.trim().replace(/[,;]+$/, '');
+    const v = cleanAddr(pending);
     if (!v) return false;
     const next = pills.includes(v) ? pills : [...pills, v];
     onChange(next.join(', '));
@@ -1795,7 +1855,7 @@ function RecipientField({
     const text = e.clipboardData.getData('text');
     if (!/[,;\s]/.test(text)) return; // single token → let default handle
     e.preventDefault();
-    const tokens = text.split(/[,;\s]+/).map((t) => t.trim()).filter(Boolean);
+    const tokens = text.split(/[,;\s]+/).map((t) => cleanAddr(t)).filter(Boolean);
     if (!tokens.length) return;
     const merged = [...pills];
     for (const t of tokens) if (!merged.includes(t)) merged.push(t);

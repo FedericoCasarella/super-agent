@@ -57,8 +57,12 @@ function pickAccount(accs: Account[], label: string): Account {
 }
 
 function smtpCreds(acc: Account) {
-  const host = acc.smtpHost || acc.host.replace(/^imap\./i, 'smtp.');
-  const port = acc.smtpPort ?? 587;
+  // Derive SMTP host from IMAP host: "imap.x.it" → "smtp.x.it" AND
+  // "imaps.x.it" → "smtps.x.it" (Aruba-style hostnames keep the s suffix).
+  const derived = acc.host.replace(/^imap(s?)\./i, 'smtp$1.');
+  const host = acc.smtpHost || derived;
+  // smtps.* hosts are implicit-TLS endpoints → port 465. Plain smtp.* → 587.
+  const port = acc.smtpPort ?? (/^smtps\./i.test(host) ? 465 : 587);
   const secure = acc.smtpSecure ?? (port === 465);
   const user = acc.smtpUser || acc.user;
   const pass = acc.smtpPass || acc.pass;
@@ -345,15 +349,29 @@ export async function sendMail(userId: number, opts: {
     auth: { user: s.user, pass: s.pass },
   });
   const from = s.fromName ? `${s.fromName} <${s.user}>` : s.user;
+  // Defensive address sanitize — strip wrapping parens/brackets/quotes the UI
+  // or pasted text may leak in ("addr@x.it)" → SMTP 550 invalid address).
+  const sanitizeAddrs = (v?: string): string | undefined => {
+    if (!v) return undefined;
+    const out = v.split(',').map((x) => {
+      const t = x.trim().replace(/^[\s<(\["']+|[\s>)\]"',;.]+$/g, '');
+      const m = t.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+      return m ? m[0] : t;
+    }).filter(Boolean);
+    return out.length ? out.join(', ') : undefined;
+  };
+  const toClean = sanitizeAddrs(opts.to) ?? '';
+  const ccClean = sanitizeAddrs(opts.cc);
+  const bccClean = sanitizeAddrs(opts.bcc);
   const headers: Record<string, string> = {};
   if (opts.inReplyTo) headers['In-Reply-To'] = `<${opts.inReplyTo}>`;
   if (opts.references?.length) headers['References'] = opts.references.map((r) => `<${r}>`).join(' ');
   try {
     const info = await transporter.sendMail({
       from,
-      to: opts.to,
-      cc: opts.cc || undefined,
-      bcc: opts.bcc || undefined,
+      to: toClean,
+      cc: ccClean,
+      bcc: bccClean,
       subject: opts.subject,
       text: opts.body,
       html: opts.html,
@@ -365,20 +383,28 @@ export async function sendMail(userId: number, opts: {
         contentType: a.contentType,
       })),
     });
-    // Persist in mail_messages as 'out'
-    const toArr = String(opts.to ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-    const ccArr = String(opts.cc ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-    const bccArr = String(opts.bcc ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    // Persist in mail_messages as 'out' — file it under the account's REAL
+    // sent folder name (e.g. "INBOX.Sent", "[Gmail]/Posta inviata") so the
+    // UI "Inviati" filter (which queries that exact name) finds it.
+    const sentFolderRow = await query<{ name: string }>(
+      `SELECT name FROM mail_folders WHERE user_id=$1 AND account_label=$2 AND kind='sent' LIMIT 1`,
+      [userId, acc.label],
+    ).catch(() => [] as { name: string }[]);
+    const sentFolder = sentFolderRow[0]?.name ?? 'Sent';
+    const toArr = toClean.split(',').map((x) => x.trim()).filter(Boolean);
+    const ccArr = (ccClean ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    const bccArr = (bccClean ?? '').split(',').map((x) => x.trim()).filter(Boolean);
     const mid = (info.messageId ?? '').replace(/^<|>$/g, '');
     const rows = await query<{ id: number }>(
       `INSERT INTO mail_messages(user_id, account_label, uid, message_id, in_reply_to, refs, thread_key,
          folder, direction, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, subject, preview, body_text, body_html,
          raw_size, ts, seen)
-       VALUES($1,$2,NULL,$3,$4,$5,$6,'Sent','out',$7,$8,$9,$10,$11,$12,$13,$14,$15,0,now(),true)
+       VALUES($1,$2,NULL,$3,$4,$5,$6,$16,'out',$7,$8,$9,$10,$11,$12,$13,$14,$15,0,now(),true)
        RETURNING id`,
       [
         userId, acc.label, mid || null, opts.inReplyTo ?? null, opts.references ?? [], opts.inReplyTo ?? mid ?? null,
         s.user, s.fromName ?? null, toArr, ccArr, bccArr, opts.subject, previewOf(opts.body), opts.body, opts.html ?? null,
+        sentFolder,
       ],
     );
     return { ok: true, messageId: mid, id: rows[0]?.id };
@@ -734,7 +760,10 @@ export async function syncAccount(userId: number, accountLabel: string, opts: { 
 
       for (const range of ranges) {
         try {
-          for await (const msg of client.fetch(range, { uid: true, source: true })) {
+          // Third param { uid: true } is REQUIRED — without it imapflow treats
+          // the range as sequence numbers, not UIDs ("1692:*" on a 734-msg
+          // mailbox silently matches nothing).
+          for await (const msg of client.fetch(range, { uid: true, source: true }, { uid: true })) {
             scanned++;
             try {
               const parsed = await simpleParser(msg.source as Buffer);

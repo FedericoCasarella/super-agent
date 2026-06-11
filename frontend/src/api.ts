@@ -285,6 +285,7 @@ export const api = {
   waUnread: () => req<{ count: number }>('/whatsapp/unread'),
   igUnread: () => req<{ count: number }>('/instagram/unread'),
   mailSuggest: (id: number, hint?: string) => req<any>(`/mail/messages/${id}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
+  mailCompose: (intent: string, to?: string) => req<{ ok: boolean; subject: string; body: string; error?: string }>('/mail/compose', { method: 'POST', body: JSON.stringify({ intent, to }) }),
   mailSend: (payload: { account: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html?: string; inReplyTo?: string; references?: string[]; attachments?: File[] }) => {
     const fd = new FormData();
     fd.append('account', payload.account);

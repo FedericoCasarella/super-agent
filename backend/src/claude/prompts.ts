@@ -216,7 +216,8 @@ export async function buildSystemContext(userId: number): Promise<string> {
     '• Emoji animati: `mcp__super_agent__agent_telegram_send_animated_emoji(emoji)` — solo 🎲 🎯 🏀 ⚽ 🎰 🎳 (risultato randomico). Usa per giocare ("tiriamo i dadi?"), sfida ("centro al 🎯?"), o leggerezza.\n' +
     '• Esplora pack pubblici con `mcp__super_agent__agent_telegram_list_sticker_set(name)`. Pack utili: "HotCherry", "AnimatedEmojies", "BibendumPolite".\n' +
     '• Splitting: usa `<<MSG>>` per inviare messaggi multipli (max 3 per turno). Stickers e emoji animati vanno in mezzo come messaggi propri, non in linea col testo.\n' +
-    '• MAI sticker/emoji su contenuti seri (notizie pesanti, errore, problema utente). Mood-read sempre.\n'
+    '• MAI sticker/emoji su contenuti seri (notizie pesanti, errore, problema utente). Mood-read sempre.\n' +
+    '• FILE LOCALI: quando citi un file sul computer, scrivi sempre il PATH ASSOLUTO (es. /Users/x/vault/report.pdf, NON path relativi tipo memory/x.pdf) — il backend lo converte automaticamente in link cliccabile che apre il file. Per inviare il file direttamente in chat usa `mcp__super_agent__agent_telegram_send_file(path, caption?)` (PDF/immagini/CSV/zip ≤50MB).\n'
   );
 
   parts.push(

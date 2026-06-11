@@ -459,6 +459,30 @@ export async function restartTelegramForUser(userId: number) {
   await startBotForUser(userId);
 }
 
+// Scan a message for local file paths (absolute or ~-relative) that exist on
+// disk and replace them with file-gateway URLs. Markdown-style [label](path)
+// is preserved by rewriting just the URL part.
+export async function linkifyLocalPaths(text: string): Promise<string> {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const pathMod = await import('node:path');
+  const { config } = await import('../config.js');
+  const { signFilePath } = await import('../api/routes.js');
+  // lvh.me origin (Telegram won't linkify "localhost") + HMAC sig so the
+  // click works without a session cookie.
+  const toUrl = (p: string) => `${config.fileGatewayOrigin}/api/files?path=${encodeURIComponent(p)}&sig=${signFilePath(p)}`;
+  const resolve = (raw: string): string | null => {
+    let p = raw.startsWith('~') ? pathMod.join(os.homedir(), raw.slice(1)) : raw;
+    p = pathMod.resolve(p);
+    try { return fs.statSync(p).isFile() ? p : null; } catch { return null; }
+  };
+  // Candidate tokens: absolute or ~ paths with an extension, no spaces.
+  return text.replace(/(~?\/[A-Za-z0-9._\-\/]+\.[A-Za-z0-9]{1,8})/g, (m) => {
+    const p = resolve(m);
+    return p ? toUrl(p) : m;
+  });
+}
+
 export async function sendTelegram(userId: number, text: string, origin: string = 'agent') {
   const { logOutbound } = await import('../comm/outbound_log.js');
   const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
@@ -480,6 +504,12 @@ export async function sendTelegram(userId: number, text: string, origin: string 
   // entity expansion). Long Claude outputs (SOPs, dossiers) hit 5–10k chars
   // and Telegram rejected the call silently — orchestrator logged "sent" but
   // user got nothing. Now split FIRST, then split by explicit <<MSG>> markers.
+  // Rewrite local file paths into clickable gateway links. The agent often
+  // references generated files by path ("/Users/x/report.pdf" or "~/y.csv");
+  // raw paths are useless on a phone. Every existing absolute path becomes
+  // http://<frontend>/api/files?path=<enc> which serves the real file to the
+  // authenticated browser session.
+  text = await linkifyLocalPaths(text);
   const MAX = 4000;
   function chunkByLen(s: string): string[] {
     if (s.length <= MAX) return [s];
@@ -559,6 +589,48 @@ export async function sendTelegramVoice(userId: number, text: string, origin: st
     // Fallback to text on send failure
     try { await sendTelegram(userId, text, origin); return { ok: true, fallback: 'text', error: err }; }
     catch { return { ok: false, error: err }; }
+  }
+}
+
+// Send a local file as a Telegram document (PDF, immagini, zip, qualunque
+// file generato dall'agente). 50MB bot API limit. Photos sent as photo for
+// inline preview, everything else as document.
+export async function sendTelegramDocument(
+  userId: number,
+  filePath: string,
+  caption?: string,
+  origin: string = 'agent',
+): Promise<{ ok: boolean; error?: string }> {
+  const { logOutbound } = await import('../comm/outbound_log.js');
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return { ok: false, error: 'telegram not configured' };
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  let stat;
+  try { stat = await fs.stat(filePath); }
+  catch { return { ok: false, error: `file non trovato: ${filePath}` }; }
+  if (!stat.isFile()) return { ok: false, error: `non è un file: ${filePath}` };
+  const MAX_BYTES = 50 * 1024 * 1024; // Telegram bot API hard limit
+  if (stat.size > MAX_BYTES) return { ok: false, error: `file troppo grande (${Math.round(stat.size / 1024 / 1024)}MB > 50MB)` };
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return { ok: false, error: 'telegram bot init failed' };
+  const filename = path.basename(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  const cap = caption ? String(caption).slice(0, 1024) : undefined;
+  try {
+    const src = { source: filePath, filename };
+    if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+      await entry.bot.telegram.sendPhoto(cfg.chatId, src, { caption: cap });
+    } else {
+      await entry.bot.telegram.sendDocument(cfg.chatId, src, { caption: cap });
+    }
+    await logOutbound({ userId, channel: 'telegram', status: 'sent', recipient: String(cfg.chatId), body: cap ?? filename, origin, meta: { file: filename, bytes: stat.size } });
+    return { ok: true };
+  } catch (e: any) {
+    const err = String(e?.message ?? e).slice(0, 500);
+    await logOutbound({ userId, channel: 'telegram', status: 'error', recipient: String(cfg.chatId), body: cap ?? filename, origin, error: err, meta: { file: filename } });
+    return { ok: false, error: err };
   }
 }
 

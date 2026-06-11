@@ -773,7 +773,9 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   flagged BOOLEAN NOT NULL DEFAULT false,
   starred BOOLEAN NOT NULL DEFAULT false,
   trashed_at TIMESTAMPTZ,                 -- soft-delete
-  UNIQUE(user_id, account_label, uid)
+  -- IMAP UIDs are unique PER FOLDER, not per account — uid 3 exists in both
+  -- INBOX and Sent. Constraint must include folder (see migrate fixups).
+  UNIQUE(user_id, account_label, folder, uid)
 );
 CREATE INDEX IF NOT EXISTS mail_messages_user_ts_idx ON mail_messages(user_id, ts DESC);
 CREATE INDEX IF NOT EXISTS mail_messages_user_account_ts_idx ON mail_messages(user_id, account_label, ts DESC);

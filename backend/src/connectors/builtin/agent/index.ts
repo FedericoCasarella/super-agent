@@ -738,6 +738,22 @@ const connector: Connector = {
     // ~5 turns max so the chat doesn't turn into a meme dump.
     // =====================================================================
     {
+      name: 'telegram_send_file',
+      description: 'Invia un file locale all\'utente su Telegram (PDF, immagini, CSV, zip — qualunque file ≤50MB). Usa il path assoluto del file generato. Le immagini (.jpg/.png/.webp) arrivano con preview inline, il resto come documento scaricabile. `caption` opzionale (max 1024 char).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path assoluto del file da inviare' },
+          caption: { type: 'string', description: 'Didascalia opzionale mostrata sotto il file' },
+        },
+        required: ['path'], additionalProperties: false,
+      },
+      handler: async (ctx, { path, caption }) => {
+        const { sendTelegramDocument } = await import('../../../telegram/bot.js');
+        return sendTelegramDocument(ctx.userId, String(path), caption ? String(caption) : undefined);
+      },
+    },
+    {
       name: 'telegram_send_sticker',
       description: 'Manda uno sticker su Telegram. `ref` = file_id sticker (preferito, riusabile) o URL .webp pubblico. Usa SOLO se il momento è giusto (festa, frustrazione che meriti meme, vittoria). Non spammare.',
       inputSchema: {

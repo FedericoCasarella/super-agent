@@ -14,6 +14,13 @@ export default defineConfig({
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   server: {
     port: 5173,
+    // Bind IPv4 loopback explicitly — default "localhost" can bind only ::1
+    // (IPv6), and lvh.me resolves to 127.0.0.1 → connection refused.
+    host: '127.0.0.1',
+    // lvh.me resolves to 127.0.0.1 — used for file-gateway links sent via
+    // Telegram (clients don't linkify "localhost"). Vite blocks unknown Host
+    // headers by default (DNS-rebinding protection), so allow it explicitly.
+    allowedHosts: ['lvh.me', '.lvh.me'],
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8787',

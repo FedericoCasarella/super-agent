@@ -13,6 +13,9 @@ export const config = {
   claudeBin: process.env.CLAUDE_BIN ?? 'claude',
   claudeModel: process.env.CLAUDE_MODEL ?? 'claude-sonnet-4-6',
   frontendOrigin: process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173',
+  // Public-looking origin for links sent via Telegram. Telegram clients don't
+  // linkify "localhost" (no TLD), so we use lvh.me which resolves to 127.0.0.1.
+  fileGatewayOrigin: process.env.FILE_GATEWAY_ORIGIN ?? 'http://lvh.me:5173',
   rootDir: path.resolve(process.cwd()),
   jwtSecret: process.env.JWT_SECRET ?? 'dev-insecure-change-me',
   cookieName: 'super_agent_session',
