@@ -60,15 +60,18 @@ async function archiveNote(userId: number, root: string, rel: string): Promise<s
 }
 
 // Per-user snapshot throttle: one safety snapshot per 10-minute apply session,
-// not one per proposal (bulk-apply of 20 proposals = 1 snapshot).
-const lastSnapshotAt = new Map<number, number>();
+// not one per proposal (bulk-apply of 20 proposals = 1 snapshot). DB-based so
+// it survives backend restarts (in-memory would reset on every dev reload).
 async function ensureSafetySnapshot(userId: number): Promise<void> {
-  const last = lastSnapshotAt.get(userId) ?? 0;
-  if (Date.now() - last < 10 * 60_000) return;
   try {
+    const recent = await query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain_snapshots
+       WHERE user_id=$1 AND created_at > now() - interval '10 minutes'`,
+      [userId],
+    );
+    if ((recent[0]?.c ?? 0) > 0) return;
     const { createSnapshots } = await import('./snapshots.js');
     await createSnapshots(userId, 'manual');
-    lastSnapshotAt.set(userId, Date.now());
   } catch (e) { console.error('[proposals] safety snapshot failed', e); }
 }
 
