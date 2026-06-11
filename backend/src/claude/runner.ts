@@ -148,6 +148,16 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   ];
   args.push('--allowed-tools', allowed.join(','));
 
+  // Runner is headless — no human to click "Allow" on the permission prompt.
+  // claude.ai-scope MCPs (Flowspace, Notion, Gmail, etc.) use UUID server names
+  // internally (e.g. `mcp__2e9361dd-…__create_task`) but `claude mcp list` only
+  // surfaces the display name ("claude.ai flowspace"), so the wildcard
+  // `mcp__claude_ai_flowspace__*` from externalMcpAllowEntries() never matches.
+  // Without bypass, every MCP write call hangs on a prompt nobody sees and the
+  // agent answers "Flowspace MCP richiede approvazione" / "OAuth scaduto" /
+  // similar invented excuses.
+  args.push('--permission-mode', 'bypassPermissions');
+
   // Pre-load vault paths for brain:access mapping
   const vaults = await listVaults(userId).catch(() => []);
   const claudeCwd = opts.cwd ?? process.cwd();

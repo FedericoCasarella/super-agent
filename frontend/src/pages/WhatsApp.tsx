@@ -1030,6 +1030,11 @@ export default function WhatsApp() {
                           <Wand2 size={9} /> AI suggested
                         </div>
                       )}
+                      {isAi && (
+                        <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-accent2 font-semibold mb-1">
+                          <Wand2 size={9} /> AI suggested
+                        </div>
+                      )}
                       {isAudio(m.text) ? (
                         <div>
                           <AudioWave size="md" />

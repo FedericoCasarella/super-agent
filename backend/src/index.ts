@@ -22,6 +22,24 @@ async function main() {
   app.use('/api', router);
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
+  // Desktop/Electron build: serve compiled frontend from FRONTEND_DIST. Falls
+  // through to API routes above; SPA fallback returns index.html for unknown
+  // GET paths so React Router handles client-side routing.
+  const frontendDist = process.env.FRONTEND_DIST;
+  if (frontendDist) {
+    const path = await import('node:path');
+    const fs = await import('node:fs');
+    if (fs.existsSync(frontendDist)) {
+      app.use(express.static(frontendDist));
+      app.get(/^(?!\/api|\/health|\/ws).*/, (_req, res) => {
+        res.sendFile(path.join(frontendDist, 'index.html'));
+      });
+      console.log(`[backend] serving frontend from ${frontendDist}`);
+    } else {
+      console.warn(`[backend] FRONTEND_DIST=${frontendDist} not found`);
+    }
+  }
+
   const server = http.createServer(app);
   attachWs(server);
 

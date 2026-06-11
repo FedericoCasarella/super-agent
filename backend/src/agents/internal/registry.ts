@@ -9,11 +9,10 @@ import peopleAnalyzer from './people_analyzer.js';
 import vaultDreamer from './vault_dreamer.js';
 import vaultLibrarian from './vault_librarian.js';
 import vaultGardener from './vault_gardener.js';
-import selfieAgent from './selfie_agent.js';
 import thoughtDigest from './thought_digest.js';
 import { sendTelegram } from '../../telegram/bot.js';
 
-const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer, vaultDreamer, vaultLibrarian, vaultGardener, selfieAgent, thoughtDigest];
+const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer, vaultDreamer, vaultLibrarian, vaultGardener, thoughtDigest];
 
 export function listInternalAgents(): InternalAgent[] {
   return REGISTRY;
