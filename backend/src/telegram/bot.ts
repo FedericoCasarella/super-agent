@@ -66,6 +66,7 @@ async function startBotForUser(userId: number) {
     { command: 'agents',  description: 'Lista sub-agent in esecuzione' },
     { command: 'status',  description: 'Stato agent: quota, agent attivi, ultima riflessione' },
     { command: 'tasks',   description: 'Task schedulati attivi' },
+    { command: 'goal',    description: 'Briefing operativo: decisioni, agenda, da rispondere, scadenze' },
     { command: 'think',   description: 'Butta un pensiero: lo analizzo e lo collego al second brain' },
     { command: 'thoughts',description: 'Pensieri di oggi · on/off per la modalità diario' },
     { command: 'reset',   description: 'Pulisci la cronologia conversazione (ultimi 30 msg)' },
@@ -103,6 +104,38 @@ async function startBotForUser(userId: number) {
       finally { try { stop(); } catch {} }
     })();
   };
+
+  // /goal — Chief of Staff briefing on demand. The internal-agent pipeline
+  // (runInternalAgent) handles run + humanize + Telegram notify, so here we
+  // only ack and fire. notify_on_run check is bypassed: an explicit /goal
+  // ALWAYS gets its briefing back.
+  bot.command('goal', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    await ctx.reply('🌅 Preparo il briefing… (1-2 min: leggo mail, chat, CRM, calendario e Flowspace)').catch(() => {});
+    (async () => {
+      const stop = await startTyping(userId).catch(() => (() => {}));
+      try {
+        const { runInternalAgent, getInternalAgent } = await import('../agents/internal/registry.js');
+        const out: any = await runInternalAgent(userId, 'chief_of_staff');
+        // runInternalAgent notifies only if notify_on_run=true — send explicitly
+        // here if it's off so /goal always answers.
+        const rows = await query<{ notify_on_run: boolean }>(
+          `SELECT notify_on_run FROM internal_agents WHERE user_id=$1 AND name='chief_of_staff'`,
+          [userId],
+        );
+        if (!rows[0]?.notify_on_run) {
+          const meta = getInternalAgent('chief_of_staff');
+          const msg = meta?.humanize?.(out?.report ?? out ?? {}, 'it', out?.status === 'error' ? 'error' : 'ok')
+            ?? String(out?.report?.briefing ?? 'Briefing non disponibile.');
+          await sendTelegram(userId, msg, 'chief_of_staff');
+        }
+      } catch (e: any) {
+        await sendTelegram(userId, `🌅 Briefing fallito: ${String(e?.message ?? e).slice(0, 200)}`, 'chief_of_staff').catch(() => {});
+      } finally { try { stop(); } catch {} }
+    })();
+  });
 
   bot.command('think', async (ctx) => {
     const chatId = ctx.chat.id;
