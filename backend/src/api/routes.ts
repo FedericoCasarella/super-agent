@@ -1129,10 +1129,12 @@ router.get('/sub-agents', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
   const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
   const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const sort = req.query.sort ? String(req.query.sort) : undefined;
+  const dir = req.query.dir === 'asc' ? 'asc' as const : req.query.dir === 'desc' ? 'desc' as const : undefined;
   if (req.query.paginated === '1') {
-    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset, withTotal: true }));
+    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset, sort, dir, withTotal: true }));
   } else {
-    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset }));
+    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset, sort, dir }));
   }
 });
 router.get('/sub-agents/stats', async (req, res) => {

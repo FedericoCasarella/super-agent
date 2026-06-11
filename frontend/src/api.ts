@@ -229,10 +229,11 @@ export const api = {
   waPending: () => req<any>('/whatsapp/pending'),
   waBonify: (limit: number, onlyChat?: string) => req<any>('/whatsapp/bonify', { method: 'POST', body: JSON.stringify({ limit, onlyChat }) }),
   subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
-  subAgentsListPaginated: (opts: { statuses?: string[]; q?: string; limit?: number; offset?: number } = {}) => {
+  subAgentsListPaginated: (opts: { statuses?: string[]; q?: string; limit?: number; offset?: number; sort?: string; dir?: 'asc' | 'desc' } = {}) => {
     const p = new URLSearchParams({ paginated: '1' });
     if (opts.statuses?.length) p.set('status', opts.statuses.join(','));
     if (opts.q) p.set('q', opts.q);
+    if (opts.sort) { p.set('sort', opts.sort); p.set('dir', opts.dir ?? 'desc'); }
     p.set('limit', String(opts.limit ?? 25));
     p.set('offset', String(opts.offset ?? 0));
     return req<{ rows: any[]; total: number }>(`/sub-agents?${p}`);

@@ -99,7 +99,7 @@ export default function Agents() {
       {view === 'table' ? (
         <DataTable<Agent>
           persistKey="agents"
-          fetcher={async ({ q, page, pageSize, filters }) => {
+          fetcher={async ({ q, page, pageSize, filters, sort }) => {
             // Client-side filter/paginate. Read directly from the `items`
             // state closure (re-captured each render) instead of itemsRef —
             // refs update in a parent effect that runs AFTER the child's
@@ -115,22 +115,35 @@ export default function Agents() {
             if (state.includes('off')) rows = rows.filter((a) => !a.enabled);
             if (state.includes('running')) rows = rows.filter((a) => a.running);
             if (state.includes('notify')) rows = rows.filter((a) => a.notify_on_run);
+            if (sort) {
+              const dir = sort.dir === 'asc' ? 1 : -1;
+              rows = [...rows].sort((a: any, b: any) => {
+                if (sort.key === 'schedule') return ((a.hour * 60 + a.minute) - (b.hour * 60 + b.minute)) * dir;
+                if (sort.key === 'last_run_at') {
+                  const av = a.last_run_at ? new Date(a.last_run_at).getTime() : 0;
+                  const bv = b.last_run_at ? new Date(b.last_run_at).getTime() : 0;
+                  return (av - bv) * dir;
+                }
+                if (sort.key === 'enabled') return ((a.enabled ? 1 : 0) - (b.enabled ? 1 : 0)) * dir;
+                return String(a[sort.key] ?? '').localeCompare(String(b[sort.key] ?? '')) * dir;
+              });
+            }
             const total = rows.length;
             return { rows: rows.slice(page * pageSize, (page + 1) * pageSize), total };
           }}
           columns={[
             { key: 'icon', header: '', width: 'w-12', render: (a) => <img src={AGENT_ICON[a.name] ?? FALLBACK_ICON} className="w-8 h-8 rounded-lg object-cover" /> },
-            { key: 'title', header: 'Perk', render: (a) => (
+            { key: 'title', header: 'Perk', sortable: true, render: (a) => (
               <div className="min-w-0">
                 <div className="font-medium truncate">{a.title}</div>
                 <div className="text-[11px] text-muted-foreground truncate max-w-[420px]">{a.description}</div>
               </div>
             )},
-            { key: 'schedule', header: 'Orario', width: 'w-24', render: (a) => <span className="font-mono text-xs">{pad(a.hour)}:{pad(a.minute)}</span> },
-            { key: 'enabled', header: 'Stato', width: 'w-24', render: (a) => a.enabled ? <Chip tone="on">on</Chip> : <Chip>off</Chip> },
-            { key: 'last_run_at', header: 'Ultima esec.', width: 'w-44', render: (a) => a.last_run_at ? (
+            { key: 'schedule', header: 'Orario', width: 'w-24', sortable: true, render: (a) => <span className="font-mono text-xs">{pad(a.hour)}:{pad(a.minute)}</span> },
+            { key: 'enabled', header: 'Stato', width: 'w-24', sortable: true, render: (a) => a.enabled ? <Chip tone="on">on</Chip> : <Chip>off</Chip> },
+            { key: 'last_run_at', header: 'Ultima esec.', width: 'w-44', sortable: true, render: (a) => a.last_run_at ? (
               <div className="text-xs">
-                <div className="text-muted-foreground">{new Date(a.last_run_at).toLocaleString()}</div>
+                <div className="font-mono">{new Date(a.last_run_at).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' })} {new Date(a.last_run_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</div>
                 <div className={a.last_status === 'ok' ? 'text-ok' : 'text-err'}>{a.last_status}</div>
               </div>
             ) : <span className="text-muted-foreground">—</span> },

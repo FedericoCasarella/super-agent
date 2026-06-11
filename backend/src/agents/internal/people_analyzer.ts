@@ -102,6 +102,37 @@ function buildPrompt(personName: string, personNote: string, linkedCorpus: strin
   ].join('\n');
 }
 
+// Analyze ONE person and (re)write their psy-profile. Shared by the daily
+// first-time run below and by wa_people_sync, which force-refreshes profiles
+// of people with fresh WhatsApp activity.
+export async function analyzePersonPsy(
+  userId: number, root: string, slug: string, name: string,
+): Promise<{ ok: boolean; skipped?: boolean; error?: string; linked?: number }> {
+  try {
+    const personNote = await readNote(userId, `people/${slug}.md`);
+    const { count, corpus } = await collectLinkedContent(userId, slug);
+    const prompt = buildPrompt(name, personNote?.content ?? '', corpus);
+    const res = await runClaude(userId, prompt, {
+      cwd: root, timeoutMs: 300_000, kind: 'people-analyzer',
+      meta: { slug, name, linkedCount: count },
+    });
+    if (!res.ok) return { ok: false, error: res.stderr?.slice(0, 200) ?? 'failed' };
+    const body = res.text.trim();
+    if (!body || /DATI INSUFFICIENTI/i.test(body.slice(0, 200))) return { ok: false, skipped: true };
+    await writeNote(userId, psyPathForSlug(slug), {
+      kind: 'psy-profile',
+      title: `${name} — Profilo psicologico`,
+      person: slug,
+      visibility: 'protected',
+      tags: ['psy-profile', `person/${slug}`],
+      generated_at: new Date().toISOString(),
+    }, body);
+    return { ok: true, linked: count };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e).slice(0, 200) };
+  }
+}
+
 async function run(userId: number): Promise<AgentReport> {
   const started = Date.now();
   const root = await getVaultRoot(userId);
@@ -117,34 +148,10 @@ async function run(userId: number): Promise<AgentReport> {
   for (const p of people) {
     const psyRel = psyPathForSlug(p.slug);
     if (await fileExists(root, psyRel)) { skipped++; continue; }
-    try {
-      const personNote = await readNote(userId, `people/${p.slug}.md`);
-      const { count, corpus } = await collectLinkedContent(userId, p.slug);
-      const prompt = buildPrompt(p.name, personNote?.content ?? '', corpus);
-      const res = await runClaude(userId, prompt, {
-        cwd: root, timeoutMs: 300_000, kind: 'people-analyzer',
-        meta: { slug: p.slug, name: p.name, linkedCount: count },
-      });
-      if (!res.ok) { errors++; details.push({ slug: p.slug, error: res.stderr?.slice(0, 200) ?? 'failed' }); continue; }
-      const body = res.text.trim();
-      if (!body || /DATI INSUFFICIENTI/i.test(body.slice(0, 200))) {
-        details.push({ slug: p.slug, note: 'insufficient data, skipped write' });
-        skipped++; continue;
-      }
-      await writeNote(userId, psyRel, {
-        kind: 'psy-profile',
-        title: `${p.name} — Profilo psicologico`,
-        person: p.slug,
-        visibility: 'protected',
-        tags: ['psy-profile', `person/${p.slug}`],
-        generated_at: new Date().toISOString(),
-      }, body);
-      analyzed++;
-      details.push({ slug: p.slug, ok: true, linked: count, cost: res.costUsd ?? null });
-    } catch (e: any) {
-      errors++;
-      details.push({ slug: p.slug, error: String(e?.message ?? e).slice(0, 200) });
-    }
+    const r = await analyzePersonPsy(userId, root, p.slug, p.name);
+    if (r.ok) { analyzed++; details.push({ slug: p.slug, ok: true, linked: r.linked }); }
+    else if (r.skipped) { skipped++; details.push({ slug: p.slug, note: 'insufficient data, skipped write' }); }
+    else { errors++; details.push({ slug: p.slug, error: r.error }); }
   }
 
   return {

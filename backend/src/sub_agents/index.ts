@@ -187,9 +187,25 @@ async function notifyDone(userId: number, sa: SubAgent, status: 'done' | 'error'
   await sendTelegram(userId, `${head}\n\n${body}`);
 }
 
-export async function listSubAgents(userId: number, opts: { status?: string; statuses?: string[]; q?: string; limit?: number; offset?: number; withTotal?: boolean } = {}): Promise<SubAgent[] | { rows: SubAgent[]; total: number }> {
+// Sortable columns whitelist (key → SQL expression) — anything else falls
+// back to created_at. 'executed' matches what the UI shows in the "Eseguito"
+// column: end time when available, else start, else creation.
+const SUB_AGENT_SORT_COLS: Record<string, string> = {
+  created_at: 'created_at',
+  started_at: 'started_at',
+  ended_at: 'ended_at',
+  executed: 'COALESCE(ended_at, started_at, created_at)',
+  cost_usd: 'cost_usd',
+  status: 'status',
+  title: 'title',
+};
+
+export async function listSubAgents(userId: number, opts: { status?: string; statuses?: string[]; q?: string; limit?: number; offset?: number; withTotal?: boolean; sort?: string; dir?: 'asc' | 'desc' } = {}): Promise<SubAgent[] | { rows: SubAgent[]; total: number }> {
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
   const offset = Math.max(opts.offset ?? 0, 0);
+  const sortCol = SUB_AGENT_SORT_COLS[opts.sort ?? ''] ?? 'created_at';
+  const sortDir = opts.dir === 'asc' ? 'ASC' : 'DESC';
+  const orderBy = `ORDER BY ${sortCol} ${sortDir} NULLS LAST`;
   const where: string[] = ['user_id=$1'];
   const params: any[] = [userId];
   if (opts.statuses?.length) { params.push(opts.statuses); where.push(`status = ANY($${params.length}::text[])`); }
@@ -199,14 +215,14 @@ export async function listSubAgents(userId: number, opts: { status?: string; sta
     const totalRows = await query<{ c: number }>(`SELECT count(*)::int AS c FROM sub_agents WHERE ${where.join(' AND ')}`, params);
     params.push(limit, offset);
     const rows = await query<SubAgent>(
-      `SELECT * FROM sub_agents WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      `SELECT * FROM sub_agents WHERE ${where.join(' AND ')} ${orderBy} LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
     return { rows, total: totalRows[0]?.c ?? 0 };
   }
   params.push(limit, offset);
   return await query<SubAgent>(
-    `SELECT * FROM sub_agents WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    `SELECT * FROM sub_agents WHERE ${where.join(' AND ')} ${orderBy} LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params,
   );
 }
