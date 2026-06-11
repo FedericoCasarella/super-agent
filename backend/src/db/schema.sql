@@ -842,3 +842,23 @@ CREATE TABLE IF NOT EXISTS thoughts (
   digested_on DATE                                -- data del digest che l'ha aggregato
 );
 CREATE INDEX IF NOT EXISTS thoughts_user_ts_idx ON thoughts(user_id, ts DESC);
+
+-- Brain Consolidator — proposte di riscrittura del vault generate dal perk
+-- notturno. NIENTE viene applicato automaticamente: l'utente approva/scarta
+-- dal pannello in /brain. payload contiene tutto il necessario per l'apply.
+CREATE TABLE IF NOT EXISTS brain_proposals (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('merge','distill','prune','link')),
+  title TEXT NOT NULL,                 -- riga breve mostrata in lista
+  description TEXT,                    -- spiegazione della proposta
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- merge:   { sources: [path...], target_path, content }    → scrive target, archivia sources
+  -- distill: { sources: [path...], target_path, content }    → scrive profilo distillato, linka sources
+  -- prune:   { sources: [path...] }                          → sposta in archive/<data>/
+  -- link:    { path, related: [path...] }                    → aggiunge related: al frontmatter
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','applied','rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS brain_proposals_user_status_idx ON brain_proposals(user_id, status, created_at DESC);

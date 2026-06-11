@@ -47,6 +47,9 @@ export const api = {
     return req<{ rows: any[]; total: number }>(`/brain/snapshots?${p}`);
   },
   brainSnapshotRun: () => req<{ ok: boolean; snapshots: any[] }>('/brain/snapshots/run', { method: 'POST' }),
+  brainProposals: (status: string = 'pending') => req<{ rows: any[] }>(`/brain/proposals?status=${encodeURIComponent(status)}`),
+  brainProposalApply: (id: number) => req<{ ok: boolean; error?: string; result?: any }>(`/brain/proposals/${id}/apply`, { method: 'POST' }),
+  brainProposalReject: (id: number) => req<{ ok: boolean }>(`/brain/proposals/${id}/reject`, { method: 'POST' }),
   brainSnapshotDelete: (id: number) => req<{ ok: boolean }>(`/brain/snapshots/${id}`, { method: 'DELETE' }),
   brainSnapshotRestore: (id: number) =>
     req<{ ok: boolean; restored?: number; safety_snapshot_id?: number; error?: string }>(`/brain/snapshots/${id}/restore`, { method: 'POST' }),

@@ -10,6 +10,7 @@ import BrainGraph3DConstellation from '../components/BrainGraph3DConstellation';
 import MarkdownView from '../components/MarkdownView';
 import BrainOverview from '../components/BrainOverview';
 import BrainFileExplorer from '../components/BrainFileExplorer';
+import BrainProposals from '../components/BrainProposals';
 import { FolderTree } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { api as apiX } from '../api';
@@ -118,7 +119,10 @@ export default function Brain() {
     <div className="space-y-5 h-full flex flex-col">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-semibold text-gradient">{t('brain.title2')}</h1>
-        <Button size="sm" variant="ghost" onClick={() => setCreateOpen(true)}>+ Cervello</Button>
+        <div className="flex items-center gap-2">
+          <BrainProposals onApplied={() => { setGraphKey((k) => k + 1); reloadList(); }} />
+          <Button size="sm" variant="ghost" onClick={() => setCreateOpen(true)}>+ Cervello</Button>
+        </div>
       </div>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2 flex-wrap">

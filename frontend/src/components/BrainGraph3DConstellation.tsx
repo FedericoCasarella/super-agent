@@ -376,8 +376,10 @@ export default function BrainGraph3DConstellation({
     try {
       const charge = fg.d3Force?.('charge');
       if (charge?.strength) {
+        // Leaf charge -110 (was -25): the grappolo breathes — notes spread
+        // inside the cluster ball instead of collapsing onto the hub.
         charge
-          .strength((n: any) => n?.__isRoot ? -9000 : n?.__isHub ? -6000 : -25)
+          .strength((n: any) => n?.__isRoot ? -9000 : n?.__isHub ? -6000 : -110)
           .distanceMax(2200)
           .theta(0.9);
       }
@@ -387,15 +389,15 @@ export default function BrainGraph3DConstellation({
           const srcObj = typeof l.source === 'object' ? l.source : null;
           const tgtObj = typeof l.target === 'object' ? l.target : null;
           if (tgtObj?.__isRoot || srcObj?.__isRoot) return 380; // hub → root: long
-          if (tgtObj?.__isHub || srcObj?.__isHub) return 38;    // leaf → hub: tight
+          if (tgtObj?.__isHub || srcObj?.__isHub) return 95;    // leaf → hub: roomy orbit
           // Real wikilink: same-cluster = tight, cross-cluster = ignore distance
           const sc = srcObj?.__cluster;
           const tc = tgtObj?.__cluster;
-          return sc && sc === tc ? 28 : 400;
+          return sc && sc === tc ? 60 : 400;
         }).strength((l: any) => {
           const srcObj = typeof l.source === 'object' ? l.source : null;
           const tgtObj = typeof l.target === 'object' ? l.target : null;
-          if (tgtObj?.__isHub || srcObj?.__isHub) return 0.95;  // leaf → hub: anchor
+          if (tgtObj?.__isHub || srcObj?.__isHub) return 0.7;   // leaf → hub: anchor (softer → more spread)
           if (tgtObj?.__isRoot || srcObj?.__isRoot) return 0.7;
           // Real wikilink: same cluster cohesion vs cross-cluster ≈zero so
           // clusters never get dragged into each other. Render link stays

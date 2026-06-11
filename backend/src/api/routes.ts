@@ -536,6 +536,29 @@ router.post('/brain/snapshots/run', async (req, res) => {
     res.json({ ok: true, snapshots: await createSnapshots(req.user!.id, 'manual') });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
+
+// Brain Consolidator proposals — list / apply / reject. Apply runs through
+// brain/proposals.ts which snapshots the vault first.
+router.get('/brain/proposals', async (req, res) => {
+  try {
+    const { listProposals } = await import('../brain/proposals.js');
+    res.json({ rows: await listProposals(req.user!.id, String(req.query.status ?? 'pending')) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/brain/proposals/:id/apply', async (req, res) => {
+  try {
+    const { applyProposal } = await import('../brain/proposals.js');
+    const r = await applyProposal(req.user!.id, Number(req.params.id));
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/brain/proposals/:id/reject', async (req, res) => {
+  try {
+    const { rejectProposal } = await import('../brain/proposals.js');
+    res.json(await rejectProposal(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
 router.post('/brain/snapshots/:id/restore', async (req, res) => {
   try {
     const { restoreSnapshot } = await import('../brain/snapshots.js');
