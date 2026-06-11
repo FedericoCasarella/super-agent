@@ -83,16 +83,30 @@ function enhanceGraph(g: { nodes: any[]; links: any[]; origins?: string[]; vault
       Math.cos(phi),
     ]);
   });
-  // Galaxy layout: root pinned at center, hubs pinned on sphere surface at
-  // Fibonacci positions. d3's fx/fy/fz freeze a node's position — NOTHING
-  // (charge, links, custom force) can move it. This guarantees:
+  // Galaxy layout: root pinned at center, hubs pinned at Fibonacci directions.
+  // d3's fx/fy/fz freeze a node's position — NOTHING (charge, links, custom
+  // force) can move it. This guarantees:
   //   - BRAIN always at exact center
-  //   - cluster hubs evenly spread on sphere surface, fixed forever
+  //   - cluster hubs spread in 3D, fixed forever
   //   - cross-cluster wikilinks can't drag clusters together
-  const HUB_R = 480;
+  //
+  // Radius = IMPORTANCE: clusters with more notes orbit CLOSER to the brain
+  // (gravity metaphor), small ones drift to the outer shell. Gives depth
+  // variety instead of everything pinned on one sphere surface.
+  const countByCluster = new Map<string, number>();
+  for (const n of realNodes) countByCluster.set(n.__cluster, (countByCluster.get(n.__cluster) ?? 0) + 1);
+  const maxCount = Math.max(1, ...countByCluster.values());
+  const R_NEAR = 250;  // biggest cluster
+  const R_FAR = 540;   // smallest cluster
+  const radiusFor = (c: string): number => {
+    // sqrt scale → mid-size clusters don't all collapse to the outer edge
+    const t = Math.sqrt((countByCluster.get(c) ?? 1) / maxCount);
+    return R_FAR - (R_FAR - R_NEAR) * t;
+  };
   const hubs = clusters.map((c) => {
     const d = dirs.get(c)!;
-    const x = d[0] * HUB_R, y = d[1] * HUB_R, z = d[2] * HUB_R;
+    const R = radiusFor(c);
+    const x = d[0] * R, y = d[1] * R, z = d[2] * R;
     return {
       id: `__hub__:${c}`,
       title: c.toUpperCase(),
@@ -119,16 +133,27 @@ function enhanceGraph(g: { nodes: any[]; links: any[]; origins?: string[]; vault
     const d = dirs.get(n.__cluster);
     if (!d) continue;
     const jitter = () => (Math.random() - 0.5) * 40;
-    n.x = d[0] * HUB_R + jitter();
-    n.y = d[1] * HUB_R + jitter();
-    n.z = d[2] * HUB_R + jitter();
+    const R = radiusFor(n.__cluster);
+    n.x = d[0] * R + jitter();
+    n.y = d[1] * R + jitter();
+    n.z = d[2] * R + jitter();
   }
   const extraLinks: any[] = [];
   for (const n of realNodes) extraLinks.push({ source: n.id, target: `__hub__:${n.__cluster}`, __synthetic: true });
   for (const h of hubs) extraLinks.push({ source: h.id, target: '__root__', __synthetic: true });
+  // Star topology: drop cross-cluster wikilinks entirely. Clusters connect
+  // ONLY through the center (leaf → hub → BRAIN). Intra-cluster links kept.
+  const clusterById = new Map(realNodes.map((n) => [n.id, n.__cluster]));
+  const sameClusterLinks = (g.links ?? []).filter((l: any) => {
+    const s = typeof l.source === 'object' ? l.source.id : l.source;
+    const t = typeof l.target === 'object' ? l.target.id : l.target;
+    const sc = clusterById.get(s);
+    const tc = clusterById.get(t);
+    return sc != null && sc === tc;
+  });
   return {
     nodes: [root, ...hubs, ...realNodes],
-    links: [...(g.links ?? []), ...extraLinks],
+    links: [...sameClusterLinks, ...extraLinks],
     origins: g.origins ?? [],
     vaults: g.vaults ?? [],
     clusters,
@@ -768,6 +793,38 @@ export default function BrainGraph3DConstellation({
       if (old) scene.remove(old);
       scene.add(wire);
     }
+    // Spine — thick glowing cylinders BRAIN → each hub. Lines can't have
+    // width on most GPUs; cylinders can. Hubs are pinned (fx/fy/fz) so the
+    // spine is static: build once per data change, no per-tick updates.
+    {
+      const old = scene.getObjectByName('brain-spine');
+      if (old) scene.remove(old);
+      const spine = new THREE.Group();
+      spine.name = 'brain-spine';
+      const yAxis = new THREE.Vector3(0, 1, 0);
+      for (const n of data.nodes as any[]) {
+        if (!n.__isHub) continue;
+        const end = new THREE.Vector3(n.fx ?? n.x ?? 0, n.fy ?? n.y ?? 0, n.fz ?? n.z ?? 0);
+        const len = end.length();
+        if (len < 1) continue;
+        const dir = end.clone().normalize();
+        const color = new THREE.Color(clusterColor(n.__cluster));
+        // Core beam
+        const geom = new THREE.CylinderGeometry(1.4, 1.4, len, 6, 1, true);
+        const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55, depthWrite: false });
+        const cyl = new THREE.Mesh(geom, mat);
+        // Outer glow (wider, fainter)
+        const glowGeom = new THREE.CylinderGeometry(3.2, 3.2, len, 6, 1, true);
+        const glowMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.12, depthWrite: false });
+        const glow = new THREE.Mesh(glowGeom, glowMat);
+        for (const m of [cyl, glow]) {
+          m.position.copy(dir.clone().multiplyScalar(len / 2));
+          m.quaternion.setFromUnitVectors(yAxis, dir);
+        }
+        spine.add(cyl, glow);
+      }
+      scene.add(spine);
+    }
     // Instanced node mesh
     const mat = new THREE.MeshBasicMaterial({ vertexColors: false });
     const inst = new THREE.InstancedMesh(sharedSphereGeom, mat, data.nodes.length);
@@ -821,6 +878,8 @@ export default function BrainGraph3DConstellation({
     return () => {
       if (instMeshRef.current) { scene.remove(instMeshRef.current); (instMeshRef.current.material as THREE.Material).dispose(); instMeshRef.current = null; }
       if (linesRef.current) { scene.remove(linesRef.current); linesRef.current.geometry.dispose(); (linesRef.current.material as THREE.Material).dispose(); linesRef.current = null; }
+      const sp = scene.getObjectByName('brain-spine');
+      if (sp) scene.remove(sp);
     };
   }, [data, sharedSphereGeom]);
 
