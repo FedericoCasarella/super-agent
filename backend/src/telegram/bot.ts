@@ -459,6 +459,68 @@ export async function restartTelegramForUser(userId: number) {
   await startBotForUser(userId);
 }
 
+// ─── Telegram poller self-heal watchdog ──────────────────────────────────────
+// Failure mode (sess.8411): the long-poll getUpdates loop can die silently —
+// Telegraf gives up after N 409-Conflict retries, or the loop throws mid-stream
+// — while the HTTP server stays healthy. Outbound sendMessage keeps working, so
+// nothing looks broken, but incoming messages pile up unconsumed
+// (getWebhookInfo.pending_update_count climbs) and the bot goes mute to the user.
+// A healthy long-poll drains pending to ~0 within seconds and acks updates as it
+// pulls them (independent of handler/turn duration), so pending staying >0 across
+// two samples ≈ dead poller, not a busy orchestrator. When detected → restart the
+// poller in place (stop wipes the stale registry entry so start re-launches).
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+const watchdogState = new Map<number, { lastPending: number; stuck: number }>();
+
+async function checkTelegramPoller() {
+  let users: { user_id: number }[];
+  try {
+    users = await query<{ user_id: number }>(
+      `SELECT DISTINCT user_id FROM settings WHERE key='telegram' AND user_id IS NOT NULL`
+    );
+  } catch { return; }
+  for (const { user_id: uid } of users) {
+    const cfg = await getSetting<{ token: string }>(uid, 'telegram');
+    if (!cfg?.token) continue;
+    let info: any;
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${cfg.token}/getWebhookInfo`);
+      const j: any = await r.json();
+      if (!j?.ok) continue;
+      info = j.result;
+    } catch { continue; } // network blip — don't count as stuck
+    const pending: number = info?.pending_update_count ?? 0;
+    // A webhook silently set elsewhere also kills polling — surface it.
+    if (info?.url) console.warn(`[telegram:${uid}] watchdog: unexpected webhook set (${info.url}) — polling is blocked`);
+    const st = watchdogState.get(uid) ?? { lastPending: 0, stuck: 0 };
+    // Stuck = messages are waiting AND the queue is not draining (>= previous sample).
+    if (pending >= 1 && pending >= st.lastPending) st.stuck += 1;
+    else st.stuck = 0;
+    st.lastPending = pending;
+    if (st.stuck >= 2) {
+      console.error(`[telegram:${uid}] watchdog: poller stuck (pending=${pending} for ${st.stuck} samples) — restarting`);
+      try { bus.emit('telegram:watchdog-restart', { userId: uid, pending } as any); } catch {}
+      st.stuck = 0;
+      st.lastPending = 0;
+      try {
+        await stopBotForUser(uid);
+        await startBotForUser(uid);
+        console.log(`[telegram:${uid}] watchdog: poller restarted`);
+      } catch (e: any) {
+        console.error(`[telegram:${uid}] watchdog: restart failed — exiting for supervisor respawn`, e?.message ?? e);
+        process.exit(1); // last resort: let the (immortal) supervisor bring up a clean process
+      }
+    }
+    watchdogState.set(uid, st);
+  }
+}
+
+export function startTelegramWatchdog(intervalMs = 60_000) {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(() => { checkTelegramPoller().catch(() => {}); }, intervalMs);
+  console.log(`[telegram] poller watchdog armed (${Math.round(intervalMs / 1000)}s)`);
+}
+
 export async function sendTelegram(userId: number, text: string, origin: string = 'agent') {
   const { logOutbound } = await import('../comm/outbound_log.js');
   const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');

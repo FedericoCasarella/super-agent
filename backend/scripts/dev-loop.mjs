@@ -126,6 +126,7 @@ function shutdown(sig) {
   if (restartTimer) clearTimeout(restartTimer);
   if (watcher) try { watcher.close(); } catch {}
   killChild(sig);
+  restoreLaunchdBackend(); // hand the bot back to the launchd prod backend
   setTimeout(() => process.exit(0), 500);
 }
 
@@ -172,6 +173,40 @@ function killOrphanDevProcs() {
     spawnSync('kill', ['-9', ...victims.map(String)]);
   } catch {}
 }
+// Mutual-exclusion guard vs the launchd-managed PROD backend (sess.8411).
+// The 24/7 bot runs under launchd `com.polpo.brain.backend` (node dist/index.js).
+// A manual `npm run dev` here spins a SECOND backend (tsx) that fights it for
+// port 8787 AND for the SAME Telegram bot token → 409 Conflict → one poller
+// gives up silently → bot goes mute. Root fix: dev and prod must never coexist.
+// On startup we bootout the launchd backend (runtime-only; it auto-reloads on
+// next login). On shutdown we bootstrap it back, so quitting dev never leaves
+// the bot dead. macOS-only + plist-gated → no-op everywhere else.
+const LAUNCHD_LABEL = 'com.polpo.brain.backend';
+const LAUNCHD_PLIST = path.join(process.env.HOME ?? '', 'Library/LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+let bootedOutLaunchd = false;
+
+function launchdGuardAvailable() {
+  return process.platform === 'darwin' && typeof process.getuid === 'function' && fs.existsSync(LAUNCHD_PLIST);
+}
+
+function stopLaunchdBackend() {
+  if (!launchdGuardAvailable()) return;
+  const domain = `gui/${process.getuid()}/${LAUNCHD_LABEL}`;
+  const r = spawnSync('launchctl', ['bootout', domain], { encoding: 'utf8' });
+  if (r.status === 0) {
+    bootedOutLaunchd = true;
+    console.warn(`[dev-loop] launchd ${LAUNCHD_LABEL} booted out — dev owns the bot token now (restored on exit)`);
+  } // non-zero = wasn't loaded → nothing to stop
+}
+
+function restoreLaunchdBackend() {
+  if (!bootedOutLaunchd) return;
+  const domain = `gui/${process.getuid()}`;
+  spawnSync('launchctl', ['bootstrap', domain, LAUNCHD_PLIST], { encoding: 'utf8' });
+  console.warn(`[dev-loop] launchd ${LAUNCHD_LABEL} restored — prod backend resumes the bot`);
+}
+
+stopLaunchdBackend();
 killOrphanDevProcs();
 killExistingOnPort();
 

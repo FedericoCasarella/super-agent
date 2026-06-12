@@ -8,7 +8,7 @@ import { authRouter } from './auth/routes.js';
 import { attachWs } from './api/ws.js';
 import { loadConnectors } from './connectors/registry.js';
 import { startScheduler } from './scheduler/index.js';
-import { startAllTelegramBots } from './telegram/bot.js';
+import { startAllTelegramBots, startTelegramWatchdog } from './telegram/bot.js';
 import { startOrchestrator } from './agent/orchestrator.js';
 import { writeMcpConfig } from './mcp/config.js';
 import { refreshExternalMcps } from './claude/external_mcps.js';
@@ -56,6 +56,7 @@ async function main() {
   flows.attachFlowDispatchers();
   flows.startFlowScheduler();
   await startAllTelegramBots();
+  startTelegramWatchdog();
   // Auto-restart WhatsApp sessions for users with existing creds on disk
   try {
     const fs = await import('node:fs/promises');
