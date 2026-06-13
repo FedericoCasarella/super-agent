@@ -669,6 +669,36 @@ export default function BrainGraph3DConstellation({
           satGroupRef.current.rotation.y += 0.0006 * dt;
           satGroupRef.current.rotation.x = 0.18;
         }
+        // LOD swap: far → sparse decimated cloud (few points, soft haze); near
+        // → full node spheres. Hard threshold with hysteresis so it doesn't
+        // flicker at the boundary. On show, sync cloud positions once (the sim
+        // has usually stopped ticking by the time the user zooms out).
+        {
+          const tgt = ctrls?.target;
+          const d = cam && tgt ? cam.position.distanceTo(tgt) : 0;
+          const inst = instMeshRef.current;
+          const cloud = cloudRef.current;
+          const cur = farLodRef.current;
+          const wantFar = cur ? d > 1750 : d > 2050; // hysteresis band — cloud only when really far
+          if (wantFar !== cur && inst && cloud) {
+            farLodRef.current = wantFar;
+            inst.visible = !wantFar;
+            cloud.visible = wantFar;
+            if (linesRef.current) linesRef.current.visible = !wantFar;
+            if (wantFar) {
+              // one-time position sync from the (now static) nodes
+              const cattr = cloud.geometry.getAttribute('position') as THREE.BufferAttribute;
+              const carr = cattr.array as Float32Array;
+              const idx = cloudIdxRef.current;
+              const nodes2 = data.nodes as any[];
+              for (let j = 0; j < idx.length; j++) {
+                const n = nodes2[idx[j]];
+                carr[j * 3] = n.x ?? 0; carr[j * 3 + 1] = n.y ?? 0; carr[j * 3 + 2] = n.z ?? 0;
+              }
+              cattr.needsUpdate = true;
+            }
+          }
+        }
         const renderer = fg.renderer?.();
         const scene = fg.scene?.();
         if (renderer && scene && cam) renderer.render(scene, cam);
@@ -766,6 +796,23 @@ export default function BrainGraph3DConstellation({
   const instMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const linesRef = useRef<THREE.LineSegments | null>(null);
   const tmpMat4 = useRef(new THREE.Matrix4()).current;
+  // LOD cloud: from far we DON'T render all 700+ node spheres — we swap to a
+  // sparse haze of a few sampled points per cluster. Fewer elements, reads as
+  // a soft cloud. The sampled indices are kept in cloudIdxRef so onEngineTick
+  // only updates those positions. Hard swap (no crossfade) at FAR distance.
+  const cloudRef = useRef<THREE.Points | null>(null);
+  const cloudIdxRef = useRef<number[]>([]);
+  const farLodRef = useRef<boolean>(false);
+  const cloudSprite = useMemo(() => {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const ctx = c.getContext('2d')!;
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.4, 'rgba(255,255,255,0.4)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+    const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter; return tex;
+  }, []);
 
   // ── GOAL SATELLITES: gli obiettivi orbitano lentamente fuori dalla sfera del
   // brain come pianeti. Cliccando un satellite la pagina brain apre il dettaglio
@@ -877,6 +924,40 @@ export default function BrainGraph3DConstellation({
     inst.computeBoundingSphere();
     scene.add(inst);
     instMeshRef.current = inst;
+    // Decimated LOD cloud — sample a SUBSET of nodes (~1 in 6 leaves + every
+    // hub/root) so from far the brain is a sparse haze, not 700 balls.
+    {
+      const oldCloud = scene.getObjectByName('brain-cloud');
+      if (oldCloud) scene.remove(oldCloud);
+      const STRIDE = 6;
+      const idx: number[] = [];
+      for (let i = 0; i < data.nodes.length; i++) {
+        const n: any = data.nodes[i];
+        if (n.__isHub || n.__isRoot || i % STRIDE === 0) idx.push(i);
+      }
+      cloudIdxRef.current = idx;
+      const cPos = new Float32Array(idx.length * 3);
+      const cCol = new Float32Array(idx.length * 3);
+      const _cc = new THREE.Color();
+      idx.forEach((ni, j) => {
+        const n: any = data.nodes[ni];
+        cPos[j * 3] = n.x ?? 0; cPos[j * 3 + 1] = n.y ?? 0; cPos[j * 3 + 2] = n.z ?? 0;
+        _cc.set(colorFor(n)); cCol[j * 3] = _cc.r; cCol[j * 3 + 1] = _cc.g; cCol[j * 3 + 2] = _cc.b;
+      });
+      const cloudGeom = new THREE.BufferGeometry();
+      cloudGeom.setAttribute('position', new THREE.BufferAttribute(cPos, 3).setUsage(THREE.DynamicDrawUsage));
+      cloudGeom.setAttribute('color', new THREE.BufferAttribute(cCol, 3));
+      const cloudMat = new THREE.PointsMaterial({
+        size: 26, map: cloudSprite, vertexColors: true, transparent: true, opacity: 0.85,
+        depthWrite: false, sizeAttenuation: true,
+      });
+      const cloud = new THREE.Points(cloudGeom, cloudMat);
+      cloud.name = 'brain-cloud';
+      cloud.frustumCulled = false;
+      cloud.visible = false; // shown only when far (render loop toggles)
+      scene.add(cloud);
+      cloudRef.current = cloud;
+    }
     // Lines geometry — 2 positions per link, all in one buffer.
     // Per-vertex colors → each segment gradients from source-node color to
     // target-node color (matches the connected node visually).
@@ -904,6 +985,7 @@ export default function BrainGraph3DConstellation({
     return () => {
       if (instMeshRef.current) { scene.remove(instMeshRef.current); (instMeshRef.current.material as THREE.Material).dispose(); instMeshRef.current = null; }
       if (linesRef.current) { scene.remove(linesRef.current); linesRef.current.geometry.dispose(); (linesRef.current.material as THREE.Material).dispose(); linesRef.current = null; }
+      if (cloudRef.current) { scene.remove(cloudRef.current); cloudRef.current.geometry.dispose(); (cloudRef.current.material as THREE.Material).dispose(); cloudRef.current = null; }
       const sp = scene.getObjectByName('brain-spine');
       if (sp) scene.remove(sp);
     };
@@ -920,7 +1002,7 @@ export default function BrainGraph3DConstellation({
     satMetaRef.current = new Map();
     if (goalSats.length === 0) { satGroupRef.current = null; return; }
     const STATUS_COLOR: Record<string, number> = { active: 0x4fd1ff, draft: 0xb98bff, done: 0x34d399, paused: 0xfbbf24 };
-    const ORBIT_R = 760;
+    const ORBIT_R = 980;
     const group = new THREE.Group();
     group.name = 'goal-satellites';
     const N = goalSats.length;
@@ -931,12 +1013,34 @@ export default function BrainGraph3DConstellation({
       const dir = new THREE.Vector3(Math.cos(theta) * Math.sin(phi), Math.cos(phi), Math.sin(theta) * Math.sin(phi));
       const pos = dir.clone().multiplyScalar(ORBIT_R);
       const color = STATUS_COLOR[g.status] ?? 0x9aa4c0;
+      const colObj = new THREE.Color(color);
       const core = new THREE.Mesh(new THREE.SphereGeometry(11, 16, 12), new THREE.MeshBasicMaterial({ color }));
       core.position.copy(pos);
       const glow = new THREE.Mesh(new THREE.SphereGeometry(22, 16, 12), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.18, depthWrite: false }));
       glow.position.copy(pos);
       group.add(core, glow);
       satMetaRef.current.set(core, g);
+
+      // Orbit path — the satellite rotates around Y with the group, so its path
+      // is a latitude circle at height y, radius = sqrt(x²+z²). Draw it as a
+      // dashed ring so the orbit reads visually. computeLineDistances() is
+      // required for the dash pattern.
+      const y = pos.y;
+      const ringR = Math.hypot(pos.x, pos.z);
+      if (ringR > 1) {
+        const SEG = 128;
+        const pts: number[] = [];
+        for (let s = 0; s <= SEG; s++) {
+          const a = (s / SEG) * Math.PI * 2;
+          pts.push(Math.cos(a) * ringR, y, Math.sin(a) * ringR);
+        }
+        const ringGeom = new THREE.BufferGeometry();
+        ringGeom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+        const ringMat = new THREE.LineDashedMaterial({ color: colObj, transparent: true, opacity: 0.32, dashSize: 14, gapSize: 12, depthWrite: false });
+        const ring = new THREE.Line(ringGeom, ringMat);
+        ring.computeLineDistances();
+        group.add(ring);
+      }
     });
     scene.add(group);
     satGroupRef.current = group;
@@ -1092,13 +1196,11 @@ export default function BrainGraph3DConstellation({
       }
       // Goal satellites — always-on clickable pills projected from their LIVE
       // world position (the group rotates each frame). Color by status.
-      (window as any).__satDbg = { size: satMetaRef.current.size, lastZ: null as any };
       if (satMetaRef.current.size > 0) {
         const STATUS_HEX: Record<string, string> = { active: '#4fd1ff', draft: '#b98bff', done: '#34d399', paused: '#fbbf24' };
         for (const [obj, g] of satMetaRef.current) {
           obj.getWorldPosition(tmpW);
           tmpV.copy(tmpW).project(cam);
-          (window as any).__satDbg.lastZ = tmpV.z;
           if (tmpV.z > 1 || tmpV.z < -1) continue;
           const x = (tmpV.x * 0.5 + 0.5) * rect.width;
           const y = (-tmpV.y * 0.5 + 0.5) * rect.height;
@@ -1179,6 +1281,18 @@ export default function BrainGraph3DConstellation({
     }
     inst.instanceMatrix.needsUpdate = true;
     inst.computeBoundingSphere(); // keep raycast bounds in sync with sim
+    // Sync the decimated cloud's sampled positions with the live nodes.
+    const cloud = cloudRef.current;
+    if (cloud && cloud.visible) {
+      const cattr = cloud.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const carr = cattr.array as Float32Array;
+      const idx = cloudIdxRef.current;
+      for (let j = 0; j < idx.length; j++) {
+        const n = nodes[idx[j]];
+        carr[j * 3] = n.x ?? 0; carr[j * 3 + 1] = n.y ?? 0; carr[j * 3 + 2] = n.z ?? 0;
+      }
+      cattr.needsUpdate = true;
+    }
     // Update line positions from links.
     const lines = linesRef.current;
     if (lines) {
