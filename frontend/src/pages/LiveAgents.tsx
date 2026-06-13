@@ -155,24 +155,35 @@ export function LiveAgentsPanel() {
       <DataTable<SubAgent>
         persistKey="live-agents"
         refreshKey={agents.length}
-        fetcher={async ({ q, page, pageSize, filters }) => {
-          const r: any = await api.subAgentsListPaginated({ statuses: filters.status, q, limit: pageSize, offset: page * pageSize });
+        fetcher={async ({ q, page, pageSize, filters, sort }) => {
+          const r: any = await api.subAgentsListPaginated({
+            statuses: filters.status, q, limit: pageSize, offset: page * pageSize,
+            sort: sort?.key === 'status_chip' ? 'status' : sort?.key, dir: sort?.dir,
+          });
           // Fallback if backend returns plain array (older route)
           if (Array.isArray(r)) return { rows: r as SubAgent[], total: r.length };
           return { rows: r.rows ?? [], total: r.total ?? 0 };
         }}
         columns={[
           { key: 'status', header: '', width: 'w-10', render: (a) => <StatusIcon status={a.status} size={16} /> },
-          { key: 'title', header: 'Titolo', render: (a) => (
-            <div className="min-w-0">
+          { key: 'title', header: 'Titolo', sortable: true, width: 'w-[240px] max-w-[240px]', render: (a) => (
+            <div className="min-w-0 max-w-[240px]">
               <div className="font-medium truncate">{a.title}</div>
-              {a.brief && <div className="text-[11px] text-muted-foreground truncate max-w-[420px]">{a.brief}</div>}
+              {a.brief && <div className="text-[11px] text-muted-foreground truncate">{a.brief}</div>}
             </div>
           )},
-          { key: 'status_chip', header: 'Stato', width: 'w-28', render: (a) => <Chip tone={STATUS_TONE[a.status] ?? 'default'}>{a.status}</Chip> },
-          { key: 'cost_usd', header: 'Costo', width: 'w-20', align: 'right', render: (a) => <span className="font-mono text-xs">{a.cost_usd != null ? `$${Number(a.cost_usd).toFixed(4)}` : '—'}</span> },
+          { key: 'status_chip', header: 'Stato', width: 'w-28', sortable: true, render: (a) => <Chip tone={STATUS_TONE[a.status] ?? 'default'}>{a.status}</Chip> },
+          { key: 'cost_usd', header: 'Costo', width: 'w-20', align: 'right', sortable: true, render: (a) => <span className="font-mono text-xs">{a.cost_usd != null ? `$${Number(a.cost_usd).toFixed(4)}` : '—'}</span> },
           { key: 'duration', header: 'Durata', width: 'w-20', align: 'right', render: (a) => <span className="font-mono text-xs text-muted-foreground">{fmtDur(a.started_at, a.ended_at)}</span> },
-          { key: 'created_at', header: 'Quando', width: 'w-24', align: 'right', render: (a) => <span className="text-xs text-muted-foreground">{fmtAgo(a.ended_at ?? a.created_at)}</span> },
+          { key: 'executed', header: 'Eseguito', width: 'w-36', align: 'right', sortable: true, render: (a) => {
+            const ts = a.ended_at ?? a.started_at ?? a.created_at;
+            return (
+              <div className="text-xs text-right">
+                <div className="font-mono">{new Date(ts).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' })} {new Date(ts).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</div>
+                <div className="text-muted-foreground">{fmtAgo(ts)}</div>
+              </div>
+            );
+          }},
         ]}
         chipFilters={[
           {

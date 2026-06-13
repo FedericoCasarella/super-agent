@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { Button, Card, Chip, Field, Input, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
+import GoalsSection from '../components/GoalsSection';
 import { Map as MapIcon, Plus, Trash2, CheckCircle2, Circle, Pause, AlertOctagon, Clock, Target, BarChart3, Lightbulb, X, Edit3 } from 'lucide-react';
 
 type Status = 'pending' | 'in_progress' | 'done' | 'blocked' | 'parked';
@@ -48,6 +49,8 @@ export default function RoadmapPage() {
   const [creating, setCreating] = useState<Horizon | null>(null);
   const [stratOpen, setStratOpen] = useState(false);
   const [kpiOpen, setKpiOpen] = useState<Kpi | null>(null);
+  const [rtab, setRtab] = useState<'goals' | 'strategy'>(() => (localStorage.getItem('roadmap_tab') === 'strategy' ? 'strategy' : 'goals'));
+  useEffect(() => { localStorage.setItem('roadmap_tab', rtab); }, [rtab]);
   const toast = useToast();
   const dlg = useDialog();
 
@@ -86,6 +89,45 @@ export default function RoadmapPage() {
         <Button variant="ghost" size="sm" onClick={load} disabled={loading}>{loading ? '…' : '↻'}</Button>
       </div>
 
+      {/* KPI in cima — colpo d'occhio sulle metriche prima di tutto */}
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2"><Target size={16} className="text-cyan-300" /><h2 className="text-base font-semibold">KPI</h2></div>
+          <Button size="sm" variant="ghost" onClick={() => setKpiOpen({ id: '', name: '', current: 0, target: 0 })}><Plus size={13} className="inline mr-1 -mt-0.5" />KPI</Button>
+        </div>
+        {data.kpis.length === 0 ? (
+          <div className="text-xs text-muted-foreground py-3 text-center">Nessun KPI ancora. Aggiungine uno per tracciare metriche.</div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {data.kpis.map((k) => {
+              const pct = k.target > 0 ? Math.min(100, Math.round((k.current / k.target) * 100)) : 0;
+              const tone = pct >= 90 ? '#34d399' : pct >= 50 ? '#fbbf24' : '#f87171';
+              return (
+                <div key={k.id} className="p-3 rounded-xl bg-surface2/40 border border-border cursor-pointer hover:border-accent/30" onClick={() => setKpiOpen(k)}>
+                  <div className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">{k.name || 'kpi'}</div>
+                  <div className="text-xl font-semibold mt-1">{k.current}<span className="text-muted-foreground text-sm">/{k.target}{k.unit ? ` ${k.unit}` : ''}</span></div>
+                  <div className="mt-2 h-1.5 rounded-full bg-surface/80 overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: tone }} />
+                  </div>
+                  {(k.history?.length ?? 0) > 1 && (
+                    <div className="mt-2"><Sparkline points={(k.history ?? []).map((h) => h.value)} color={tone} small /></div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* Tab: Obiettivi | Strategia */}
+      <div className="flex gap-1 bg-surface2/70 border border-border rounded-md p-1 w-fit">
+        <Button size="sm" variant={rtab === 'goals' ? 'primary' : 'ghost'} onClick={() => setRtab('goals')}>Obiettivi</Button>
+        <Button size="sm" variant={rtab === 'strategy' ? 'primary' : 'ghost'} onClick={() => setRtab('strategy')}>Strategia</Button>
+      </div>
+
+      {rtab === 'goals' && <GoalsSection />}
+
+      {rtab === 'strategy' && <>
       {/* Stats cards */}
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -192,36 +234,6 @@ export default function RoadmapPage() {
         })}
       </div>
 
-      {/* KPIs */}
-      <Card>
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2"><Target size={16} className="text-cyan-300" /><h2 className="text-base font-semibold">KPI</h2></div>
-          <Button size="sm" variant="ghost" onClick={() => setKpiOpen({ id: '', name: '', current: 0, target: 0 })}><Plus size={13} className="inline mr-1 -mt-0.5" />KPI</Button>
-        </div>
-        {data.kpis.length === 0 ? (
-          <div className="text-xs text-muted-foreground py-3 text-center">Nessun KPI ancora. Aggiungine uno per tracciare metriche.</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {data.kpis.map((k) => {
-              const pct = k.target > 0 ? Math.min(100, Math.round((k.current / k.target) * 100)) : 0;
-              const tone = pct >= 90 ? '#34d399' : pct >= 50 ? '#fbbf24' : '#f87171';
-              return (
-                <div key={k.id} className="p-3 rounded-xl bg-surface2/40 border border-border cursor-pointer hover:border-accent/30" onClick={() => setKpiOpen(k)}>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">{k.name || 'kpi'}</div>
-                  <div className="text-xl font-semibold mt-1">{k.current}<span className="text-muted-foreground text-sm">/{k.target}{k.unit ? ` ${k.unit}` : ''}</span></div>
-                  <div className="mt-2 h-1.5 rounded-full bg-surface/80 overflow-hidden">
-                    <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: tone }} />
-                  </div>
-                  {(k.history?.length ?? 0) > 1 && (
-                    <div className="mt-2"><Sparkline points={(k.history ?? []).map((h) => h.value)} color={tone} small /></div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Card>
-
       {/* Activity log */}
       {data.log.length > 0 && (
         <Card>
@@ -239,6 +251,7 @@ export default function RoadmapPage() {
           </div>
         </Card>
       )}
+      </>}
 
       {creating && <TodoModal mode="create" horizon={creating} onClose={() => setCreating(null)} onSaved={() => { setCreating(null); load(); }} />}
       {editing && <TodoModal mode="edit" horizon={editing.horizon} initial={editing.todo} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} onMove={(to) => move(editing.horizon, editing.todo, to)} />}

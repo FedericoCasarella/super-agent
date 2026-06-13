@@ -773,7 +773,9 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   flagged BOOLEAN NOT NULL DEFAULT false,
   starred BOOLEAN NOT NULL DEFAULT false,
   trashed_at TIMESTAMPTZ,                 -- soft-delete
-  UNIQUE(user_id, account_label, uid)
+  -- IMAP UIDs are unique PER FOLDER, not per account — uid 3 exists in both
+  -- INBOX and Sent. Constraint must include folder (see migrate fixups).
+  UNIQUE(user_id, account_label, folder, uid)
 );
 CREATE INDEX IF NOT EXISTS mail_messages_user_ts_idx ON mail_messages(user_id, ts DESC);
 CREATE INDEX IF NOT EXISTS mail_messages_user_account_ts_idx ON mail_messages(user_id, account_label, ts DESC);
@@ -840,3 +842,72 @@ CREATE TABLE IF NOT EXISTS thoughts (
   digested_on DATE                                -- data del digest che l'ha aggregato
 );
 CREATE INDEX IF NOT EXISTS thoughts_user_ts_idx ON thoughts(user_id, ts DESC);
+
+-- Brain Consolidator — proposte di riscrittura del vault generate dal perk
+-- notturno. NIENTE viene applicato automaticamente: l'utente approva/scarta
+-- dal pannello in /brain. payload contiene tutto il necessario per l'apply.
+CREATE TABLE IF NOT EXISTS brain_proposals (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('merge','distill','prune','link')),
+  title TEXT NOT NULL,                 -- riga breve mostrata in lista
+  description TEXT,                    -- spiegazione della proposta
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- merge:   { sources: [path...], target_path, content }    → scrive target, archivia sources
+  -- distill: { sources: [path...], target_path, content }    → scrive profilo distillato, linka sources
+  -- prune:   { sources: [path...] }                          → sposta in archive/<data>/
+  -- link:    { path, related: [path...] }                    → aggiunge related: al frontmatter
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','applied','rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS brain_proposals_user_status_idx ON brain_proposals(user_id, status, created_at DESC);
+
+-- Goals — obiettivi di lungo periodo con piano, KPI e steward settimanale.
+-- Human-in-the-loop: il piano generato dall'agente resta in pending_plan
+-- finché l'utente non lo approva; le azioni settimanali passano da
+-- agent_proposals (keyboard Telegram ✅/❌).
+CREATE TABLE IF NOT EXISTS goals (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  objective TEXT NOT NULL,                -- misurabile: "10 clienti AMPERA"
+  deadline DATE,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','paused','done','archived')),
+  -- kpis: [{id,name,unit,target,current,history:[{ts,value}]}]
+  kpis JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- plan (approvato): { milestones:[{id,title,due,status}], notes }
+  plan JSONB,
+  -- pending_plan (proposta agente in attesa di approvazione umana)
+  pending_plan JSONB,
+  last_review_at TIMESTAMPTZ,             -- ultimo giro dello steward
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS goals_user_status_idx ON goals(user_id, status);
+
+-- Goal execution linkage — proposte e sub-agent spawnati per un obiettivo
+-- portano il goal_id, così la pagina /goals/:id mostra l'esecuzione reale.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='agent_proposals' AND column_name='goal_id') THEN
+    ALTER TABLE agent_proposals ADD COLUMN goal_id BIGINT REFERENCES goals(id) ON DELETE SET NULL;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sub_agents' AND column_name='goal_id') THEN
+    ALTER TABLE sub_agents ADD COLUMN goal_id BIGINT REFERENCES goals(id) ON DELETE SET NULL;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS sub_agents_goal_idx ON sub_agents(goal_id) WHERE goal_id IS NOT NULL;
+
+-- Milestone-level agent linkage: which milestone a sub-agent works on.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sub_agents' AND column_name='milestone_id') THEN
+    ALTER TABLE sub_agents ADD COLUMN milestone_id TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='agent_proposals' AND column_name='milestone_id') THEN
+    ALTER TABLE agent_proposals ADD COLUMN milestone_id TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;

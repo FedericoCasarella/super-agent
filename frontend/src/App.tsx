@@ -22,6 +22,7 @@ import Connectors from './pages/Connectors';
 import Brain from './pages/Brain';
 import Settings from './pages/Settings';
 import Roadmap from './pages/Roadmap';
+import GoalDetailPage from './pages/GoalDetail';
 import Logs from './pages/Logs';
 import Tasks from './pages/Tasks';
 import Agents from './pages/Agents';
@@ -48,40 +49,53 @@ export default function App() {
   // full-screen overlay when the backend is unreachable (even on the auth
   // page). Once /api/ping resolves, the rest of the app mounts as usual.
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  // ONE probe loop that never dies. The old version had two effects: the
+  // boot loop exited on first success, and the mid-session watchdog unmounted
+  // itself the moment backendUp flipped to false — so after a single hiccup
+  // (laptop sleep, backend reload, proxy 503) NOBODY retried and the overlay
+  // stayed forever until a manual page reload.
+  // Rules: down → retry every 2s; up → heartbeat every 10s; 2 consecutive
+  // failures required before declaring down (one blip ≠ outage); a tab
+  // wake-up (visibilitychange) probes immediately.
   useEffect(() => {
     let cancelled = false;
     let timer: any;
+    let failStreak = 0;
     async function probe() {
+      if (cancelled) return;
+      let ok = false;
       try {
         const r = await fetch('/api/ping', { credentials: 'include' });
-        if (cancelled) return;
-        if (r.ok) {
-          setBackendUp(true);
-          return;
-        }
-        setBackendUp(false);
-      } catch {
-        if (cancelled) return;
-        setBackendUp(false);
+        ok = r.ok;
+      } catch { ok = false; }
+      if (cancelled) return;
+      if (ok) {
+        failStreak = 0;
+        setBackendUp(true);
+        timer = setTimeout(probe, 10_000);
+      } else {
+        failStreak++;
+        // First-ever probe (boot) shows overlay immediately; mid-session we
+        // tolerate one blip before flipping.
+        setBackendUp((prev) => (prev === null ? false : failStreak >= 2 ? false : prev));
+        timer = setTimeout(probe, 2000);
       }
-      timer = setTimeout(probe, 2000);
     }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        // Tab woke up from background/sleep — don't wait for the next tick.
+        if (timer) clearTimeout(timer);
+        probe();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
     probe();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
-
-  // Once the backend comes back, kick the periodic probe again to detect
-  // outages mid-session.
-  useEffect(() => {
-    if (backendUp !== true) return;
-    const iv = setInterval(async () => {
-      try {
-        const r = await fetch('/api/ping', { credentials: 'include' });
-        if (!r.ok) setBackendUp(false);
-      } catch { setBackendUp(false); }
-    }, 10_000);
-    return () => clearInterval(iv);
-  }, [backendUp]);
 
   if (backendUp !== true) {
     return (
@@ -155,6 +169,7 @@ function AppInner() {
                 <Route path="/connectors" element={<Connectors />} />
                 <Route path="/brain" element={<Brain />} />
                 <Route path="/roadmap" element={<Roadmap />} />
+                <Route path="/goals/:id" element={<GoalDetailPage />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/perks" element={<Agents />} />
                 <Route path="/perks/:name" element={<AgentDetail />} />

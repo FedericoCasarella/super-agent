@@ -72,7 +72,14 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
     if (existing.status === 'connected' || existing.status === 'qr') {
       return { ok: true, status: existing.status };
     }
-    // Force teardown if stuck in 'starting' or 'closed' — recreate
+    // 'starting' is a NORMAL transient state (socket handshake + QR fetch take
+    // seconds). Tearing it down on every concurrent call (UI status poll +
+    // watchdog + auto-recover) killed the in-flight socket → QR storm/flicker.
+    // Only recreate if it's genuinely stuck (>45s).
+    if (existing.status === 'starting' && Date.now() - existing.startedAt < 45_000) {
+      return { ok: true, status: 'starting' };
+    }
+    // Genuinely stuck 'starting' or 'closed' — teardown and recreate.
     try { existing.sock.end(undefined); } catch {}
     sessions.delete(userId);
   }
@@ -1313,18 +1320,30 @@ export async function logoutWaForUser(userId: number): Promise<void> {
   bus.emit('wa:closed', { userId, code: 'logout' });
 }
 
+// Throttle auto-recover kicks from status polls: the QR view polls every few
+// seconds and each poll used to fire startWaForUser → overlapping sockets →
+// QR flicker. One kick per 15s per user is plenty (close handler has its own
+// 3s retry anyway).
+const lastStatusKick = new Map<number, number>();
+function kickThrottled(userId: number) {
+  const last = lastStatusKick.get(userId) ?? 0;
+  if (Date.now() - last < 15_000) return;
+  lastStatusKick.set(userId, Date.now());
+  startWaForUser(userId).catch(() => {});
+}
+
 export function getWaStatus(userId: number): { status: string; qr?: string; me?: any } {
   const s = sessions.get(userId);
   if (!s) {
     // Auto-recover: fire-and-forget restart so the NEXT status check finds an
     // active session. Avoids the agent looping on "idle → tell user QR".
-    startWaForUser(userId).catch(() => {});
+    kickThrottled(userId);
     return { status: 'starting' };
   }
   if (s.status === 'closed') {
     // Stale/closed → kick a restart and report 'starting' to the caller.
     sessions.delete(userId);
-    startWaForUser(userId).catch(() => {});
+    kickThrottled(userId);
     return { status: 'starting' };
   }
   return { status: s.status, qr: s.qrDataUrl, me: s.me };

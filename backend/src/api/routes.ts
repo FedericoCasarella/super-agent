@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import crypto from 'node:crypto';
+import { config } from '../config.js';
 import { query, getSetting, setSetting } from '../db/index.js';
 import { quotaGuard } from '../quota.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
@@ -45,6 +47,40 @@ router.post('/tools/:name', async (req, res) => {
 // Liveness probe — no auth, used by the frontend to detect "backend down"
 // and show a blocking overlay until it comes back.
 router.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// File gateway — serves a local file so links sent via Telegram open the real
+// file in the browser. Mounted BEFORE requireUser: Telegram clicks arrive
+// without a session cookie, so auth is an HMAC signature over the resolved
+// path (only the backend can mint valid links). Cookie session also accepted
+// as fallback for in-app use. `download=1` forces attachment disposition.
+export function signFilePath(absPath: string): string {
+  return crypto.createHmac('sha256', config.jwtSecret).update(absPath).digest('hex').slice(0, 32);
+}
+router.get('/files', async (req, res) => {
+  try {
+    const raw = String(req.query.path ?? '');
+    if (!raw) return res.status(400).json({ error: 'path required' });
+    const path = await import('node:path');
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    // Resolve ~ and relative → absolute
+    let p = raw.startsWith('~') ? path.join(os.homedir(), raw.slice(1)) : raw;
+    p = path.resolve(p);
+    // Auth: valid signature OR logged-in session cookie.
+    const sig = String(req.query.sig ?? '');
+    let authed = sig && sig === signFilePath(p);
+    if (!authed) {
+      const { verifyToken } = await import('../auth/index.js');
+      const tok = (req as any).cookies?.[config.cookieName];
+      authed = !!(tok && verifyToken(tok));
+    }
+    if (!authed) return res.status(401).json({ error: 'unauthorized' });
+    if (!fs.existsSync(p) || !fs.statSync(p).isFile()) return res.status(404).json({ error: `file non trovato: ${p}` });
+    const download = String(req.query.download ?? '') === '1';
+    if (download) return res.download(p);
+    res.sendFile(p);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 
 router.use(requireUser);
 
@@ -499,6 +535,181 @@ router.post('/brain/snapshots/run', async (req, res) => {
     const { createSnapshots } = await import('../brain/snapshots.js');
     res.json({ ok: true, snapshots: await createSnapshots(req.user!.id, 'manual') });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// ---------------------------------------------------------------------------
+// GOALS — obiettivi con piano approvabile, KPI per-goal e steward settimanale.
+// ---------------------------------------------------------------------------
+router.get('/goals', async (req, res) => {
+  try {
+    const { listGoals } = await import('../goals/index.js');
+    res.json({ rows: await listGoals(req.user!.id, req.query.archived === '1') });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/goals', async (req, res) => {
+  try {
+    const { createGoal } = await import('../goals/index.js');
+    const { title, objective, deadline } = req.body ?? {};
+    if (!title || !objective) return res.status(400).json({ error: 'title e objective richiesti' });
+    res.json(await createGoal(req.user!.id, { title, objective, deadline }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/goals/:id', async (req, res) => {
+  try {
+    const { updateGoal } = await import('../goals/index.js');
+    res.json(await updateGoal(req.user!.id, Number(req.params.id), req.body ?? {}));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/goals/:id/plan/generate', quotaGuard, async (req, res) => {
+  try {
+    const { generatePlan } = await import('../goals/index.js');
+    const r = await generatePlan(req.user!.id, Number(req.params.id));
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/goals/:id/plan/approve', async (req, res) => {
+  try {
+    const { approvePlan } = await import('../goals/index.js');
+    const r = await approvePlan(req.user!.id, Number(req.params.id));
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/goals/:id/plan/reject', async (req, res) => {
+  try {
+    const { rejectPlan } = await import('../goals/index.js');
+    res.json(await rejectPlan(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/goals/:id/kpis', async (req, res) => {
+  try {
+    const { upsertGoalKpi } = await import('../goals/index.js');
+    res.json(await upsertGoalKpi(req.user!.id, Number(req.params.id), req.body ?? {}));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/goals/:id/kpis/:kpiId', async (req, res) => {
+  try {
+    const { deleteGoalKpi } = await import('../goals/index.js');
+    res.json(await deleteGoalKpi(req.user!.id, Number(req.params.id), String(req.params.kpiId)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+// Esecuzione di un goal: proposte (in attesa di ✅ Telegram / approvate /
+// rifiutate) + sub-agent spawnati con stato, costo e risultato.
+router.get('/goals/:id/execution', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const goalId = Number(req.params.id);
+    const proposals = await query<any>(
+      `SELECT id::int, title, reason, proposals, status, created_at, decided_at
+       FROM agent_proposals WHERE user_id=$1 AND goal_id=$2 ORDER BY created_at DESC LIMIT 50`,
+      [userId, goalId],
+    );
+    const agents = await query<any>(
+      `SELECT id::int, title, brief, status, cost_usd, created_at, started_at, ended_at, goal_id, milestone_id,
+              left(coalesce(result, ''), 1500) AS result, error
+       FROM sub_agents WHERE user_id=$1 AND goal_id=$2 ORDER BY created_at DESC LIMIT 100`,
+      [userId, goalId],
+    );
+    // milestone_id sulle proposte pending serve a raggrupparle nel pannello.
+    const propsWithMs = await query<any>(
+      `SELECT id::int, milestone_id FROM agent_proposals WHERE user_id=$1 AND goal_id=$2`,
+      [userId, goalId],
+    );
+    const msById = new Map(propsWithMs.map((p: any) => [p.id, p.milestone_id]));
+    for (const p of proposals) (p as any).milestone_id = msById.get(p.id) ?? null;
+    res.json({ proposals, agents });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Milestone CRUD dalla UI.
+router.post('/goals/:id/milestones', async (req, res) => {
+  try {
+    const { addMilestone } = await import('../goals/index.js');
+    const { title, due, area, order } = req.body ?? {};
+    if (!title) return res.status(400).json({ error: 'title richiesto' });
+    res.json(await addMilestone(req.user!.id, Number(req.params.id), { title, due, area, order }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/goals/:id/milestones/:mid', async (req, res) => {
+  try {
+    const goals = await import('../goals/index.js');
+    const b = req.body ?? {};
+    // status separato (updateMilestone) dagli altri campi (editMilestone).
+    if (b.title !== undefined || b.due !== undefined || b.area !== undefined || b.order !== undefined) {
+      await goals.editMilestone(req.user!.id, Number(req.params.id), String(req.params.mid), { title: b.title, due: b.due, area: b.area, order: b.order });
+    }
+    const g = b.status
+      ? await goals.updateMilestone(req.user!.id, Number(req.params.id), String(req.params.mid), b.status)
+      : await goals.getGoal(req.user!.id, Number(req.params.id));
+    res.json(g);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/goals/:id/milestones/:mid', async (req, res) => {
+  try {
+    const { removeMilestone } = await import('../goals/index.js');
+    res.json(await removeMilestone(req.user!.id, Number(req.params.id), String(req.params.mid)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+// Deploy un agente su una milestone dalla UI → crea proposta (goal+milestone)
+// con keyboard ✅/❌ su Telegram. `instruction` = cosa deve fare in parole semplici.
+router.post('/goals/:id/milestones/:mid/deploy', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const goalId = Number(req.params.id);
+    const mid = String(req.params.mid);
+    const instruction = String(req.body?.instruction ?? '').trim();
+    if (!instruction) return res.status(400).json({ error: 'instruction richiesta' });
+    const { getGoal } = await import('../goals/index.js');
+    const g = await getGoal(userId, goalId);
+    const ms = g?.plan?.milestones?.find((m: any) => m.id === mid);
+    if (!g || !ms) return res.status(404).json({ error: 'milestone non trovata' });
+    const { createProposal } = await import('../sub_agents/index.js');
+    const prompt = [
+      `Stai lavorando all'obiettivo "${g.title}" (${g.objective}).`,
+      `Milestone assegnata: "${ms.title}"${ms.due ? ` (entro ${ms.due})` : ''}.`,
+      `Compito: ${instruction}`,
+      `Esegui concretamente con i tool disponibili (mail, WhatsApp, brain, Flowspace).`,
+      `Al termine: riporta l'esito a Federico in modo conciso e SCRIVI una nota nel brain (markdown) con cosa è stato fatto e i prossimi passi, taggata con l'obiettivo.`,
+    ].join('\n');
+    const p = await createProposal(
+      userId,
+      `${ms.title} — agente`,
+      `Milestone: ${ms.title}`,
+      [{ title: `Agente: ${ms.title.slice(0, 40)}`, brief: instruction.slice(0, 120), prompt }],
+      { goalId, milestoneId: mid },
+    );
+    res.json({ ok: true, proposalId: p.id });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/goals/:id', async (req, res) => {
+  try {
+    const { deleteGoal } = await import('../goals/index.js');
+    res.json(await deleteGoal(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Brain Consolidator proposals — list / apply / reject. Apply runs through
+// brain/proposals.ts which snapshots the vault first.
+router.get('/brain/proposals', async (req, res) => {
+  try {
+    const { listProposals } = await import('../brain/proposals.js');
+    res.json({ rows: await listProposals(req.user!.id, String(req.query.status ?? 'pending')) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/brain/proposals/:id/apply', async (req, res) => {
+  try {
+    const { applyProposal } = await import('../brain/proposals.js');
+    const r = await applyProposal(req.user!.id, Number(req.params.id));
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/brain/proposals/:id/reject', async (req, res) => {
+  try {
+    const { rejectProposal } = await import('../brain/proposals.js');
+    res.json(await rejectProposal(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
 router.post('/brain/snapshots/:id/restore', async (req, res) => {
   try {
@@ -1070,10 +1281,12 @@ router.get('/sub-agents', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
   const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
   const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const sort = req.query.sort ? String(req.query.sort) : undefined;
+  const dir = req.query.dir === 'asc' ? 'asc' as const : req.query.dir === 'desc' ? 'desc' as const : undefined;
   if (req.query.paginated === '1') {
-    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset, withTotal: true }));
+    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset, sort, dir, withTotal: true }));
   } else {
-    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset }));
+    res.json(await sa.listSubAgents(req.user!.id, { statuses, q, limit, offset, sort, dir }));
   }
 });
 router.get('/sub-agents/stats', async (req, res) => {
@@ -2191,6 +2404,61 @@ router.post('/mail/messages/:id/suggest', quotaGuard, async (req, res) => {
     const r = await runClaude(req.user!.id, prompt, { timeoutMs: 60_000, kind: 'mail_suggest', meta: { mailId: m.id } });
     if (!r.ok) return res.status(400).json({ ok: false, error: r.stderr || 'agent error' });
     res.json({ ok: true, draft: r.text.trim() });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+// AI compose ex-novo — generates subject + body in the user's own tone.
+// Tone is learned from the user's recently SENT emails (most reliable
+// signature of personal writing style); brain stays available via MCP tools
+// if the model needs context on the recipient or topic.
+router.post('/mail/compose', quotaGuard, async (req, res) => {
+  try {
+    const intent = String(req.body?.intent ?? '').slice(0, 1000).trim();
+    if (!intent) return res.status(400).json({ ok: false, error: 'intent required' });
+    const to = String(req.body?.to ?? '').slice(0, 300);
+    // Sample of recently sent mail — teaches the model the user's tone.
+    const sentRows = await query<any>(
+      `SELECT subject, body_text FROM mail_messages
+       WHERE user_id=$1 AND (direction='out' OR lower(folder) LIKE '%sent%' OR lower(folder) LIKE '%inviat%')
+         AND body_text IS NOT NULL AND length(body_text) > 40
+       ORDER BY ts DESC LIMIT 5`,
+      [req.user!.id],
+    );
+    const samples = sentRows
+      .map((r: any, i: number) => `--- ESEMPIO ${i + 1} (subject: ${r.subject ?? ''}) ---\n${String(r.body_text).slice(0, 1200)}`)
+      .join('\n\n');
+    const { runClaude } = await import('../claude/runner.js');
+    const prompt = [
+      `Scrivi un'email per conto dell'utente. DEVI imitare il suo stile di scrittura personale.`,
+      ``,
+      samples
+        ? `Ecco email REALI che l'utente ha inviato — studia tono, lunghezza frasi, formule di apertura/chiusura, livello di formalità:\n\n${samples}\n\n--- FINE ESEMPI ---`
+        : `Nessun esempio disponibile: usa un tono diretto, professionale ma informale, frasi brevi, niente filler. Se serve contesto sull'utente cerca nel brain.`,
+      ``,
+      `COSA VUOLE DIRE L'UTENTE: ${intent}`,
+      to ? `DESTINATARIO: ${to} — se il brain contiene informazioni su questa persona, usale per calibrare il registro.` : ``,
+      ``,
+      `Regole:`,
+      `- Lingua: italiano salvo che l'intent chieda altro.`,
+      `- NON aggiungere firma (viene appesa automaticamente).`,
+      `- NON inventare fatti, date o impegni non presenti nell'intent.`,
+      ``,
+      `Rispondi SOLO con JSON valido, nessun testo prima o dopo:`,
+      `{"subject": "...", "body": "testo con \\n per andare a capo"}`,
+    ].join('\n');
+    const r = await runClaude(req.user!.id, prompt, { timeoutMs: 90_000, kind: 'mail_compose', meta: { to } });
+    if (!r.ok) return res.status(400).json({ ok: false, error: r.stderr || 'agent error' });
+    // Extract the JSON blob — model may wrap it in fences or prose.
+    const raw = r.text.trim();
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return res.status(400).json({ ok: false, error: 'no JSON in agent output' });
+    let parsed: any;
+    try { parsed = JSON.parse(jsonMatch[0]); }
+    catch { return res.status(400).json({ ok: false, error: 'invalid JSON from agent' }); }
+    const subject = String(parsed.subject ?? '').trim();
+    const body = String(parsed.body ?? '').trim();
+    if (!body) return res.status(400).json({ ok: false, error: 'empty body from agent' });
+    res.json({ ok: true, subject, body });
   } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
 

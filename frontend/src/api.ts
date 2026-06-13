@@ -47,6 +47,9 @@ export const api = {
     return req<{ rows: any[]; total: number }>(`/brain/snapshots?${p}`);
   },
   brainSnapshotRun: () => req<{ ok: boolean; snapshots: any[] }>('/brain/snapshots/run', { method: 'POST' }),
+  brainProposals: (status: string = 'pending') => req<{ rows: any[] }>(`/brain/proposals?status=${encodeURIComponent(status)}`),
+  brainProposalApply: (id: number) => req<{ ok: boolean; error?: string; result?: any }>(`/brain/proposals/${id}/apply`, { method: 'POST' }),
+  brainProposalReject: (id: number) => req<{ ok: boolean }>(`/brain/proposals/${id}/reject`, { method: 'POST' }),
   brainSnapshotDelete: (id: number) => req<{ ok: boolean }>(`/brain/snapshots/${id}`, { method: 'DELETE' }),
   brainSnapshotRestore: (id: number) =>
     req<{ ok: boolean; restored?: number; safety_snapshot_id?: number; error?: string }>(`/brain/snapshots/${id}/restore`, { method: 'POST' }),
@@ -211,6 +214,20 @@ export const api = {
   flowRunGet: (runId: number) => req<any>(`/flow-runs/${runId}`),
   flowRunNow: (id: number, payload?: any) => req<any>(`/flows/${id}/run`, { method: 'POST', body: JSON.stringify(payload ?? {}) }),
   // Roadmap v2
+  goalsList: () => req<{ rows: any[] }>('/goals'),
+  goalCreate: (data: { title: string; objective: string; deadline?: string }) => req<any>('/goals', { method: 'POST', body: JSON.stringify(data) }),
+  goalUpdate: (id: number, data: any) => req<any>(`/goals/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  goalPlanGenerate: (id: number) => req<{ ok: boolean; goal?: any; error?: string }>(`/goals/${id}/plan/generate`, { method: 'POST' }),
+  goalPlanApprove: (id: number) => req<{ ok: boolean; goal?: any; error?: string }>(`/goals/${id}/plan/approve`, { method: 'POST' }),
+  goalPlanReject: (id: number) => req<{ ok: boolean }>(`/goals/${id}/plan/reject`, { method: 'POST' }),
+  goalKpiUpsert: (id: number, kpi: { id?: string; name: string; unit?: string; target: number; current?: number }) => req<any>(`/goals/${id}/kpis`, { method: 'POST', body: JSON.stringify(kpi) }),
+  goalKpiDelete: (id: number, kpiId: string) => req<any>(`/goals/${id}/kpis/${encodeURIComponent(kpiId)}`, { method: 'DELETE' }),
+  goalMilestoneUpdate: (id: number, mid: string, patch: { status?: string; title?: string; due?: string | null; area?: string | null; order?: number }) => req<any>(`/goals/${id}/milestones/${encodeURIComponent(mid)}`, { method: 'PUT', body: JSON.stringify(patch) }),
+  goalMilestoneAdd: (id: number, data: { title: string; due?: string; area?: string; order?: number }) => req<any>(`/goals/${id}/milestones`, { method: 'POST', body: JSON.stringify(data) }),
+  goalMilestoneDelete: (id: number, mid: string) => req<any>(`/goals/${id}/milestones/${encodeURIComponent(mid)}`, { method: 'DELETE' }),
+  goalDelete: (id: number) => req<{ ok: boolean }>(`/goals/${id}`, { method: 'DELETE' }),
+  goalMilestoneDeploy: (id: number, mid: string, instruction: string) => req<{ ok: boolean; proposalId?: number; error?: string }>(`/goals/${id}/milestones/${encodeURIComponent(mid)}/deploy`, { method: 'POST', body: JSON.stringify({ instruction }) }),
+  goalExecution: (id: number) => req<{ proposals: any[]; agents: any[] }>(`/goals/${id}/execution`),
   roadmapGet: () => req<any>('/roadmap-v2'),
   roadmapStats: () => req<any>('/roadmap-v2/stats'),
   roadmapAddTodo: (horizon: 'shortTerm' | 'midTerm' | 'longTerm', data: any) => req<any>(`/roadmap-v2/${horizon}/todos`, { method: 'POST', body: JSON.stringify(data) }),
@@ -226,10 +243,11 @@ export const api = {
   waPending: () => req<any>('/whatsapp/pending'),
   waBonify: (limit: number, onlyChat?: string) => req<any>('/whatsapp/bonify', { method: 'POST', body: JSON.stringify({ limit, onlyChat }) }),
   subAgentsList: (status?: string) => req<any[]>(`/sub-agents${status ? `?status=${status}` : ''}`),
-  subAgentsListPaginated: (opts: { statuses?: string[]; q?: string; limit?: number; offset?: number } = {}) => {
+  subAgentsListPaginated: (opts: { statuses?: string[]; q?: string; limit?: number; offset?: number; sort?: string; dir?: 'asc' | 'desc' } = {}) => {
     const p = new URLSearchParams({ paginated: '1' });
     if (opts.statuses?.length) p.set('status', opts.statuses.join(','));
     if (opts.q) p.set('q', opts.q);
+    if (opts.sort) { p.set('sort', opts.sort); p.set('dir', opts.dir ?? 'desc'); }
     p.set('limit', String(opts.limit ?? 25));
     p.set('offset', String(opts.offset ?? 0));
     return req<{ rows: any[]; total: number }>(`/sub-agents?${p}`);
@@ -285,6 +303,7 @@ export const api = {
   waUnread: () => req<{ count: number }>('/whatsapp/unread'),
   igUnread: () => req<{ count: number }>('/instagram/unread'),
   mailSuggest: (id: number, hint?: string) => req<any>(`/mail/messages/${id}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
+  mailCompose: (intent: string, to?: string) => req<{ ok: boolean; subject: string; body: string; error?: string }>('/mail/compose', { method: 'POST', body: JSON.stringify({ intent, to }) }),
   mailSend: (payload: { account: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html?: string; inReplyTo?: string; references?: string[]; attachments?: File[] }) => {
     const fd = new FormData();
     fd.append('account', payload.account);
