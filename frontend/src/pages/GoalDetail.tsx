@@ -63,12 +63,15 @@ const STATUS_CHIP: Record<string, { label: string; tone?: any }> = {
   done: { label: 'completato', tone: 'on' }, archived: { label: 'archiviato' },
 };
 
-export default function GoalDetailPage() {
+// Usabile sia come pagina /goals/:id sia EMBEDDED in un dialog (es. dal grafo
+// brain). In modalità embedded passa `goalId` + `onClose`: salta breadcrumb e
+// usa la X invece del back a /roadmap.
+export default function GoalDetailPage({ goalId: goalIdProp, embedded, onClose }: { goalId?: number; embedded?: boolean; onClose?: () => void } = {}) {
   const { id } = useParams();
   const nav = useNavigate();
   const toast = useToast();
   const dlg = useDialog();
-  const goalId = Number(id);
+  const goalId = goalIdProp ?? Number(id);
   const [goal, setGoal] = useState<Goal | null>(null);
   const [agents, setAgents] = useState<SubAgent[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -76,7 +79,8 @@ export default function GoalDetailPage() {
   const [msEdit, setMsEdit] = useState<Milestone | 'new' | null>(null);
   const [deployFor, setDeployFor] = useState<Milestone | null>(null);
 
-  useSetBreadcrumb(goal ? [{ label: 'Roadmap', to: '/roadmap' }, { label: goal.title }] : null);
+  useSetBreadcrumb(!embedded && goal ? [{ label: 'Roadmap', to: '/roadmap' }, { label: goal.title }] : null);
+  const goBack = () => { if (onClose) onClose(); else nav('/roadmap'); };
 
   async function load() {
     try {
@@ -120,7 +124,7 @@ export default function GoalDetailPage() {
   }
   async function delGoal() {
     if (!await dlg.confirm(`Eliminare l'obiettivo "${goal!.title}"? Irreversibile.`, { tone: 'danger', confirmLabel: 'Elimina' })) return;
-    try { await api.goalDelete(goalId); nav('/roadmap'); } catch (e: any) { toast.push(String(e?.message ?? e), 'err'); }
+    try { await api.goalDelete(goalId); goBack(); } catch (e: any) { toast.push(String(e?.message ?? e), 'err'); }
   }
   async function setGoalStatus(status: string) {
     try { await api.goalUpdate(goalId, { status }); await load(); } catch (e: any) { toast.push(String(e?.message ?? e), 'err'); }
@@ -206,7 +210,7 @@ export default function GoalDetailPage() {
           {goal.status === 'active' && <Button size="sm" variant="ghost" onClick={() => setGoalStatus('paused')}><Pause size={13} className="inline mr-1 -mt-0.5" />Pausa</Button>}
           {goal.status === 'paused' && <Button size="sm" variant="ghost" onClick={() => setGoalStatus('active')}><Play size={13} className="inline mr-1 -mt-0.5" />Riattiva</Button>}
           <button title="Elimina obiettivo" className="p-2 text-muted-foreground hover:text-destructive" onClick={delGoal}><Trash2 size={15} /></button>
-          <Button size="sm" variant="ghost" onClick={() => nav('/roadmap')}>← Roadmap</Button>
+          <Button size="sm" variant="ghost" onClick={goBack}>{embedded ? '✕' : '← Roadmap'}</Button>
         </div>
       </div>
 

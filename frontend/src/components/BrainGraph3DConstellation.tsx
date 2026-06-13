@@ -205,6 +205,7 @@ export default function BrainGraph3DConstellation({
   explorerOpen,
   onToggleExplorer,
   focusId,
+  onGoalClick,
 }: {
   onSelect: (id: string) => void;
   onDeselect?: () => void;
@@ -216,6 +217,7 @@ export default function BrainGraph3DConstellation({
   explorerOpen?: boolean;
   onToggleExplorer?: () => void;
   focusId?: string | null;
+  onGoalClick?: (goalId: number) => void;
 }) {
   const [data, setData] = useState<{ nodes: Node[]; links: Link[]; clusters?: string[]; dirs?: Map<string, [number, number, number]> }>({ nodes: [], links: [] });
   // degree map kept in a ref so nodeVisibility callback doesn't allocate.
@@ -661,6 +663,12 @@ export default function BrainGraph3DConstellation({
           }
         }
         if (ctrls?.update) ctrls.update();
+        // Goal satellites: slow orbital drift around the brain (tilted axis so
+        // it doesn't read as a flat ring). Purely aesthetic.
+        if (satGroupRef.current) {
+          satGroupRef.current.rotation.y += 0.0006 * dt;
+          satGroupRef.current.rotation.x = 0.18;
+        }
         const renderer = fg.renderer?.();
         const scene = fg.scene?.();
         if (renderer && scene && cam) renderer.render(scene, cam);
@@ -758,6 +766,22 @@ export default function BrainGraph3DConstellation({
   const instMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const linesRef = useRef<THREE.LineSegments | null>(null);
   const tmpMat4 = useRef(new THREE.Matrix4()).current;
+
+  // ── GOAL SATELLITES: gli obiettivi orbitano lentamente fuori dalla sfera del
+  // brain come pianeti. Cliccando un satellite la pagina brain apre il dettaglio
+  // goal in un dialog (onGoalClick). Sfere glow nel 3D + pill DOM cliccabili.
+  type GoalSat = { id: number; title: string; status: string };
+  const [goalSats, setGoalSats] = useState<GoalSat[]>([]);
+  const satGroupRef = useRef<THREE.Group | null>(null);
+  const satMetaRef = useRef<Map<THREE.Object3D, GoalSat>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    import('../api').then(({ api }) => api.goalsList()).then((r: any) => {
+      if (!alive) return;
+      setGoalSats((r.rows ?? []).filter((g: any) => g.status !== 'archived').map((g: any) => ({ id: g.id, title: g.title, status: g.status })));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Build the instanced mesh + line geometry when graph data changes. Mounted
   // into force-graph's scene; force-graph still owns layout, we own draw.
@@ -885,6 +909,46 @@ export default function BrainGraph3DConstellation({
     };
   }, [data, sharedSphereGeom]);
 
+  // Build goal satellites on an orbital shell outside the globe. Rebuilt when
+  // the goals list changes. Rotated slowly in the main render loop.
+  useEffect(() => {
+    const fg: any = fgRef.current;
+    const scene: THREE.Scene | undefined = fg?.scene?.();
+    if (!scene) return;
+    const old = scene.getObjectByName('goal-satellites');
+    if (old) { scene.remove(old); old.traverse((c: any) => { c.geometry?.dispose?.(); c.material?.dispose?.(); }); }
+    satMetaRef.current = new Map();
+    if (goalSats.length === 0) { satGroupRef.current = null; return; }
+    const STATUS_COLOR: Record<string, number> = { active: 0x4fd1ff, draft: 0xb98bff, done: 0x34d399, paused: 0xfbbf24 };
+    const ORBIT_R = 760;
+    const group = new THREE.Group();
+    group.name = 'goal-satellites';
+    const N = goalSats.length;
+    goalSats.forEach((g, i) => {
+      // Fibonacci sphere → spread the satellites over the whole shell, not a ring.
+      const phi = Math.acos(1 - 2 * (i + 0.5) / N);
+      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      const dir = new THREE.Vector3(Math.cos(theta) * Math.sin(phi), Math.cos(phi), Math.sin(theta) * Math.sin(phi));
+      const pos = dir.clone().multiplyScalar(ORBIT_R);
+      const color = STATUS_COLOR[g.status] ?? 0x9aa4c0;
+      const core = new THREE.Mesh(new THREE.SphereGeometry(11, 16, 12), new THREE.MeshBasicMaterial({ color }));
+      core.position.copy(pos);
+      const glow = new THREE.Mesh(new THREE.SphereGeometry(22, 16, 12), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.18, depthWrite: false }));
+      glow.position.copy(pos);
+      group.add(core, glow);
+      satMetaRef.current.set(core, g);
+    });
+    scene.add(group);
+    satGroupRef.current = group;
+    return () => {
+      const sg = scene.getObjectByName('goal-satellites');
+      if (sg) { scene.remove(sg); sg.traverse((c: any) => { c.geometry?.dispose?.(); c.material?.dispose?.(); }); }
+      satGroupRef.current = null;
+    };
+    // `data` in deps: the scene only exists once ForceGraph3D has mounted+built;
+    // rebuilding when the graph data lands guarantees the scene is ready.
+  }, [goalSats, data]);
+
   // Click + hover on InstancedMesh — raycast manually. Click (short press)
   // zooms to node and opens the note; pointermove sets hover state used to
   // render the floating label HTML overlay.
@@ -982,11 +1046,12 @@ export default function BrainGraph3DConstellation({
   // Label overlay state — list of {id, title, x, y} computed by projecting
   // node world position to screen each animation frame. Rendered as absolute
   // HTML divs over the canvas.
-  type LabelHit = { id: string; title: string; x: number; y: number; mode: 'hover' | 'zoom' | 'hub' | 'root'; color?: string };
+  type LabelHit = { id: string; title: string; x: number; y: number; mode: 'hover' | 'zoom' | 'hub' | 'root' | 'goal'; color?: string; goalId?: number; status?: string; depth?: number };
   const [labels, setLabels] = useState<LabelHit[]>([]);
   useEffect(() => {
     let raf = 0;
     const tmpV = new THREE.Vector3();
+    const tmpW = new THREE.Vector3();
     const ZOOM_THRESHOLD = 900;          // camera distance below which all labels appear
     const MAX_AUTO_LABELS = 120;         // cap so DOM stays light
     const loop = () => {
@@ -1024,6 +1089,25 @@ export default function BrainGraph3DConstellation({
           mode: n.__isRoot ? 'root' : 'hub',
           color: n.__isRoot ? '#ff6680' : clusterColor(n.__cluster),
         });
+      }
+      // Goal satellites — always-on clickable pills projected from their LIVE
+      // world position (the group rotates each frame). Color by status.
+      (window as any).__satDbg = { size: satMetaRef.current.size, lastZ: null as any };
+      if (satMetaRef.current.size > 0) {
+        const STATUS_HEX: Record<string, string> = { active: '#4fd1ff', draft: '#b98bff', done: '#34d399', paused: '#fbbf24' };
+        for (const [obj, g] of satMetaRef.current) {
+          obj.getWorldPosition(tmpW);
+          tmpV.copy(tmpW).project(cam);
+          (window as any).__satDbg.lastZ = tmpV.z;
+          if (tmpV.z > 1 || tmpV.z < -1) continue;
+          const x = (tmpV.x * 0.5 + 0.5) * rect.width;
+          const y = (-tmpV.y * 0.5 + 0.5) * rect.height;
+          // Clamp into viewport (with margin) instead of culling — a goal pill
+          // near the edge should still be reachable, not vanish.
+          const cx = Math.max(60, Math.min(rect.width - 60, x));
+          const cy = Math.max(60, Math.min(rect.height - 60, y));
+          out.push({ id: `goal-${g.id}`, title: g.title, x: cx, y: cy, mode: 'goal', goalId: g.id, status: g.status, color: STATUS_HEX[g.status] ?? '#9aa4c0', depth: tmpV.z });
+        }
       }
       // Selected label — sticks until user clicks empty space.
       if (selected) {
@@ -1324,6 +1408,32 @@ export default function BrainGraph3DConstellation({
       {/* Label overlay — absolute-positioned DOM, super cheap vs Three sprites. */}
       <div className="absolute inset-0 pointer-events-none select-none" style={{ overflow: 'hidden' }}>
         {labels.map((lab) => {
+          // Goal satellite pill — clickable, opens the goal dialog in the brain
+          // page. pointer-events-auto so the DOM click works (more reliable than
+          // raycasting a tiny orbiting sphere).
+          if (lab.mode === 'goal') {
+            return (
+              <button
+                key={`goal-${lab.goalId}`}
+                onClick={(e) => { e.stopPropagation(); onGoalClick?.(lab.goalId!); }}
+                className="pointer-events-auto"
+                style={{
+                  position: 'absolute', left: lab.x, top: lab.y, transform: 'translate(-50%, -50%)',
+                  fontFamily: 'Inter, system-ui, sans-serif', fontSize: 10, fontWeight: 700,
+                  letterSpacing: '0.03em', padding: '4px 10px 4px 8px', borderRadius: 999,
+                  background: `linear-gradient(135deg, ${lab.color}33, rgba(6,10,18,0.92))`,
+                  border: `1.5px solid ${lab.color}`, color: '#fff',
+                  boxShadow: `0 0 14px ${lab.color}88`, whiteSpace: 'nowrap', cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  zIndex: 16, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+                title={lab.title}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: lab.color, boxShadow: `0 0 6px ${lab.color}`, flexShrink: 0 }} />
+                🎯 {lab.title.length > 26 ? lab.title.slice(0, 25) + '…' : lab.title}
+              </button>
+            );
+          }
           // Cluster-hub pill — always-on, vivid chip with cluster color border.
           if (lab.mode === 'hub') {
             return (

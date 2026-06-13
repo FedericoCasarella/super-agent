@@ -11,6 +11,8 @@ import MarkdownView from '../components/MarkdownView';
 import BrainOverview from '../components/BrainOverview';
 import BrainFileExplorer from '../components/BrainFileExplorer';
 import BrainProposals from '../components/BrainProposals';
+import GoalDetailPage from './GoalDetail';
+import { createPortal } from 'react-dom';
 import { FolderTree } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { api as apiX } from '../api';
@@ -62,6 +64,9 @@ export default function Brain() {
   const [note, setNote] = useState<any | null>(null);
   const [explorerOpen, setExplorerOpen] = useState<boolean>(() => lsGet('brain_explorer_open', '0') === '1');
   useEffect(() => { lsSet('brain_explorer_open', explorerOpen ? '1' : '0'); }, [explorerOpen]);
+  // Goal satellite clicked in the 3D graph → open its detail in a dialog
+  // without leaving the brain page.
+  const [openGoalId, setOpenGoalId] = useState<number | null>(null);
 
   async function reloadList() {
     if (q) setItems(await api.brainSearch(q));
@@ -179,6 +184,7 @@ export default function Brain() {
                 explorerOpen={explorerOpen}
                 onToggleExplorer={() => setExplorerOpen((v) => !v)}
                 focusId={note?.path ?? null}
+                onGoalClick={setOpenGoalId}
               />
             ) : (
               <BrainGraph3D
@@ -281,6 +287,19 @@ export default function Brain() {
           </label>
         </div>
       </Modal>
+
+      {/* Goal dialog — satellite clicked in the 3D graph. Reuses the full
+          /goals/:id component embedded, no navigation away from Brain. */}
+      {openGoalId != null && createPortal(
+        <div className="fixed inset-0 z-[120] bg-black/70 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setOpenGoalId(null)}>
+          <div className="max-w-5xl w-full max-h-[88vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <Card className="!p-5">
+              <GoalDetailPage goalId={openGoalId} embedded onClose={() => setOpenGoalId(null)} />
+            </Card>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
