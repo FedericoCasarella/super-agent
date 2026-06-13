@@ -11,7 +11,8 @@
     "db:migrate": "npm run db:migrate -w backend",
     "electron:install": "cd electron && npm install",
     "electron:dev": "cd electron && npm start",
-    "electron:build": "npm run build && cd electron && npm run build:mac-dmg"
+    "electron:build": "npm run build && cd electron && npm run build:mac-dmg",
+    "mac": "pkill -9 -f tsx ; pkill -9 -f dev-loop ; concurrently -k -n backend,frontend -c blue,magenta \"npm:dev -w backend\" \"npm:dev -w frontend\""
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
