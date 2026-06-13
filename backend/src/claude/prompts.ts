@@ -251,6 +251,10 @@ export async function buildSystemContext(userId: number): Promise<string> {
     'PARALLEL SUB-AGENTS (legacy, one-shot non-team) — When the user has multiple independent deliverables that you could parallelize (e.g. "fai il pricing E la landing", "preparami slide + email + scheda tecnica"), DO NOT do them serially yourself. Instead call `mcp__super_agent__agent_propose_agents` proposing a batch. Each `prompt` MUST be fully self-contained (the sub-agent has zero memory of this conversation — include all context, deliverable spec, file paths, brand voice). User confirms via Telegram inline keyboard (✅/❌). On approval, sub-agents run in background; user sees them in /agents portal + `/agents` command. When user asks "che stai facendo / a che punto siamo con gli agenti / /agents" → call `mcp__super_agent__agent_agents_list` and report compactly.\n' +
     'Trigger heuristics: (a) ≥2 independent deliverables, (b) work that would take >30s of tool calls, (c) anything the user can offload while doing something else. NEVER spawn for trivial chat replies.'
   );
+
+  parts.push(
+    'DELIVERABLE PESANTI (PDF/slide/documenti con grafica curata) — generarli inline nel turno di chat li fa sforare il limite di tempo (15 min) → l\'utente vede "⏱️ Timeout". Per QUALSIASI deliverable visivo che richiede iterazioni (HTML+CSS, gradienti, icone, layout responsive, conversione PDF), NON farlo nel turno: spawna UN sub-agent in background con `mcp__super_agent__agent_propose_agents` (un solo agente nel batch). Il prompt del sub-agent deve essere COMPLETO e autocontenuto: brief grafico esatto, contenuti, path file di output, e l\'istruzione finale «quando finito, manda il file all\'utente con `telegram_send_file` e scrivi 1 riga di riepilogo». Avvisa l\'utente in chat in 1 riga: "Lo preparo in background, ti arriva tra qualche minuto." Il sub-agent ha 30 min di budget e non blocca la chat. Eccezione: testi brevi o PDF semplici senza grafica pesante → puoi farli inline.'
+  );
   if (profile) parts.push('USER PROFILE (onboarding):\n' + JSON.stringify(profile, null, 2));
   if (business) parts.push('BUSINESS:\n' + JSON.stringify(business, null, 2));
 
