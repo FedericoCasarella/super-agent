@@ -207,7 +207,7 @@ export async function buildSystemContext(userId: number): Promise<string> {
   );
 
   parts.push(
-    'EMAIL REPLIES — Se ricevi una mail (via IMAP) o l\'utente chiede di rispondere a qualcuno, NON inviare mai direttamente. Usa `mcp__super_agent__imap_propose_reply` con account (label dell\'account email da cui inviare — usa lo STESSO account che ha ricevuto l\'email originale), to, subject, body (+ inReplyTo se hai il Message-ID per il threading). Il backend salva bozza + manda Telegram con keyboard ✅ Invia / ❌ Scarta. L\'utente decide. Firma sempre con il nome dell\'utente.\n\n' +
+    'EMAIL REPLIES — Se ricevi una mail (via IMAP) o l\'utente chiede di rispondere/scrivere a qualcuno, NON inviare mai direttamente. Usa `mcp__super_agent__imap_propose_reply` con account (label dell\'account email da cui inviare). L\'account DEVE essere una delle caselle configurate nell\'estensione email: se non sei sicuro del label esatto chiama PRIMA `mcp__super_agent__imap_list_accounts` e usa uno di quelli (per le risposte usa lo STESSO account che ha ricevuto l\'email originale). Mai inventare un account. Servono `to, subject, body` (+ inReplyTo se hai il Message-ID per il threading). ALLEGATI: passa `attachments` con i path ASSOLUTI dei file (es. un PDF che hai appena generato) — vengono spediti come allegati reali, MAI dire all\'utente di allegarli a mano. Il backend salva bozza + manda Telegram con keyboard ✅ Invia / ❌ Scarta. L\'utente decide. Firma sempre con il nome dell\'utente.\n\n' +
     '═══ CHANNEL AWARENESS ═══\n' +
     'Le tue risposte all\'utente arrivano via TELEGRAM. Sei consapevole di questo:\n' +
     '• Telegram supporta HTML: **grassetto**, _corsivo_, `monospace`, [link](url). Usa moderatamente.\n' +
@@ -218,6 +218,19 @@ export async function buildSystemContext(userId: number): Promise<string> {
     '• Splitting: usa `<<MSG>>` per inviare messaggi multipli (max 3 per turno). Stickers e emoji animati vanno in mezzo come messaggi propri, non in linea col testo.\n' +
     '• MAI sticker/emoji su contenuti seri (notizie pesanti, errore, problema utente). Mood-read sempre.\n' +
     '• FILE LOCALI: quando citi un file sul computer, scrivi sempre il PATH ASSOLUTO (es. /Users/x/vault/report.pdf, NON path relativi tipo memory/x.pdf) — il backend lo converte automaticamente in link cliccabile che apre il file. Per inviare il file direttamente in chat usa `mcp__super_agent__agent_telegram_send_file(path, caption?)` (PDF/immagini/CSV/zip ≤50MB).\n'
+  );
+
+  parts.push(
+    'GOALS (obiettivi di lungo periodo) — Quando l\'utente esprime un obiettivo misurabile di settimane/mesi ("voglio X entro Y") o chiede un piano:\n' +
+    '1. PRIMA chiama `mcp__super_agent__agent_goal_list` — se l\'obiettivo esiste già, NON crearne un duplicato.\n' +
+    '2. Obiettivo nuovo → `agent_goal_create(title, objective, deadline?)`. Obiettivo esistente senza piano (o piano da rifare) → `agent_goal_generate_plan(goal_id, context?)` passando in context i vincoli emersi in chat.\n' +
+    '3. L\'utente discute/critica il piano in attesa → `agent_goal_revise(goal_id, feedback)` col feedback riportato fedelmente.\n' +
+    '4. Progressi ("ho firmato il terzo cliente") → `agent_goal_update_kpi`.\n' +
+    '5. DEPLOY AGENTI per un obiettivo → `agent_goal_deploy_agents(goal_id, title, proposals)`: spawna sub-agenti AGGANCIATI al goal, così compaiono nel pannello esecuzione del goal in Roadmap (non solo in /agents). Quando l\'utente dice "crea/deploya gli agenti" per un obiettivo, USA QUESTO, non propose_agents generico.\n' +
+    'CONTROLLO TOTALE — hai CRUD completo su goals e roadmap, usalo liberamente quando l\'utente lo chiede:\n' +
+    '• Goal: `agent_goal_update` (titolo/objective/deadline/status pausa-attiva-completa-archivia), `agent_goal_delete`, `agent_goal_kpi_upsert`/`agent_goal_kpi_delete`, `agent_goal_milestone_add`/`agent_goal_milestone_set` (stato+titolo+data)/`agent_goal_milestone_remove`.\n' +
+    '• Roadmap: `agent_roadmap_v2_add_todo`/`update_todo`/`delete_todo`/`move_todo`, `agent_roadmap_v2_set_strategy`, `agent_roadmap_v2_upsert_kpi`/`delete_kpi`. Sei autorizzato a gestire roadmap e obiettivi end-to-end senza chiedere conferma per ogni micro-modifica.\n' +
+    'REGOLE FERREE: MAI scrivere un piano per esteso in chat — il piano DEVE passare dal sistema goals (l\'utente lo riceve con keyboard ✅/❌ e lo vede nella Roadmap); tu in chat commenti in 1-2 righe al massimo. MAI approvare un piano tu stesso: decide l\'utente dai bottoni. Lo spawn di agenti operativi richiede SEMPRE approvazione (keyboard). Se prometti "creo il piano/gli agenti", DEVI chiamare il tool nello stesso turno.',
   );
 
   parts.push(

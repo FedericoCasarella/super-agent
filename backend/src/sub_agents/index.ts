@@ -50,12 +50,13 @@ export async function createProposal(
   title: string,
   reason: string | null,
   proposals: ProposedAgent[],
+  opts: { goalId?: number; milestoneId?: string } = {},
 ): Promise<AgentProposal> {
   if (!proposals.length) throw new Error('proposals empty');
   const rows = await query<AgentProposal>(
-    `INSERT INTO agent_proposals(user_id, title, reason, proposals, status)
-     VALUES($1, $2, $3, $4::jsonb, 'pending') RETURNING *`,
-    [userId, title, reason, JSON.stringify(proposals)],
+    `INSERT INTO agent_proposals(user_id, title, reason, proposals, status, goal_id, milestone_id)
+     VALUES($1, $2, $3, $4::jsonb, 'pending', $5, $6) RETURNING *`,
+    [userId, title, reason, JSON.stringify(proposals), opts.goalId ?? null, opts.milestoneId ?? null],
   );
   const p = rows[0];
   emit(userId, 'proposal:created', p);
@@ -97,9 +98,9 @@ export async function approveProposal(userId: number, id: number): Promise<SubAg
   const spawned: SubAgent[] = [];
   for (const sp of p.proposals) {
     const rows = await query<SubAgent>(
-      `INSERT INTO sub_agents(user_id, proposal_id, title, brief, prompt, status)
-       VALUES($1, $2, $3, $4, $5, 'pending') RETURNING *`,
-      [userId, id, sp.title, sp.brief, sp.prompt],
+      `INSERT INTO sub_agents(user_id, proposal_id, title, brief, prompt, status, goal_id, milestone_id)
+       VALUES($1, $2, $3, $4, $5, 'pending', $6, $7) RETURNING *`,
+      [userId, id, sp.title, sp.brief, sp.prompt, (p as any).goal_id ?? null, (p as any).milestone_id ?? null],
     );
     spawned.push(rows[0]);
     emit(userId, 'subagent:created', rows[0]);

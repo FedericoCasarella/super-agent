@@ -551,11 +551,12 @@ const connector: Connector = {
               required: ['title', 'brief', 'prompt'], additionalProperties: false,
             },
           },
+          goal_id: { type: 'number', description: 'Se questi agenti servono un obiettivo (goal), passa il suo id: compariranno nel pannello esecuzione di quel goal in Roadmap, non solo in /agents. Usa goal_list per l\'id.' },
         },
         required: ['title', 'proposals'], additionalProperties: false,
       },
-      handler: async (ctx, { title, reason, proposals }) => {
-        const p = await subAgents.createProposal(ctx.userId, title, reason ?? null, proposals);
+      handler: async (ctx, { title, reason, proposals, goal_id }) => {
+        const p = await subAgents.createProposal(ctx.userId, title, reason ?? null, proposals, goal_id ? { goalId: Number(goal_id) } : {});
         return { ok: true, proposalId: p.id, status: p.status, awaitingApproval: true };
       },
     },
@@ -737,6 +738,290 @@ const connector: Connector = {
     // browse public sticker packs. Use sparingly: 1 sticker / 1 emoji every
     // ~5 turns max so the chat doesn't turn into a meme dump.
     // =====================================================================
+    // =====================================================================
+    // GOALS — obiettivi di lungo periodo. Flusso Telegram-first:
+    // create → piano+KPI generati → keyboard ✅/❌ → revise se l'utente
+    // discute → all'approvazione partono le proposte settimana 1.
+    // =====================================================================
+    {
+      name: 'goal_create',
+      description: 'Crea un obiettivo di lungo periodo e genera subito piano + KPI proposti (milestones, azioni settimana 1). L\'utente riceve il piano su Telegram con bottoni ✅ Approva / ❌ Scarta. USA quando l\'utente esprime un obiettivo misurabile di settimane/mesi (es. "voglio arrivare a 10 clienti AMPERA entro Q3"). NON approvare mai tu: decide l\'utente dai bottoni.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Titolo breve (es. "Logiqo → 10 clienti AMPERA")' },
+          objective: { type: 'string', description: 'Obiettivo misurabile per esteso' },
+          deadline: { type: 'string', description: 'YYYY-MM-DD, opzionale' },
+        },
+        required: ['title', 'objective'], additionalProperties: false,
+      },
+      handler: async (ctx, { title, objective, deadline }) => {
+        const goals = await import('../../../goals/index.js');
+        const g = await goals.createGoal(ctx.userId, { title: String(title), objective: String(objective), deadline: deadline ? String(deadline) : undefined });
+        const r = await goals.generatePlan(ctx.userId, g.id);
+        if (!r.ok) return { ok: false, goalId: g.id, error: r.error, note: 'goal creato ma piano fallito — riprova con goal_revise o di\' all\'utente di generarlo dalla UI' };
+        const { sendGoalPlanKeyboard } = await import('../../../telegram/bot.js');
+        await sendGoalPlanKeyboard(ctx.userId, r.goal as any);
+        return { ok: true, goalId: g.id, plan: r.goal?.pending_plan, note: 'Piano inviato su Telegram con keyboard di approvazione. NON ripetere il piano per intero in chat: l\'utente lo ha appena ricevuto.' };
+      },
+    },
+    {
+      name: 'goal_list',
+      description: 'Lista gli obiettivi dell\'utente con stato, KPI (current/target), deadline e piano. Usa per rispondere a "come vanno i miei obiettivi" o prima di crearne uno simile.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async (ctx) => {
+        const goals = await import('../../../goals/index.js');
+        const rows = await goals.listGoals(ctx.userId);
+        return rows.map((g) => ({
+          id: g.id, title: g.title, objective: g.objective, status: g.status, deadline: g.deadline,
+          kpis: (g.kpis ?? []).map((k) => ({ name: k.name, current: k.current, target: k.target, unit: k.unit })),
+          milestones: g.plan?.milestones?.map((m) => ({ title: m.title, status: m.status, due: m.due })) ?? [],
+          pending_plan: !!g.pending_plan,
+        }));
+      },
+    },
+    {
+      name: 'goal_generate_plan',
+      description: 'Genera (o rigenera) piano + KPI per un obiettivo GIÀ ESISTENTE (usa goal_list per trovare l\'id). L\'utente riceve il piano su Telegram con bottoni ✅/❌. `context` opzionale = indicazioni dell\'utente da incorporare (es. "niente workshop, solo coaching 1:1"). USA SEMPRE QUESTO invece di scrivere un piano testuale in chat.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal_id: { type: 'number' },
+          context: { type: 'string', description: 'Indicazioni/vincoli dell\'utente da incorporare, opzionale' },
+        },
+        required: ['goal_id'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, context }) => {
+        const goals = await import('../../../goals/index.js');
+        const r = await goals.generatePlan(ctx.userId, Number(goal_id), context ? String(context) : undefined);
+        if (!r.ok) return { ok: false, error: r.error };
+        const { sendGoalPlanKeyboard } = await import('../../../telegram/bot.js');
+        await sendGoalPlanKeyboard(ctx.userId, r.goal as any);
+        return { ok: true, plan: r.goal?.pending_plan, note: 'Piano inviato su Telegram con keyboard. Non ripeterlo per intero in chat.' };
+      },
+    },
+    {
+      name: 'goal_revise',
+      description: 'Rivedi il piano di un obiettivo incorporando il feedback dell\'utente (es. "togli la milestone X", "il target è 15 non 10", "aggiungi outreach LinkedIn"). Rigenera il piano e reinvia la keyboard ✅/❌ su Telegram. Usa quando l\'utente discute/critica un piano in attesa di approvazione.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal_id: { type: 'number' },
+          feedback: { type: 'string', description: 'Il feedback dell\'utente da incorporare, riportato fedelmente' },
+        },
+        required: ['goal_id', 'feedback'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, feedback }) => {
+        const goals = await import('../../../goals/index.js');
+        const r = await goals.revisePlan(ctx.userId, Number(goal_id), String(feedback));
+        if (!r.ok) return { ok: false, error: r.error };
+        const { sendGoalPlanKeyboard } = await import('../../../telegram/bot.js');
+        await sendGoalPlanKeyboard(ctx.userId, r.goal as any);
+        return { ok: true, plan: r.goal?.pending_plan, note: 'Piano rivisto e reinviato con keyboard. Non ripeterlo per intero in chat.' };
+      },
+    },
+    {
+      name: 'goal_update_kpi',
+      description: 'Aggiorna il valore corrente di un KPI di un obiettivo (es. l\'utente dice "abbiamo firmato il quarto cliente" → current=4). La history si aggiorna da sola. NON cambiare i target senza richiesta esplicita.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal_id: { type: 'number' },
+          kpi_name: { type: 'string', description: 'Nome del KPI (match case-insensitive)' },
+          current: { type: 'number', description: 'Nuovo valore corrente' },
+        },
+        required: ['goal_id', 'kpi_name', 'current'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, kpi_name, current }) => {
+        const goals = await import('../../../goals/index.js');
+        const g = await goals.getGoal(ctx.userId, Number(goal_id));
+        if (!g) return { ok: false, error: 'goal non trovato' };
+        const k = (g.kpis ?? []).find((x) => x.name.toLowerCase() === String(kpi_name).toLowerCase());
+        if (!k) return { ok: false, error: `KPI "${kpi_name}" non trovato. Disponibili: ${(g.kpis ?? []).map((x) => x.name).join(', ')}` };
+        await goals.upsertGoalKpi(ctx.userId, g.id, { id: k.id, name: k.name, unit: k.unit, target: k.target, current: Number(current) });
+        return { ok: true, kpi: k.name, current: Number(current), target: k.target };
+      },
+    },
+    {
+      name: 'goal_update',
+      description: 'Modifica i campi base di un obiettivo: titolo, obiettivo misurabile, deadline, stato (draft/active/paused/done/archived). Es. "metti in pausa l\'obiettivo X", "sposta la deadline al 30 settembre", "segna l\'obiettivo come completato".',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal_id: { type: 'number' },
+          title: { type: 'string' },
+          objective: { type: 'string' },
+          deadline: { type: 'string', description: 'YYYY-MM-DD, o stringa vuota per rimuovere' },
+          status: { type: 'string', enum: ['draft', 'active', 'paused', 'done', 'archived'] },
+        },
+        required: ['goal_id'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, ...patch }) => {
+        const goals = await import('../../../goals/index.js');
+        const g = await goals.updateGoal(ctx.userId, Number(goal_id), patch as any);
+        return g ? { ok: true, goal: { id: g.id, title: g.title, status: g.status, deadline: g.deadline } } : { ok: false, error: 'goal non trovato' };
+      },
+    },
+    {
+      name: 'goal_delete',
+      description: 'Elimina definitivamente un obiettivo. Usa SOLO su richiesta esplicita dell\'utente ("cancella l\'obiettivo X"). Per nascondere senza perdere lo storico preferisci goal_update con status=archived.',
+      inputSchema: {
+        type: 'object',
+        properties: { goal_id: { type: 'number' } },
+        required: ['goal_id'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id }) => {
+        const goals = await import('../../../goals/index.js');
+        return goals.deleteGoal(ctx.userId, Number(goal_id));
+      },
+    },
+    {
+      name: 'goal_kpi_upsert',
+      description: 'Crea o aggiorna un KPI di un obiettivo (nome, target, unità, valore corrente). Per il solo valore corrente usa goal_update_kpi. Passa `kpi_id` per aggiornare uno esistente, omettilo per crearne uno nuovo.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal_id: { type: 'number' },
+          kpi_id: { type: 'string' },
+          name: { type: 'string' },
+          target: { type: 'number' },
+          unit: { type: 'string' },
+          current: { type: 'number' },
+        },
+        required: ['goal_id', 'name', 'target'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, kpi_id, name, target, unit, current }) => {
+        const goals = await import('../../../goals/index.js');
+        const g = await goals.upsertGoalKpi(ctx.userId, Number(goal_id), { id: kpi_id, name: String(name), target: Number(target), unit, current: current !== undefined ? Number(current) : undefined });
+        return g ? { ok: true, kpis: g.kpis.map((k) => ({ id: k.id, name: k.name, current: k.current, target: k.target })) } : { ok: false, error: 'goal non trovato' };
+      },
+    },
+    {
+      name: 'goal_kpi_delete',
+      description: 'Elimina un KPI da un obiettivo (per id). Usa goal_list per vedere gli id dei KPI.',
+      inputSchema: {
+        type: 'object',
+        properties: { goal_id: { type: 'number' }, kpi_id: { type: 'string' } },
+        required: ['goal_id', 'kpi_id'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, kpi_id }) => {
+        const goals = await import('../../../goals/index.js');
+        const g = await goals.deleteGoalKpi(ctx.userId, Number(goal_id), String(kpi_id));
+        return g ? { ok: true } : { ok: false, error: 'goal non trovato' };
+      },
+    },
+    {
+      name: 'goal_milestone_add',
+      description: 'Aggiungi una milestone al piano di un obiettivo. `area` = funzione aziendale (Operativo/Marketing/Relations/Vendite/HR/Prodotto/Finance). `order` = ordine di esecuzione (stesso order = parallele, crescente = sequenziali). Se il goal non ha ancora un piano, ne crea uno.',
+      inputSchema: {
+        type: 'object',
+        properties: { goal_id: { type: 'number' }, title: { type: 'string' }, due: { type: 'string' }, area: { type: 'string' }, order: { type: 'number' } },
+        required: ['goal_id', 'title'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, title, due, area, order }) => {
+        const goals = await import('../../../goals/index.js');
+        const g = await goals.addMilestone(ctx.userId, Number(goal_id), { title: String(title), due: due ? String(due) : undefined, area, order });
+        return g ? { ok: true, milestones: g.plan?.milestones?.map((m) => ({ id: m.id, title: m.title, status: m.status, due: m.due, area: m.area, order: m.order })) ?? [] } : { ok: false, error: 'goal non trovato' };
+      },
+    },
+    {
+      name: 'goal_milestone_set',
+      description: 'Cambia stato/titolo/data/area/order di una milestone. status = pending | in_progress | done. Es. "segna come fatta la milestone del primo cliente". Usa goal_list per gli id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal_id: { type: 'number' },
+          milestone_id: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'in_progress', 'done'] },
+          title: { type: 'string' },
+          due: { type: 'string' },
+          area: { type: 'string' },
+          order: { type: 'number' },
+        },
+        required: ['goal_id', 'milestone_id'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, milestone_id, status, title, due, area, order }) => {
+        const goals = await import('../../../goals/index.js');
+        if (title !== undefined || due !== undefined || area !== undefined || order !== undefined) {
+          await goals.editMilestone(ctx.userId, Number(goal_id), String(milestone_id), { title, due, area, order });
+        }
+        const g = status
+          ? await goals.updateMilestone(ctx.userId, Number(goal_id), String(milestone_id), status as any)
+          : await goals.getGoal(ctx.userId, Number(goal_id));
+        return g ? { ok: true, milestones: g.plan?.milestones?.map((m) => ({ id: m.id, title: m.title, status: m.status, due: m.due, area: m.area, order: m.order })) ?? [] } : { ok: false, error: 'goal non trovato' };
+      },
+    },
+    {
+      name: 'goal_milestone_deploy_agent',
+      description: 'Deploya un sub-agente che lavora su UNA milestone specifica di un obiettivo. L\'agente è agganciato a goal+milestone: compare nel pannello del goal SOTTO quella milestone. Manda keyboard ✅/❌ su Telegram. Il prompt deve includere: cosa fare, con chi comunicare (es. Mattia), che deve riportare a Federico e scrivere l\'esito nel brain (nota markdown). USA per "fai partire un agente sulla milestone X".',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal_id: { type: 'number' },
+          milestone_id: { type: 'string' },
+          title: { type: 'string', description: 'Label dell\'agente (3-6 parole)' },
+          brief: { type: 'string', description: 'Una riga user-facing' },
+          prompt: { type: 'string', description: 'Prompt self-contained: obiettivo, contatti, deliverable, "riporta a Federico e scrivi l\'esito in una nota brain".' },
+        },
+        required: ['goal_id', 'milestone_id', 'title', 'brief', 'prompt'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, milestone_id, title, brief, prompt }) => {
+        const goals = await import('../../../goals/index.js');
+        const g = await goals.getGoal(ctx.userId, Number(goal_id));
+        const ms = g?.plan?.milestones?.find((m) => m.id === String(milestone_id));
+        const p = await subAgents.createProposal(
+          ctx.userId,
+          String(title),
+          ms ? `Milestone: ${ms.title}` : null,
+          [{ title: String(title), brief: String(brief), prompt: String(prompt) }],
+          { goalId: Number(goal_id), milestoneId: String(milestone_id) },
+        );
+        return { ok: true, proposalId: p.id, awaitingApproval: true, note: 'Keyboard ✅/❌ inviata. Dopo l\'approvazione l\'agente compare sotto la milestone nel pannello del goal.' };
+      },
+    },
+    {
+      name: 'goal_milestone_remove',
+      description: 'Rimuovi una milestone dal piano di un obiettivo (per id).',
+      inputSchema: {
+        type: 'object',
+        properties: { goal_id: { type: 'number' }, milestone_id: { type: 'string' } },
+        required: ['goal_id', 'milestone_id'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, milestone_id }) => {
+        const goals = await import('../../../goals/index.js');
+        const g = await goals.removeMilestone(ctx.userId, Number(goal_id), String(milestone_id));
+        return g ? { ok: true } : { ok: false, error: 'goal non trovato' };
+      },
+    },
+    {
+      name: 'goal_deploy_agents',
+      description: 'Spawna sub-agenti operativi PER UN OBIETTIVO specifico, collegati ad esso (compaiono nel pannello esecuzione del goal in Roadmap, non solo in /agents). Manda la keyboard ✅/❌ su Telegram come propose_agents, ma con il goal_id già agganciato. USA QUESTO quando l\'utente ti chiede di "creare/deployare gli agenti" per un obiettivo.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal_id: { type: 'number' },
+          title: { type: 'string', description: 'Headline del batch (es. "Lancio Track A — outreach + content")' },
+          reason: { type: 'string' },
+          proposals: {
+            type: 'array', minItems: 1, maxItems: 6,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                brief: { type: 'string' },
+                prompt: { type: 'string', description: 'Prompt self-contained con tutto il contesto + deliverable + file path.' },
+              },
+              required: ['title', 'brief', 'prompt'], additionalProperties: false,
+            },
+          },
+        },
+        required: ['goal_id', 'title', 'proposals'], additionalProperties: false,
+      },
+      handler: async (ctx, { goal_id, title, reason, proposals }) => {
+        const p = await subAgents.createProposal(ctx.userId, String(title), reason ?? null, proposals, { goalId: Number(goal_id) });
+        return { ok: true, proposalId: p.id, status: p.status, awaitingApproval: true, note: 'Keyboard ✅/❌ inviata. Gli agenti compariranno nel pannello esecuzione del goal in Roadmap dopo l\'approvazione.' };
+      },
+    },
     {
       name: 'telegram_send_file',
       description: 'Invia un file locale all\'utente su Telegram (PDF, immagini, CSV, zip — qualunque file ≤50MB). Usa il path assoluto del file generato. Le immagini (.jpg/.png/.webp) arrivano con preview inline, il resto come documento scaricabile. `caption` opzionale (max 1024 char).',

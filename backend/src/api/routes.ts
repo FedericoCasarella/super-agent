@@ -537,6 +537,158 @@ router.post('/brain/snapshots/run', async (req, res) => {
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// ---------------------------------------------------------------------------
+// GOALS — obiettivi con piano approvabile, KPI per-goal e steward settimanale.
+// ---------------------------------------------------------------------------
+router.get('/goals', async (req, res) => {
+  try {
+    const { listGoals } = await import('../goals/index.js');
+    res.json({ rows: await listGoals(req.user!.id, req.query.archived === '1') });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/goals', async (req, res) => {
+  try {
+    const { createGoal } = await import('../goals/index.js');
+    const { title, objective, deadline } = req.body ?? {};
+    if (!title || !objective) return res.status(400).json({ error: 'title e objective richiesti' });
+    res.json(await createGoal(req.user!.id, { title, objective, deadline }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/goals/:id', async (req, res) => {
+  try {
+    const { updateGoal } = await import('../goals/index.js');
+    res.json(await updateGoal(req.user!.id, Number(req.params.id), req.body ?? {}));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.post('/goals/:id/plan/generate', quotaGuard, async (req, res) => {
+  try {
+    const { generatePlan } = await import('../goals/index.js');
+    const r = await generatePlan(req.user!.id, Number(req.params.id));
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/goals/:id/plan/approve', async (req, res) => {
+  try {
+    const { approvePlan } = await import('../goals/index.js');
+    const r = await approvePlan(req.user!.id, Number(req.params.id));
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/goals/:id/plan/reject', async (req, res) => {
+  try {
+    const { rejectPlan } = await import('../goals/index.js');
+    res.json(await rejectPlan(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.post('/goals/:id/kpis', async (req, res) => {
+  try {
+    const { upsertGoalKpi } = await import('../goals/index.js');
+    res.json(await upsertGoalKpi(req.user!.id, Number(req.params.id), req.body ?? {}));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/goals/:id/kpis/:kpiId', async (req, res) => {
+  try {
+    const { deleteGoalKpi } = await import('../goals/index.js');
+    res.json(await deleteGoalKpi(req.user!.id, Number(req.params.id), String(req.params.kpiId)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+// Esecuzione di un goal: proposte (in attesa di ✅ Telegram / approvate /
+// rifiutate) + sub-agent spawnati con stato, costo e risultato.
+router.get('/goals/:id/execution', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const goalId = Number(req.params.id);
+    const proposals = await query<any>(
+      `SELECT id::int, title, reason, proposals, status, created_at, decided_at
+       FROM agent_proposals WHERE user_id=$1 AND goal_id=$2 ORDER BY created_at DESC LIMIT 50`,
+      [userId, goalId],
+    );
+    const agents = await query<any>(
+      `SELECT id::int, title, brief, status, cost_usd, created_at, started_at, ended_at, goal_id, milestone_id,
+              left(coalesce(result, ''), 1500) AS result, error
+       FROM sub_agents WHERE user_id=$1 AND goal_id=$2 ORDER BY created_at DESC LIMIT 100`,
+      [userId, goalId],
+    );
+    // milestone_id sulle proposte pending serve a raggrupparle nel pannello.
+    const propsWithMs = await query<any>(
+      `SELECT id::int, milestone_id FROM agent_proposals WHERE user_id=$1 AND goal_id=$2`,
+      [userId, goalId],
+    );
+    const msById = new Map(propsWithMs.map((p: any) => [p.id, p.milestone_id]));
+    for (const p of proposals) (p as any).milestone_id = msById.get(p.id) ?? null;
+    res.json({ proposals, agents });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Milestone CRUD dalla UI.
+router.post('/goals/:id/milestones', async (req, res) => {
+  try {
+    const { addMilestone } = await import('../goals/index.js');
+    const { title, due, area, order } = req.body ?? {};
+    if (!title) return res.status(400).json({ error: 'title richiesto' });
+    res.json(await addMilestone(req.user!.id, Number(req.params.id), { title, due, area, order }));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.put('/goals/:id/milestones/:mid', async (req, res) => {
+  try {
+    const goals = await import('../goals/index.js');
+    const b = req.body ?? {};
+    // status separato (updateMilestone) dagli altri campi (editMilestone).
+    if (b.title !== undefined || b.due !== undefined || b.area !== undefined || b.order !== undefined) {
+      await goals.editMilestone(req.user!.id, Number(req.params.id), String(req.params.mid), { title: b.title, due: b.due, area: b.area, order: b.order });
+    }
+    const g = b.status
+      ? await goals.updateMilestone(req.user!.id, Number(req.params.id), String(req.params.mid), b.status)
+      : await goals.getGoal(req.user!.id, Number(req.params.id));
+    res.json(g);
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/goals/:id/milestones/:mid', async (req, res) => {
+  try {
+    const { removeMilestone } = await import('../goals/index.js');
+    res.json(await removeMilestone(req.user!.id, Number(req.params.id), String(req.params.mid)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+// Deploy un agente su una milestone dalla UI → crea proposta (goal+milestone)
+// con keyboard ✅/❌ su Telegram. `instruction` = cosa deve fare in parole semplici.
+router.post('/goals/:id/milestones/:mid/deploy', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const goalId = Number(req.params.id);
+    const mid = String(req.params.mid);
+    const instruction = String(req.body?.instruction ?? '').trim();
+    if (!instruction) return res.status(400).json({ error: 'instruction richiesta' });
+    const { getGoal } = await import('../goals/index.js');
+    const g = await getGoal(userId, goalId);
+    const ms = g?.plan?.milestones?.find((m: any) => m.id === mid);
+    if (!g || !ms) return res.status(404).json({ error: 'milestone non trovata' });
+    const { createProposal } = await import('../sub_agents/index.js');
+    const prompt = [
+      `Stai lavorando all'obiettivo "${g.title}" (${g.objective}).`,
+      `Milestone assegnata: "${ms.title}"${ms.due ? ` (entro ${ms.due})` : ''}.`,
+      `Compito: ${instruction}`,
+      `Esegui concretamente con i tool disponibili (mail, WhatsApp, brain, Flowspace).`,
+      `Al termine: riporta l'esito a Federico in modo conciso e SCRIVI una nota nel brain (markdown) con cosa è stato fatto e i prossimi passi, taggata con l'obiettivo.`,
+    ].join('\n');
+    const p = await createProposal(
+      userId,
+      `${ms.title} — agente`,
+      `Milestone: ${ms.title}`,
+      [{ title: `Agente: ${ms.title.slice(0, 40)}`, brief: instruction.slice(0, 120), prompt }],
+      { goalId, milestoneId: mid },
+    );
+    res.json({ ok: true, proposalId: p.id });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+router.delete('/goals/:id', async (req, res) => {
+  try {
+    const { deleteGoal } = await import('../goals/index.js');
+    res.json(await deleteGoal(req.user!.id, Number(req.params.id)));
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
 // Brain Consolidator proposals — list / apply / reject. Apply runs through
 // brain/proposals.ts which snapshots the vault first.
 router.get('/brain/proposals', async (req, res) => {

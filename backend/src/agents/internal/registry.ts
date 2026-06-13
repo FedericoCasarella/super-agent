@@ -12,9 +12,10 @@ import vaultGardener from './vault_gardener.js';
 import thoughtDigest from './thought_digest.js';
 import brainConsolidator from './brain_consolidator.js';
 import waPeopleSync from './wa_people_sync.js';
+import goalSteward from './goal_steward.js';
 import { sendTelegram } from '../../telegram/bot.js';
 
-const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer, vaultDreamer, vaultLibrarian, vaultGardener, thoughtDigest, brainConsolidator, waPeopleSync];
+const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer, vaultDreamer, vaultLibrarian, vaultGardener, thoughtDigest, brainConsolidator, waPeopleSync, goalSteward];
 
 export function listInternalAgents(): InternalAgent[] {
   return REGISTRY;
@@ -127,7 +128,9 @@ export async function runInternalAgent(userId: number, name: string) {
       [userId, name]
     );
     console.log(`[internal-agents:u${userId}:${name}] notify_on_run=${rows[0]?.notify_on_run}`);
-    if (rows[0]?.notify_on_run) {
+    // report.silent = the agent decided this run is a no-op the user shouldn't
+    // hear about (e.g. goal_steward fires daily but reviews only on Friday).
+    if (rows[0]?.notify_on_run && report?.silent !== true) {
       const lang = ((await getSetting<string>(userId, 'language')) ?? 'it') as Lang;
       let msg = agent.humanize
         ? agent.humanize(report, lang, status as 'ok' | 'error')
@@ -168,36 +171,24 @@ export async function updateAgentSchedule(userId: number, name: string, p: { hou
 // Survives app downtime — daily agents will fire on next boot.
 async function catchUpInternalAgents() {
   const users = await listActiveUsers();
-  const now = new Date();
   for (const u of users) {
     await ensureUserAgentRows(u.id);
-    const rows = await query<{ name: string; enabled: boolean; hour: number; minute: number; interval_hours: number | null; last_run_at: string | null }>(
-      `SELECT name, enabled, hour, minute, interval_hours, last_run_at FROM internal_agents WHERE user_id=$1`,
+    // Daily-anchor catch-up with ATOMIC CLAIM (interval agents are left to the
+    // 1-min tick). Claim = bump last_run_at in the selecting UPDATE so repeated
+    // boots / multiple processes can't each re-fire the same missed agent.
+    // Condition: today's anchor time already passed AND last run was before it.
+    const claimed = await query<{ name: string; hour: number; minute: number }>(
+      `UPDATE internal_agents SET last_run_at=now(), updated_at=now()
+       WHERE user_id=$1 AND enabled=true AND running=false
+         AND (interval_hours IS NULL OR interval_hours = 0)
+         AND make_timestamptz(extract(year from now())::int, extract(month from now())::int, extract(day from now())::int, hour, minute, 0) <= now()
+         AND (last_run_at IS NULL OR last_run_at < make_timestamptz(extract(year from now())::int, extract(month from now())::int, extract(day from now())::int, hour, minute, 0))
+       RETURNING name, hour, minute`,
       [u.id],
     );
-    for (const r of rows) {
-      if (!r.enabled) continue;
-      const lastRun = r.last_run_at ? new Date(r.last_run_at) : null;
-      // Interval-based agents: fire if elapsed >= interval (or never ran).
-      if (r.interval_hours && r.interval_hours > 0) {
-        const intervalMs = r.interval_hours * 3600_000;
-        const due = !lastRun || (now.getTime() - lastRun.getTime()) >= intervalMs;
-        if (due) {
-          console.log(`[internal-agents:u${u.id}:${r.name}] catch-up: interval ${r.interval_hours}h, last_run ${lastRun ? lastRun.toISOString() : 'never'} → firing`);
-          setTimeout(() => runInternalAgent(u.id, r.name).catch((e) => console.error('[internal-agents:catchup]', e)), 4000 + Math.random() * 3000);
-        }
-        continue;
-      }
-      // Daily anchor agents: fire if today's scheduled time passed and not yet run.
-      const sched = new Date(now);
-      sched.setHours(r.hour, r.minute, 0, 0);
-      const passed = now >= sched;
-      const missedToday = passed && (!lastRun || lastRun < sched);
-      if (missedToday) {
-        const ageH = lastRun ? Math.floor((now.getTime() - lastRun.getTime()) / 3_600_000) : null;
-        console.log(`[internal-agents:u${u.id}:${r.name}] catch-up: scheduled ${r.hour}:${String(r.minute).padStart(2,'0')}, last_run ${ageH != null ? `${ageH}h ago` : 'never'} → firing`);
-        setTimeout(() => runInternalAgent(u.id, r.name).catch((e) => console.error('[internal-agents:catchup]', e)), 4000 + Math.random() * 3000);
-      }
+    for (const r of claimed) {
+      console.log(`[internal-agents:u${u.id}:${r.name}] catch-up: missed ${r.hour}:${String(r.minute).padStart(2, '0')} → firing (claimed)`);
+      setTimeout(() => runInternalAgent(u.id, r.name).catch((e) => console.error('[internal-agents:catchup]', e)), 4000 + Math.random() * 3000);
     }
   }
 }
@@ -215,29 +206,39 @@ export function startInternalAgentsScheduler() {
     try {
       const users = await listActiveUsers();
       for (const u of users) {
-        // Daily anchor match
-        const dailyRows = await query<{ name: string; enabled: boolean }>(
-          `SELECT name, enabled FROM internal_agents
-           WHERE user_id=$1 AND hour=$2 AND minute=$3 AND (interval_hours IS NULL OR interval_hours = 0)`,
+        // Daily anchor match — ATOMIC CLAIM (same lock as interval below) so a
+        // long run + a second zombie backend can't double-fire within the
+        // matching minute. last_run_at < today's anchor guards against re-firing
+        // a run already started this minute by another process.
+        const dailyClaimed = await query<{ name: string }>(
+          `UPDATE internal_agents SET last_run_at=now(), updated_at=now()
+           WHERE user_id=$1 AND enabled=true AND running=false
+             AND hour=$2 AND minute=$3 AND (interval_hours IS NULL OR interval_hours = 0)
+             AND (last_run_at IS NULL OR last_run_at < date_trunc('minute', now()))
+           RETURNING name`,
           [u.id, h, m]
         );
-        for (const r of dailyRows) {
-          if (!r.enabled) continue;
-          console.log(`[internal-agents:u${u.id}] firing ${r.name} (daily anchor)`);
+        for (const r of dailyClaimed) {
+          console.log(`[internal-agents:u${u.id}] firing ${r.name} (daily anchor, claimed)`);
           runInternalAgent(u.id, r.name).catch((e) => console.error('[internal-agents]', e));
         }
-        // Interval-based: any agent where elapsed >= interval_hours
-        const intRows = await query<{ name: string; enabled: boolean; interval_hours: number; last_run_at: string | null }>(
-          `SELECT name, enabled, interval_hours, last_run_at FROM internal_agents
-           WHERE user_id=$1 AND interval_hours IS NOT NULL AND interval_hours > 0`,
+        // Interval-based: ATOMIC CLAIM. The previous version checked last_run_at
+        // in JS then fired — but runInternalAgent only writes last_run_at at the
+        // END of a 60-120s run, so every 1-min tick (and every zombie backend)
+        // re-fired the same agent → runaway loop (64 runs in 16 min). Now we
+        // bump last_run_at in the SAME statement that selects due agents, with a
+        // running=false guard. The DB row is the lock: concurrent ticks/processes
+        // that lose the race see the already-bumped timestamp and skip.
+        const claimed = await query<{ name: string; interval_hours: number }>(
+          `UPDATE internal_agents SET last_run_at=now(), updated_at=now()
+           WHERE user_id=$1 AND enabled=true AND running=false
+             AND interval_hours IS NOT NULL AND interval_hours > 0
+             AND (last_run_at IS NULL OR now() - last_run_at >= (interval_hours || ' hours')::interval)
+           RETURNING name, interval_hours`,
           [u.id]
         );
-        for (const r of intRows) {
-          if (!r.enabled) continue;
-          const last = r.last_run_at ? new Date(r.last_run_at).getTime() : 0;
-          const due = (now.getTime() - last) >= r.interval_hours * 3600_000;
-          if (!due) continue;
-          console.log(`[internal-agents:u${u.id}] firing ${r.name} (interval ${r.interval_hours}h)`);
+        for (const r of claimed) {
+          console.log(`[internal-agents:u${u.id}] firing ${r.name} (interval ${r.interval_hours}h, claimed)`);
           runInternalAgent(u.id, r.name).catch((e) => console.error('[internal-agents]', e));
         }
       }

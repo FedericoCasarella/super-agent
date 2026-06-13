@@ -266,6 +266,31 @@ async function startBotForUser(userId: number) {
       }
       return;
     }
+    // Goal plan approval — approve applica piano+KPI e propone le azioni
+    // settimana 1 (che arrivano come ULTERIORE keyboard agent_proposals).
+    m = data.match(/^goalplan:(\d+):(approve|reject)$/);
+    if (m) {
+      const goalId = Number(m[1]);
+      const action = m[2];
+      try {
+        const goals = await import('../goals/index.js');
+        if (action === 'approve') {
+          const r = await goals.approvePlan(userId, goalId);
+          if (!r.ok) throw new Error(r.error);
+          await ctx.answerCbQuery('✅ Piano approvato');
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText('✅ Piano approvato — obiettivo attivo. Le azioni della settimana 1 arrivano in un attimo (✅/❌).'); } catch {}
+        } else {
+          await goals.rejectPlan(userId, goalId);
+          await ctx.answerCbQuery('❌ Piano scartato');
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText('❌ Piano scartato. Dimmi cosa non andava e ne genero un altro.'); } catch {}
+        }
+      } catch (e: any) {
+        await ctx.answerCbQuery(`Errore: ${String(e?.message ?? e).slice(0, 100)}`);
+      }
+      return;
+    }
     // Email draft approval
     m = data.match(/^email_draft:(\d+):(send|deny)$/);
     if (m) {
@@ -767,7 +792,52 @@ export async function sendProposalKeyboard(userId: number, proposal: { id: numbe
   }
 }
 
-export async function sendEmailDraftKeyboard(userId: number, draft: { id: number; to_addr: string; subject: string; body: string }): Promise<{ message_id: number; chat_id: number } | null> {
+// Piano di un Goal in attesa di approvazione — riassunto + keyboard. L'utente
+// può anche semplicemente RISPONDERE in chat per discuterlo: l'agente chiama
+// agent_goal_revise e questo messaggio viene reinviato col piano aggiornato.
+export async function sendGoalPlanKeyboard(userId: number, goal: { id: number; title: string; objective: string; deadline: string | null; pending_plan: any }): Promise<{ message_id: number; chat_id: number } | null> {
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return null;
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return null;
+  const p = goal.pending_plan ?? {};
+  const lines = [
+    `🎯 *Piano per: ${goal.title}*`,
+    goal.deadline ? `_${goal.objective} · entro ${goal.deadline}_` : `_${goal.objective}_`,
+    p.notes ? `\n${p.notes}` : '',
+  ];
+  if (p.kpis?.length) {
+    lines.push('', '*KPI proposti:*');
+    for (const k of p.kpis) lines.push(`• ${k.name}: ${k.current ?? 0} → ${k.target}${k.unit ? ` ${k.unit}` : ''}`);
+  }
+  if (p.milestones?.length) {
+    lines.push('', '*Milestones:*');
+    p.milestones.forEach((m: any, i: number) => lines.push(`${i + 1}. ${m.title}${m.due ? ` — ${m.due}` : ''}`));
+  }
+  if (p.next_actions?.length) {
+    lines.push('', '*Settimana 1:*');
+    for (const a of p.next_actions) lines.push(`• ${a.title}`);
+  }
+  lines.push('', 'Approva, scarta, o *rispondimi* con le modifiche che vuoi e lo sistemo.');
+  try {
+    const sent = await entry.bot.telegram.sendMessage(cfg.chatId, lines.filter(Boolean).join('\n'), {
+      parse_mode: 'Markdown' as any,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ Approva piano', callback_data: `goalplan:${goal.id}:approve` },
+          { text: '❌ Scarta', callback_data: `goalplan:${goal.id}:reject` },
+        ]],
+      },
+    });
+    return { message_id: (sent as any).message_id, chat_id: cfg.chatId };
+  } catch (e: any) {
+    console.error('[telegram] goal plan send failed', e?.message ?? e);
+    return null;
+  }
+}
+
+export async function sendEmailDraftKeyboard(userId: number, draft: { id: number; to_addr: string; subject: string; body: string; meta?: any }): Promise<{ message_id: number; chat_id: number } | null> {
   const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
   if (!cfg?.token || !cfg?.chatId) return null;
   if (!bots.get(userId)) await startBotForUser(userId);
@@ -775,11 +845,13 @@ export async function sendEmailDraftKeyboard(userId: number, draft: { id: number
   if (!entry) return null;
   const chatId = cfg.chatId;
   const bodyPreview = draft.body.length > 500 ? draft.body.slice(0, 500) + '…' : draft.body;
+  const attachments: string[] = Array.isArray(draft.meta?.attachments) ? draft.meta.attachments : [];
   const msg = [
     '✉️ *Bozza email pronta*',
     '',
     `*A:* \`${draft.to_addr}\``,
     `*Oggetto:* ${draft.subject}`,
+    ...(attachments.length ? [`*Allegati:* ${attachments.map((p) => `📎 ${p.split('/').pop()}`).join(' · ')}`] : []),
     '',
     '```',
     bodyPreview,

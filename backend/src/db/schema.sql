@@ -862,3 +862,52 @@ CREATE TABLE IF NOT EXISTS brain_proposals (
   resolved_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS brain_proposals_user_status_idx ON brain_proposals(user_id, status, created_at DESC);
+
+-- Goals — obiettivi di lungo periodo con piano, KPI e steward settimanale.
+-- Human-in-the-loop: il piano generato dall'agente resta in pending_plan
+-- finché l'utente non lo approva; le azioni settimanali passano da
+-- agent_proposals (keyboard Telegram ✅/❌).
+CREATE TABLE IF NOT EXISTS goals (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  objective TEXT NOT NULL,                -- misurabile: "10 clienti AMPERA"
+  deadline DATE,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','paused','done','archived')),
+  -- kpis: [{id,name,unit,target,current,history:[{ts,value}]}]
+  kpis JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- plan (approvato): { milestones:[{id,title,due,status}], notes }
+  plan JSONB,
+  -- pending_plan (proposta agente in attesa di approvazione umana)
+  pending_plan JSONB,
+  last_review_at TIMESTAMPTZ,             -- ultimo giro dello steward
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS goals_user_status_idx ON goals(user_id, status);
+
+-- Goal execution linkage — proposte e sub-agent spawnati per un obiettivo
+-- portano il goal_id, così la pagina /goals/:id mostra l'esecuzione reale.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='agent_proposals' AND column_name='goal_id') THEN
+    ALTER TABLE agent_proposals ADD COLUMN goal_id BIGINT REFERENCES goals(id) ON DELETE SET NULL;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sub_agents' AND column_name='goal_id') THEN
+    ALTER TABLE sub_agents ADD COLUMN goal_id BIGINT REFERENCES goals(id) ON DELETE SET NULL;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS sub_agents_goal_idx ON sub_agents(goal_id) WHERE goal_id IS NOT NULL;
+
+-- Milestone-level agent linkage: which milestone a sub-agent works on.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sub_agents' AND column_name='milestone_id') THEN
+    ALTER TABLE sub_agents ADD COLUMN milestone_id TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='agent_proposals' AND column_name='milestone_id') THEN
+    ALTER TABLE agent_proposals ADD COLUMN milestone_id TEXT;
+  END IF;
+EXCEPTION WHEN others THEN NULL; END $$;

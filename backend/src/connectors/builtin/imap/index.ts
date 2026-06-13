@@ -76,8 +76,10 @@ async function getAccountsForUser(userId: number): Promise<Account[]> {
 }
 
 function smtpCreds(acc: Account) {
-  const host = acc.smtpHost || acc.host.replace(/^imap\./i, 'smtp.');
-  const port = acc.smtpPort ?? 587;
+  // "imap.x.it" → "smtp.x.it" AND "imaps.x.it" → "smtps.x.it" (Aruba keeps s).
+  const derived = acc.host.replace(/^imap(s?)\./i, 'smtp$1.');
+  const host = acc.smtpHost || derived;
+  const port = acc.smtpPort ?? (/^smtps\./i.test(host) ? 465 : 587);
   const secure = acc.smtpSecure ?? (port === 465);
   const user = acc.smtpUser || acc.user;
   const pass = acc.smtpPass || acc.pass;
@@ -146,7 +148,10 @@ export async function createDraft(userId: number, accountLabel: string, draft: {
   to: string; cc?: string; bcc?: string; subject: string; body: string; inReplyTo?: string; references?: string; attachments?: string[];
 }): Promise<EmailDraft> {
   const accs = await getAccountsForUser(userId);
-  if (!accs.find((a) => a.label === accountLabel)) throw new Error(`account ${accountLabel} not found`);
+  if (!accs.find((a) => a.label === accountLabel)) {
+    const avail = accs.map((a) => `${a.label} (${a.user})`).join(', ') || 'nessuna casella configurata';
+    throw new Error(`Casella "${accountLabel}" non configurata. Usa SOLO una di queste caselle dell'estensione email: ${avail}`);
+  }
   // Store the resolved real paths so send-time reads exactly what was validated.
   const safePaths = draft.attachments?.length ? await safeAttachmentPaths(draft.attachments) : [];
   // meta column is JSONB NOT NULL — never pass null. Always serialize an
@@ -207,10 +212,45 @@ export async function sendDraft(userId: number, id: number): Promise<EmailDraft>
   const attachmentPaths: string[] = await safeAttachmentPaths(d.meta?.attachments ?? []);
   const attachments = attachmentPaths.map((p) => ({ path: p }));
   const { logOutbound } = await import('../../../comm/outbound_log.js');
+  // Auto-detect HTML: if the body contains real tags, send as text/html so it
+  // renders instead of arriving as raw markup. Provide a plain-text fallback
+  // (tags stripped) for clients that prefer it. Plain bodies stay text/plain.
+  const looksHtml = /<\/?(?:p|div|br|a|span|table|tr|td|h[1-6]|ul|ol|li|img|b|strong|i|em|blockquote|font|style)\b[^>]*>/i.test(d.body);
+  const bodyParts: any = looksHtml
+    ? { html: d.body, text: d.body.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|tr|h[1-6]|li)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\n{3,}/g, '\n\n').trim() }
+    : { text: d.body };
   try {
-    await t.sendMail({ from, to: d.to_addr, cc: d.cc_addr ?? undefined, bcc: d.bcc_addr ?? undefined, subject: d.subject, text: d.body, headers, ...(attachments.length ? { attachments } : {}) });
+    const info = await t.sendMail({ from, to: d.to_addr, cc: d.cc_addr ?? undefined, bcc: d.bcc_addr ?? undefined, subject: d.subject, ...bodyParts, headers, ...(attachments.length ? { attachments } : {}) });
     await query(`UPDATE email_drafts SET status='sent', sent_at=now(), decided_at=COALESCE(decided_at, now()) WHERE id=$1`, [id]);
     bus.emit('email_draft:sent', { userId, id });
+    // Persist into mail_messages (direction='out') under the account's REAL
+    // sent folder so the email shows up in the /mail "Inviati" view. Without
+    // this, Telegram-approved emails vanished from the client.
+    try {
+      const sentFolderRow = await query<{ name: string }>(
+        `SELECT name FROM mail_folders WHERE user_id=$1 AND account_label=$2 AND kind='sent' LIMIT 1`,
+        [userId, d.account_label],
+      );
+      const sentFolder = sentFolderRow[0]?.name ?? 'Sent';
+      const mid = (info?.messageId ?? '').replace(/^<|>$/g, '');
+      const toArr = String(d.to_addr ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      const ccArr = String(d.cc_addr ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      const bccArr = String(d.bcc_addr ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      await query(
+        `INSERT INTO mail_messages(user_id, account_label, uid, message_id, in_reply_to, refs, thread_key,
+           folder, direction, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, subject, preview, body_text, body_html,
+           raw_size, ts, seen)
+         VALUES($1,$2,NULL,$3,$4,$5,$6,$7,'out',$8,$9,$10,$11,$12,$13,$14,$15,$16,0,now(),true)`,
+        [
+          userId, d.account_label, mid || null, d.in_reply_to ?? null, [],
+          d.in_reply_to ?? mid ?? null, sentFolder,
+          s.user, s.fromName ?? null, toArr, ccArr, bccArr, d.subject,
+          (bodyParts.text ?? d.body ?? '').replace(/\s+/g, ' ').trim().slice(0, 280),
+          bodyParts.text ?? d.body, looksHtml ? d.body : null,
+        ],
+      );
+      bus.emit('mail:flags', { userId });
+    } catch (persistErr) { console.error('[imap:sendDraft] persist to mail_messages failed', persistErr); }
     await logOutbound({
       userId, channel: 'email', status: 'sent',
       recipient: d.to_addr, subject: d.subject, body: d.body,
@@ -573,7 +613,7 @@ const connector: Connector = {
     },
     {
       name: 'propose_reply',
-      description: 'Crea una bozza di risposta email e chiede approvazione all\'utente via Telegram (✅ Invia / ❌ Scarta). USA SEMPRE questo invece di rispondere direttamente. `account` = label dell\'account email da cui inviare (deve avere SMTP configurato). Setta `inReplyTo` al Message-ID dell\'email originale per il threading. Firma con il nome dell\'utente.',
+      description: 'Crea una bozza email (nuova o risposta) e chiede approvazione all\'utente via Telegram (✅ Invia / ❌ Scarta). USA SEMPRE questo invece di rispondere direttamente. `account` = label dell\'account email da cui inviare (deve avere SMTP configurato). Setta `inReplyTo` al Message-ID dell\'email originale per il threading. Supporta ALLEGATI via `attachments` (path assoluti, es. un PDF appena generato). Firma con il nome dell\'utente.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -585,6 +625,11 @@ const connector: Connector = {
           body: { type: 'string', description: 'Body plain text. Firma con il nome dell\'utente.' },
           inReplyTo: { type: 'string', description: 'Message-ID originale per il threading.' },
           references: { type: 'string', description: 'Header References (concatenazione dei Message-ID precedenti).' },
+          attachments: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Path ASSOLUTI dei file da allegare (PDF/immagini/doc, max 5, 25MB cad., dentro home o /tmp). Verranno spediti come allegati reali.',
+          },
         },
         required: ['account', 'to', 'subject', 'body'], additionalProperties: false,
       },
