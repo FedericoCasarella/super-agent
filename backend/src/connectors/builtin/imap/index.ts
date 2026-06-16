@@ -640,7 +640,7 @@ const connector: Connector = {
     },
     {
       name: 'drafts_list',
-      description: 'Lista bozze email (pending = in attesa di approvazione utente).',
+      description: 'Lista bozze email con CORPO COMPLETO (pending = in attesa di approvazione utente). Usa per RILEGGERE/RISCRIVERE una bozza esistente: leggi qui il body, non dire mai "non riesco a recuperare la bozza".',
       inputSchema: {
         type: 'object',
         properties: { status: { type: 'string', enum: ['pending', 'approved', 'denied', 'sent', 'error'] } },
@@ -648,7 +648,7 @@ const connector: Connector = {
       },
       handler: async (ctx, { status }) => {
         const list = await listDrafts(ctx.userId, status);
-        return list.map((d) => ({ id: d.id, account: d.account_label, to: d.to_addr, subject: d.subject, status: d.status, created_at: d.created_at }));
+        return list.map((d) => ({ id: d.id, account: d.account_label, to: d.to_addr, subject: d.subject, body: d.body, status: d.status, created_at: d.created_at }));
       },
     },
     {

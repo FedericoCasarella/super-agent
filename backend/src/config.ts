@@ -25,3 +25,13 @@ export const config = {
   devAutoLogin: process.env.DEV_AUTOLOGIN === '1' && process.env.NODE_ENV !== 'production',
   devUserEmail: process.env.DEV_USER_EMAIL ?? null,
 };
+
+// Models the user can pick from Settings. `id` is passed to the Claude CLI
+// --model flag; `label`/`hint` are UI-only. Keep ids in sync with the CLI.
+export const AVAILABLE_MODELS: { id: string; label: string; hint: string }[] = [
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', hint: 'Più potente — ragionamento e task complessi' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', hint: 'Bilanciato — default, veloce e capace' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', hint: 'Più veloce ed economico' },
+  { id: 'claude-fable-5', label: 'Fable 5', hint: 'Creativo' },
+];
+export const MODEL_IDS = AVAILABLE_MODELS.map((m) => m.id);

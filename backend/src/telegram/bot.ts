@@ -5,6 +5,35 @@ import { bus } from '../bus.js';
 type BotEntry = { bot: Telegraf; token: string };
 const bots = new Map<number, BotEntry>(); // userId → bot
 
+// Coalesce attachments that arrive close together (e.g. 2 PDFs as an album, or
+// files + a caption). Telegram delivers each as a SEPARATE update; without this
+// each would spawn its own chat turn and the orchestrator's per-user mutex would
+// drop all but the first → "agent ignored my 2nd PDF". We buffer payload lines
+// per user and, after a short debounce, emit ONE combined telegram:incoming so
+// the agent sees all files (and the caption) together in a single turn.
+type AttachBuffer = { chatId: number; lines: string[]; caption: string; timer: ReturnType<typeof setTimeout> };
+const attachBuffers = new Map<number, AttachBuffer>();
+const ATTACH_DEBOUNCE_MS = 4000;
+function queueAttachment(userId: number, chatId: number, line: string, caption?: string) {
+  let buf = attachBuffers.get(userId);
+  if (!buf) { buf = { chatId, lines: [], caption: '', timer: setTimeout(() => {}, 0) }; attachBuffers.set(userId, buf); }
+  buf.chatId = chatId;
+  buf.lines.push(line);
+  if (caption && caption.trim()) buf.caption = caption.trim();
+  clearTimeout(buf.timer);
+  buf.timer = setTimeout(() => {
+    const b = attachBuffers.get(userId);
+    if (!b) return;
+    attachBuffers.delete(userId);
+    const header = b.lines.length > 1
+      ? `[${b.lines.length} file ricevuti insieme — analizzali TUTTI]\n\n`
+      : '';
+    const cap = b.caption ? `\n\nIstruzione utente: "${b.caption}"` : '';
+    const instr = `\n\nUsa lo strumento Read sui percorsi assoluti dei raw file (Claude Code legge PDF/immagini/testo nativamente). Se servono calcoli, usa Bash/python. Esegui quanto chiesto e rispondi all'utente.`;
+    bus.emit('telegram:incoming', { userId, chatId: b.chatId, text: header + b.lines.join('\n\n---\n\n') + cap + instr });
+  }, ATTACH_DEBOUNCE_MS);
+}
+
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -357,62 +386,84 @@ async function startBotForUser(userId: number) {
     // Photo path (Telegram delivers msg.photo[] sized array) — pick largest, archive, give Claude absolute path
     const photos = Array.isArray(msg.photo) ? msg.photo : null;
     if (photos && photos.length > 0) {
-      try {
-        await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
-        const best = photos.reduce((a: any, b: any) => ((b.file_size ?? 0) > (a.file_size ?? 0) ? b : a));
-        const link = await ctx.telegram.getFileLink(best.file_id);
-        const pres = await fetch(link.href);
-        if (!pres.ok) throw new Error(`download ${pres.status}`);
-        const buf = Buffer.from(await pres.arrayBuffer());
-        const mime = 'image/jpeg';
-        const filename = `photo-${Date.now()}.jpg`;
-        const { archiveAttachment } = await import('../brain/extract.js');
-        const a = await archiveAttachment(userId, filename, buf, mime);
-        const sizeKb = (buf.length / 1024).toFixed(1);
-        const caption = (msg.caption ?? '').toString();
-        await ctx.reply(`🖼 ${filename} (${sizeKb}KB)${caption ? ` — "${caption.slice(0, 80)}"` : ''}. Sto analizzando…`).catch(() => {});
-        const userPayload = `[Immagine ricevuta: ${filename} · ${best.width}x${best.height} · ${buf.length}B]
-Raw file (assoluto): \`${a.rawAbsPath}\`
-${caption ? `\nCaption utente: "${caption}"\n` : ''}
-Usa lo strumento Read sul percorso assoluto per vedere l'immagine (Claude Code supporta immagini PNG/JPG nativamente). Descrivi cosa vedi, estrai testo se presente, collegala a note esistenti se rilevante, e dimmi cosa farne.`;
-        bus.emit('telegram:incoming', { userId, chatId, text: userPayload });
-      } catch (e: any) {
-        console.error('[telegram] photo error', e);
-        await ctx.reply(`⚠️ Errore elaborando l'immagine: ${String(e?.message ?? e).slice(0, 160)}`);
-      }
+      const caption = (msg.caption ?? '').toString();
+      // Detached + coalesced (same reason as documents — don't block the loop).
+      void (async () => {
+        try {
+          await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+          const best = photos.reduce((a: any, b: any) => ((b.file_size ?? 0) > (a.file_size ?? 0) ? b : a));
+          const link = await ctx.telegram.getFileLink(best.file_id);
+          const pres = await fetch(link.href);
+          if (!pres.ok) throw new Error(`download ${pres.status}`);
+          const buf = Buffer.from(await pres.arrayBuffer());
+          const filename = `photo-${Date.now()}.jpg`;
+          const { archiveAttachment } = await import('../brain/extract.js');
+          const a = await archiveAttachment(userId, filename, buf, 'image/jpeg');
+          const sizeKb = (buf.length / 1024).toFixed(1);
+          await ctx.reply(`🖼 ${filename} (${sizeKb}KB)${caption ? ` — "${caption.slice(0, 80)}"` : ''}. Sto analizzando…`).catch(() => {});
+          const line = `[Immagine: ${filename} · ${best.width}x${best.height} · ${buf.length}B]
+Raw file (assoluto): \`${a.rawAbsPath}\``;
+          queueAttachment(userId, chatId, line, caption);
+        } catch (e: any) {
+          console.error('[telegram] photo error', e);
+          await ctx.reply(`⚠️ Errore elaborando l'immagine: ${String(e?.message ?? e).slice(0, 160)}`).catch(() => {});
+        }
+      })();
       return;
     }
 
     // Document path (pdf, docx, txt, …) — save raw, let Claude read via Read tool
     const doc = msg.document;
     if (doc?.file_id) {
-      try {
-        await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
-        const link = await ctx.telegram.getFileLink(doc.file_id);
-        const dres = await fetch(link.href);
-        if (!dres.ok) throw new Error(`download ${dres.status}`);
-        const buf = Buffer.from(await dres.arrayBuffer());
-        const { archiveAttachment } = await import('../brain/extract.js');
-        const a = await archiveAttachment(userId, doc.file_name ?? 'file', buf, doc.mime_type);
-        const sizeKb = (buf.length / 1024).toFixed(1);
-        await ctx.reply(`📎 ${doc.file_name} (${a.kind}, ${sizeKb}KB). Sto analizzando…`).catch(() => {});
-        const preview = (a.inlineText ?? '').slice(0, 300).replace(/\s+/g, ' ');
-        const userPayload = `[Allegato ricevuto: ${doc.file_name} · ${a.kind} · ${a.bytes}B]
+      // Telegram Bot API download limit is 20MB. Files above that throw
+      // "400: file is too big" on getFileLink — there's no bot-side workaround.
+      // The file is on the user's own machine though, so the agent can read it
+      // straight from disk. Guide the user to that instead of a cryptic 400.
+      const TG_DL_LIMIT = 20 * 1024 * 1024;
+      if ((doc.file_size ?? 0) > TG_DL_LIMIT) {
+        const mb = Math.round((doc.file_size ?? 0) / 1024 / 1024);
+        await ctx.reply(
+          `📦 "${doc.file_name}" (${mb}MB) supera il limite di Telegram per i bot (20MB) — non posso scaricarlo da qui.\n\n` +
+          `Soluzione: il file è già sul tuo computer. Mandami il PERCORSO ASSOLUTO (es. /Users/tuo/Downloads/${doc.file_name}) con cosa vuoi farci, e lo leggo direttamente dal disco senza limiti di dimensione.`,
+        ).catch(() => {});
+        return;
+      }
+      const caption = (msg.caption ?? '').toString();
+      // DETACHED: download + PDF extraction can be slow. Telegraf processes
+      // updates sequentially, so doing this inline froze the bot for every
+      // later message (the "2 PDF → bot muto" bug). Run it in the background and
+      // return immediately so the update loop keeps flowing.
+      void (async () => {
+        try {
+          await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+          const link = await ctx.telegram.getFileLink(doc.file_id);
+          const dres = await fetch(link.href);
+          if (!dres.ok) throw new Error(`download ${dres.status}`);
+          const buf = Buffer.from(await dres.arrayBuffer());
+          const { archiveAttachment } = await import('../brain/extract.js');
+          const a = await archiveAttachment(userId, doc.file_name ?? 'file', buf, doc.mime_type);
+          const sizeKb = (buf.length / 1024).toFixed(1);
+          await ctx.reply(`📎 ${doc.file_name} (${a.kind}, ${sizeKb}KB). Sto analizzando…`).catch(() => {});
+          const preview = (a.inlineText ?? '').slice(0, 300).replace(/\s+/g, ' ');
+          const line = `[Allegato: ${doc.file_name} · ${a.kind} · ${a.bytes}B]
 Note metadata: \`${a.notePath}\`
 Raw file (assoluto): \`${a.rawAbsPath}\`
-
-${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a fondo usa lo strumento Read sul percorso assoluto del raw file. Claude Code legge PDF e file di testo nativamente. Estrai i punti chiave, collega a note esistenti (related:) e dimmi cosa farne in relazione alla roadmap.`;
-        bus.emit('telegram:incoming', { userId, chatId, text: userPayload });
-      } catch (e: any) {
-        console.error('[telegram] document error', e);
-        await ctx.reply(`⚠️ Errore elaborando il file: ${String(e?.message ?? e).slice(0, 160)}`);
-      }
+${a.inlineText ? `Anteprima inline:\n"${preview}…"` : ''}`;
+          // Coalesce with any sibling files (album / rapid sequence) into ONE turn.
+          queueAttachment(userId, chatId, line, caption);
+        } catch (e: any) {
+          console.error('[telegram] document error', e);
+          await ctx.reply(`⚠️ Errore elaborando il file: ${String(e?.message ?? e).slice(0, 160)}`).catch(() => {});
+        }
+      })();
       return;
     }
 
     // Voice/audio path
     const audio = msg.voice ?? msg.audio ?? msg.video_note;
     if (!audio?.file_id) return;
+    // Detached: transcription is slow → must not block the update loop.
+    void (async () => {
     try {
       await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
       const link = await ctx.telegram.getFileLink(audio.file_id);
@@ -424,13 +475,14 @@ ${a.inlineText ? `Anteprima inline:\n"${preview}…"\n\n` : ''}Per analizzarlo a
       const { transcribeBuffer } = await import('../connectors/builtin/voice/index.js');
       const audioSeconds = typeof audio.duration === 'number' ? audio.duration : undefined;
       const { text: transcript } = await transcribeBuffer(userId, buf, `voice.${ext}`, mime, audioSeconds);
-      if (!transcript) { await ctx.reply('🎙 (vuoto)'); return; }
+      if (!transcript) { await ctx.reply('🎙 (vuoto)').catch(() => {}); return; }
       await ctx.reply(`🎙 "${transcript}"`).catch(() => {});
       bus.emit('telegram:incoming', { userId, chatId, text: transcript, voice: true });
     } catch (e: any) {
       console.error('[telegram] voice error', e);
-      await ctx.reply(`⚠️ Voice transcription failed: ${String(e?.message ?? e).slice(0, 160)}`);
+      await ctx.reply(`⚠️ Voice transcription failed: ${String(e?.message ?? e).slice(0, 160)}`).catch(() => {});
     }
+    })();
   });
 
   bot.catch((err) => console.error(`[telegram:${userId}] error`, err));
@@ -636,7 +688,19 @@ export async function sendTelegramDocument(
   catch { return { ok: false, error: `file non trovato: ${filePath}` }; }
   if (!stat.isFile()) return { ok: false, error: `non è un file: ${filePath}` };
   const MAX_BYTES = 50 * 1024 * 1024; // Telegram bot API hard limit
-  if (stat.size > MAX_BYTES) return { ok: false, error: `file troppo grande (${Math.round(stat.size / 1024 / 1024)}MB > 50MB)` };
+  // Over the Telegram limit → can't carry the bytes. Don't fail: send the
+  // file-gateway download link instead so the user gets it from the browser.
+  if (stat.size > MAX_BYTES) {
+    const { config } = await import('../config.js');
+    const { signFilePath } = await import('../api/routes.js');
+    const path2 = await import('node:path');
+    const abs = path2.resolve(filePath);
+    const url = `${config.fileGatewayOrigin}/api/files?path=${encodeURIComponent(abs)}&sig=${signFilePath(abs)}&download=1`;
+    const mb = Math.round(stat.size / 1024 / 1024);
+    const msg = `📎 ${path2.basename(filePath)} (${mb}MB) supera il limite di Telegram (50MB).\nScaricalo qui:\n${url}`;
+    try { await sendTelegram(userId, msg, origin); return { ok: true }; }
+    catch (e: any) { return { ok: false, error: `file ${mb}MB > 50MB e invio link fallito: ${String(e?.message ?? e)}` }; }
+  }
   if (!bots.get(userId)) await startBotForUser(userId);
   const entry = bots.get(userId);
   if (!entry) return { ok: false, error: 'telegram bot init failed' };
@@ -844,31 +908,39 @@ export async function sendEmailDraftKeyboard(userId: number, draft: { id: number
   const entry = bots.get(userId);
   if (!entry) return null;
   const chatId = cfg.chatId;
-  const bodyPreview = draft.body.length > 500 ? draft.body.slice(0, 500) + '…' : draft.body;
   const attachments: string[] = Array.isArray(draft.meta?.attachments) ? draft.meta.attachments : [];
-  const msg = [
-    '✉️ *Bozza email pronta*',
+  // Plain text — NO Markdown, NO code-block. Markdown on a raw email body breaks
+  // rendering (stray *, _, ` chars) and the ``` fence showed it as "codice".
+  // Full body, never truncated — user reads the whole email before sending.
+  const header = [
+    '✉️ Bozza email pronta',
     '',
-    `*A:* \`${draft.to_addr}\``,
-    `*Oggetto:* ${draft.subject}`,
-    ...(attachments.length ? [`*Allegati:* ${attachments.map((p) => `📎 ${p.split('/').pop()}`).join(' · ')}`] : []),
+    `A: ${draft.to_addr}`,
+    `Oggetto: ${draft.subject}`,
+    ...(attachments.length ? [`Allegati: ${attachments.map((p) => `📎 ${p.split('/').pop()}`).join(' · ')}`] : []),
     '',
-    '```',
-    bodyPreview,
-    '```',
-    '',
-    'Invio?',
   ].join('\n');
+  const keyboard = {
+    inline_keyboard: [[
+      { text: '📤 Invia', callback_data: `email_draft:${draft.id}:send` },
+      { text: '❌ Scarta', callback_data: `email_draft:${draft.id}:deny` },
+    ]],
+  };
+  const full = `${header}${draft.body}\n\nInvio?`;
+  const TG_LIMIT = 4096;
   try {
-    const sent = await entry.bot.telegram.sendMessage(chatId, msg, {
-      parse_mode: 'Markdown' as any,
-      reply_markup: {
-        inline_keyboard: [[
-          { text: '📤 Invia', callback_data: `email_draft:${draft.id}:send` },
-          { text: '❌ Scarta', callback_data: `email_draft:${draft.id}:deny` },
-        ]],
-      },
-    });
+    // Common case: fits in one message → header + body + keyboard together.
+    if (full.length <= TG_LIMIT) {
+      const sent = await entry.bot.telegram.sendMessage(chatId, full, { reply_markup: keyboard });
+      return { message_id: (sent as any).message_id, chat_id: chatId };
+    }
+    // Long email: send header + body in plain chunks (no truncation), then a
+    // short message carrying the keyboard so the buttons attach to the tail.
+    const blob = `${header}${draft.body}`;
+    for (let i = 0; i < blob.length; i += TG_LIMIT) {
+      await entry.bot.telegram.sendMessage(chatId, blob.slice(i, i + TG_LIMIT));
+    }
+    const sent = await entry.bot.telegram.sendMessage(chatId, 'Invio?', { reply_markup: keyboard });
     return { message_id: (sent as any).message_id, chat_id: chatId };
   } catch (e: any) {
     console.error('[telegram] email_draft send failed', e?.message ?? e);

@@ -30,7 +30,7 @@ import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
   Share2, ScrollText, Settings as SettingsIcon, LogOut, MessageCircle,
   Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow,
-  Camera as IgIcon, type LucideIcon, ChevronsUpDown, Archive, LineChart, Mail as MailIcon,
+  Camera as IgIcon, type LucideIcon, ChevronsUpDown, Archive, LineChart, Mail as MailIcon, UploadCloud,
 } from 'lucide-react';
 
 function humanizeIn(ms: number): string {
@@ -108,6 +108,7 @@ export default function AppSidebar() {
     { to: '/', label: t('nav.live'), icon: Activity },
     { to: '/connectors', label: t('nav.connectors'), icon: Plug },
     { to: '/brain', label: t('nav.brain'), icon: Brain },
+    { to: '/ingestion', label: 'File-ingestion', icon: UploadCloud },
     { to: '/roadmap', label: t('nav.roadmap'), icon: MapIcon },
     { to: '/tasks', label: 'Tasks', icon: ListChecks },
     { to: '/agents', label: 'Agents', icon: Zap, badge: agentsRunning > 0 ? agentsRunning : undefined },

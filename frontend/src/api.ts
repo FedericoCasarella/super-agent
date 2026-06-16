@@ -81,6 +81,8 @@ export const api = {
   brainIndexFiltered: (visibility: 'all' | 'public' | 'protected') => req<any[]>(`/brain/index?visibility=${visibility}`),
   brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
     req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
+  brainGraphMeta: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
+    req<{ clusters: { key: string; count: number }[]; total: number; origins: string[]; vaults: string[] }>(`/brain/graph/meta?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
   brainStats: () => req<any>('/brain/stats'),
   people: (opts: { q?: string; limit?: number; offset?: number; sort?: string; dir?: 'asc' | 'desc' } = {}) => {
     const p = new URLSearchParams();
@@ -151,6 +153,7 @@ export const api = {
   updateBusiness: (data: any) => req('/settings/business', { method: 'PUT', body: JSON.stringify(data) }),
   updateTelegram: (token: string) => req('/settings/telegram', { method: 'PUT', body: JSON.stringify({ token }) }),
   updateSound: (enabled: boolean) => req('/settings/sound', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  updateModel: (model: string) => req('/settings/model', { method: 'PUT', body: JSON.stringify({ model }) }),
   // Sub-agents
   emailTest: (account: string) => req<any>('/email/test', { method: 'POST', body: JSON.stringify({ account }) }),
   waStatus: () => req<any>('/whatsapp/status'),
@@ -323,4 +326,24 @@ export const api = {
     });
   },
   mailAttachmentUrl: (id: number) => `/api/mail/attachments/${id}`,
+  ingestList: () => req<{ rows: any[] }>('/ingest'),
+  ingestUpload: (file: File, prompt: string, onProgress?: (pct: number) => void) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('prompt', prompt);
+    // XHR (not fetch) so we get upload progress for big files.
+    return new Promise<{ ok: boolean; ingestion?: any; error?: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/ingest');
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100)); };
+      xhr.onload = () => {
+        let j: any = {}; try { j = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(j);
+        else reject(new Error(j.error || `HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('upload fallito'));
+      xhr.send(fd);
+    });
+  },
 };

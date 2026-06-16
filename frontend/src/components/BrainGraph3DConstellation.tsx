@@ -32,6 +32,12 @@ const DEFAULT_COLOR = '#c084fc';
 const VIS_PROTECTED = '#d946ef';
 const VIS_PUBLIC = '#67e8f9';
 
+// Bounce easing: overshoots past 1 then settles — the "leggero rimbalzo".
+function easeOutBack(x: number): number {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+}
+
 function hashHue(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
@@ -128,29 +134,53 @@ function enhanceGraph(g: { nodes: any[]; links: any[]; origins?: string[]; vault
     x: 0, y: 0, z: 0,
     fx: 0, fy: 0, fz: 0, // PINNED at origin
   };
-  // Seed leaves near their hub so initial frame already looks clustered.
+  // STATIC neuron layout — NO force simulation (which made teardrop "imbuti").
+  // Structure requested: BRAIN --1 synapse--> hub (macro-set node) --> every
+  // child at the SAME distance from its hub, but on the OUTER hemisphere (the
+  // side AWAY from the brain) so the children do NOT surround/englobe the hub —
+  // the hub sits at the inner vertex, free, children fan outward like dendrites.
+  // All equidistant (× shell). Pinned via fx/fy/fz so nothing drifts.
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+  // Per-cluster orthonormal basis: outward axis = hub direction, + 2 perps.
+  const basis = new Map<string, { d: number[]; u: number[]; v: number[] }>();
+  for (const c of clusters) {
+    const d = dirs.get(c)!;
+    const ref = Math.abs(d[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0];
+    let ux = d[1] * ref[2] - d[2] * ref[1];
+    let uy = d[2] * ref[0] - d[0] * ref[2];
+    let uz = d[0] * ref[1] - d[1] * ref[0];
+    const ul = Math.hypot(ux, uy, uz) || 1; ux /= ul; uy /= ul; uz /= ul;
+    const vx = d[1] * uz - d[2] * uy;
+    const vy = d[2] * ux - d[0] * uz;
+    const vz = d[0] * uy - d[1] * ux;
+    basis.set(c, { d, u: [ux, uy, uz], v: [vx, vy, vz] });
+  }
+  const idxInCluster = new Map<string, number>();
   for (const n of realNodes) {
-    const d = dirs.get(n.__cluster);
-    if (!d) continue;
-    const jitter = () => (Math.random() - 0.5) * 40;
+    const b = basis.get(n.__cluster);
+    if (!b) continue;
     const R = radiusFor(n.__cluster);
-    n.x = d[0] * R + jitter();
-    n.y = d[1] * R + jitter();
-    n.z = d[2] * R + jitter();
+    const hx = b.d[0] * R, hy = b.d[1] * R, hz = b.d[2] * R;
+    const m = countByCluster.get(n.__cluster) ?? 1;
+    const j = idxInCluster.get(n.__cluster) ?? 0;
+    idxInCluster.set(n.__cluster, j + 1);
+    const shell = 150 + Math.sqrt(m) * 4.2;         // FAR from the hub — clear gap; all children equidistant
+    // Narrow outward cap (cosA in [0.32,1] ≈ ≤70°) so children cluster well
+    // away from the hub on the outward side — never lateral/behind it.
+    const cosA = 1 - 0.68 * (j + 0.5) / m;           // 1 (straight out) → 0.32 (rim)
+    const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
+    const theta = GOLDEN * j;
+    const lu = Math.cos(theta) * sinA, lv = Math.sin(theta) * sinA;
+    n.x = n.fx = hx + (b.u[0] * lu + b.v[0] * lv + b.d[0] * cosA) * shell;
+    n.y = n.fy = hy + (b.u[1] * lu + b.v[1] * lv + b.d[1] * cosA) * shell;
+    n.z = n.fz = hz + (b.u[2] * lu + b.v[2] * lv + b.d[2] * cosA) * shell;
   }
   const extraLinks: any[] = [];
   for (const n of realNodes) extraLinks.push({ source: n.id, target: `__hub__:${n.__cluster}`, __synthetic: true });
   for (const h of hubs) extraLinks.push({ source: h.id, target: '__root__', __synthetic: true });
-  // Star topology: drop cross-cluster wikilinks entirely. Clusters connect
-  // ONLY through the center (leaf → hub → BRAIN). Intra-cluster links kept.
-  const clusterById = new Map(realNodes.map((n) => [n.id, n.__cluster]));
-  const sameClusterLinks = (g.links ?? []).filter((l: any) => {
-    const s = typeof l.source === 'object' ? l.source.id : l.source;
-    const t = typeof l.target === 'object' ? l.target.id : l.target;
-    const sc = clusterById.get(s);
-    const tc = clusterById.get(t);
-    return sc != null && sc === tc;
-  });
+  // Render ONLY the star topology: BRAIN→hub spines + hub→child spokes. Drop the
+  // intra-cluster wikilink web — it cluttered the clean neuron shape.
+  const sameClusterLinks: any[] = [];
   return {
     nodes: [root, ...hubs, ...realNodes],
     links: [...sameClusterLinks, ...extraLinks],
@@ -254,6 +284,14 @@ export default function BrainGraph3DConstellation({
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  // One-at-a-time bounce reveal (positions are static, so this just animates
+  // each leaf's SCALE 0→overshoot→1 as it's born). State in refs → no React
+  // re-renders. bornAt[i] = ms it started (-1 = not yet); nextReveal = how many
+  // started; settled = full-scale prefix.
+  const revealActiveRef = useRef(false);
+  const bornAtRef = useRef<Float64Array>(new Float64Array(0));
+  const nextRevealRef = useRef(0);
+  const settledRef = useRef(0);
   const LS_READ = (k: string, d: string): string => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
   const LS_WRITE = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch {} };
   const [showLabels, setShowLabelsState] = useState<boolean>(() => LS_READ('brain_3d_labels', '1') !== '0');
@@ -338,6 +376,7 @@ export default function BrainGraph3DConstellation({
     setLoaded(false);
     api.brainGraphFiltered(visibilityFilter, originFilter, vaultFilter).then((g: any) => {
       const enhanced = enhanceGraph(g);
+      revealActiveRef.current = true; // arm bounce reveal (build effect inits it)
       setData(enhanced as any);
       if (onOriginsChange) onOriginsChange(enhanced.origins ?? []);
       if (onVaultsChange) onVaultsChange(enhanced.vaults ?? []);
@@ -699,6 +738,44 @@ export default function BrainGraph3DConstellation({
             }
           }
         }
+        // One-at-a-time bounce reveal. Positions are static → just animate each
+        // leaf's SCALE 0 → overshoot → 1 as it's born. Only the live window
+        // [settled, nextReveal) is touched per frame → cheap, no lag.
+        {
+          const inst = instMeshRef.current;
+          const nodes = data.nodes as any[];
+          const total = nodes.length;
+          if (inst && revealActiveRef.current && settledRef.current < total) {
+            const now = performance.now();
+            const RATE = 850; // nodes born per second → visibly sequential
+            const DUR = 420;  // ms per-node bounce
+            const born = bornAtRef.current;
+            let next = nextRevealRef.current;
+            const toStart = Math.min(total, next + Math.ceil(RATE * dt));
+            for (; next < toStart; next++) born[next] = now;
+            nextRevealRef.current = next;
+            let advanceTo = settledRef.current;
+            let contiguous = true;
+            for (let i = settledRef.current; i < next; i++) {
+              const n = nodes[i];
+              const baseR = n.__isRoot ? 16 : n.__isHub ? 9 : 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
+              const t0 = born[i];
+              let s: number;
+              if (t0 < 0) { s = 0; contiguous = false; }
+              else {
+                const age = now - t0;
+                if (age >= DUR) { s = baseR; if (contiguous && i === advanceTo) advanceTo++; }
+                else { s = baseR * easeOutBack(age / DUR); contiguous = false; }
+              }
+              tmpMat4.makeScale(s, s, s);
+              tmpMat4.setPosition(n.x ?? 0, n.y ?? 0, n.z ?? 0);
+              inst.setMatrixAt(i, tmpMat4);
+            }
+            settledRef.current = advanceTo;
+            inst.instanceMatrix.needsUpdate = true;
+            if (next >= total && advanceTo >= total) revealActiveRef.current = false;
+          }
+        }
         const renderer = fg.renderer?.();
         const scene = fg.scene?.();
         if (renderer && scene && cam) renderer.render(scene, cam);
@@ -910,13 +987,23 @@ export default function BrainGraph3DConstellation({
     }
     inst.instanceColor!.needsUpdate = true;
     inst.frustumCulled = false;
-    // Seed matrices from current node positions so the mesh is visible (and
-    // raycastable) on frame 0, before the engine ticks.
+    // Reveal init: root + hubs show immediately at full scale; leaves start at
+    // scale 0 and bounce in one at a time from the render loop. When no reveal
+    // is armed (filter re-render) everything shows full.
+    const N = data.nodes.length;
+    const fixedCount = (data.nodes as any[]).filter((n) => n.__isHub || n.__isRoot).length;
+    const revealOn = revealActiveRef.current;
+    if (revealOn) {
+      bornAtRef.current = new Float64Array(N).fill(-1);
+      nextRevealRef.current = fixedCount;
+      settledRef.current = fixedCount;
+    }
     const _mat = new THREE.Matrix4();
-    for (let i = 0; i < data.nodes.length; i++) {
+    for (let i = 0; i < N; i++) {
       const n: any = data.nodes[i];
       const r = n.__isRoot ? 16 : n.__isHub ? 9 : 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
-      _mat.makeScale(r, r, r);
+      const s = (revealOn && !(n.__isHub || n.__isRoot)) ? 0 : r; // leaves hidden until born
+      _mat.makeScale(s, s, s);
       _mat.setPosition(n.x ?? 0, n.y ?? 0, n.z ?? 0);
       inst.setMatrixAt(i, _mat);
     }
@@ -975,6 +1062,11 @@ export default function BrainGraph3DConstellation({
       const dim = 0.35;
       _c.set(sNode ? colorFor(sNode) : '#888'); lineCol[i * 6]     = _c.r * dim; lineCol[i * 6 + 1] = _c.g * dim; lineCol[i * 6 + 2] = _c.b * dim;
       _c.set(tNode ? colorFor(tNode) : '#888'); lineCol[i * 6 + 3] = _c.r * dim; lineCol[i * 6 + 4] = _c.g * dim; lineCol[i * 6 + 5] = _c.b * dim;
+      // Positions are STATIC (no sim) → fill once here so links show even though
+      // onEngineTick won't fire.
+      const o = i * 6;
+      if (sNode) { linePos[o] = sNode.x ?? 0; linePos[o + 1] = sNode.y ?? 0; linePos[o + 2] = sNode.z ?? 0; }
+      if (tNode) { linePos[o + 3] = tNode.x ?? 0; linePos[o + 4] = tNode.y ?? 0; linePos[o + 5] = tNode.z ?? 0; }
     }
     linkGeom.setAttribute('position', new THREE.BufferAttribute(linePos, 3).setUsage(THREE.DynamicDrawUsage));
     linkGeom.setAttribute('color', new THREE.BufferAttribute(lineCol, 3));
@@ -1260,57 +1352,12 @@ export default function BrainGraph3DConstellation({
     return () => cancelAnimationFrame(raf);
   }, [hover, selected, data]);
 
-  // Per-frame position copy. Force-graph fires onEngineTick during simulation;
-  // we read each node's x/y/z and write directly to the InstancedMesh matrix.
-  // O(N) work, no allocations.
-  const onEngineTick = useCallback(() => {
-    const inst = instMeshRef.current;
-    if (!inst) return;
-    const nodes = data.nodes as any[];
-    for (let i = 0; i < nodes.length; i++) {
-      const n = nodes[i];
-      // Special sizes: root sphere big, hubs medium-big, leaves scaled by size.
-      const r = n.__isRoot
-        ? 16
-        : n.__isHub
-        ? 9
-        : 2.6 + Math.sqrt(n.size ?? 1) * 0.9;
-      tmpMat4.makeScale(r, r, r);
-      tmpMat4.setPosition(n.x ?? 0, n.y ?? 0, n.z ?? 0);
-      inst.setMatrixAt(i, tmpMat4);
-    }
-    inst.instanceMatrix.needsUpdate = true;
-    inst.computeBoundingSphere(); // keep raycast bounds in sync with sim
-    // Sync the decimated cloud's sampled positions with the live nodes.
-    const cloud = cloudRef.current;
-    if (cloud && cloud.visible) {
-      const cattr = cloud.geometry.getAttribute('position') as THREE.BufferAttribute;
-      const carr = cattr.array as Float32Array;
-      const idx = cloudIdxRef.current;
-      for (let j = 0; j < idx.length; j++) {
-        const n = nodes[idx[j]];
-        carr[j * 3] = n.x ?? 0; carr[j * 3 + 1] = n.y ?? 0; carr[j * 3 + 2] = n.z ?? 0;
-      }
-      cattr.needsUpdate = true;
-    }
-    // Update line positions from links.
-    const lines = linesRef.current;
-    if (lines) {
-      const attr = lines.geometry.getAttribute('position') as THREE.BufferAttribute;
-      const arr = attr.array as Float32Array;
-      const links = data.links as any[];
-      for (let i = 0; i < links.length; i++) {
-        const l = links[i];
-        const s: any = typeof l.source === 'object' ? l.source : nodes.find((nn) => nn.id === l.source);
-        const t: any = typeof l.target === 'object' ? l.target : nodes.find((nn) => nn.id === l.target);
-        if (!s || !t) continue;
-        const o = i * 6;
-        arr[o] = s.x ?? 0; arr[o + 1] = s.y ?? 0; arr[o + 2] = s.z ?? 0;
-        arr[o + 3] = t.x ?? 0; arr[o + 4] = t.y ?? 0; arr[o + 5] = t.z ?? 0;
-      }
-      attr.needsUpdate = true;
-    }
-  }, [data, tmpMat4]);
+  // No-op: no simulation (cooldownTicks=0, nodes pinned). Positions are final +
+  // static, so node matrices, links and the LOD cloud are all filled ONCE in the
+  // build effect; the reveal animation owns the instance matrices from the
+  // render loop. A stray tick must NOT rewrite them to full scale (it would skip
+  // the bounce), so this stays empty.
+  const onEngineTick = useCallback(() => {}, []);
 
   // Force-graph default per-node Mesh: suppress with an empty object. We're
   // drawing them ourselves via the InstancedMesh above.
@@ -1513,10 +1560,11 @@ export default function BrainGraph3DConstellation({
           // handler; don't wire force-graph's events here.
           enableNodeDrag={false}
           enablePointerInteraction={false}
-          cooldownTicks={800}
-          warmupTicks={120}
-          d3AlphaDecay={0.025}
-          d3VelocityDecay={0.45}
+          // No simulation: positions are precomputed + pinned (static neuron
+          // shells). Running d3 reshaped them into teardrop "imbuti" and added
+          // the load lag. Final layout on frame 0.
+          cooldownTicks={0}
+          warmupTicks={0}
         />
       )}
       {/* Label overlay — absolute-positioned DOM, super cheap vs Three sprites. */}

@@ -66,25 +66,25 @@ export default function BrainOverview() {
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <div className="border border-border rounded-2xl p-3 bg-surface2/40">
+        <div className="border border-border rounded-2xl p-3 bg-surface2/40 min-w-0">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Neuroni</div>
-          <div className="text-2xl font-semibold mt-1">{stats.totals.notes.toLocaleString()}</div>
-          <div className="text-xs text-muted-foreground mt-1">{stats.totals.files} file totali</div>
+          <div className="text-lg font-semibold mt-1 leading-tight break-words tabular-nums">{stats.totals.notes.toLocaleString()}</div>
+          <div className="text-xs text-muted-foreground mt-1 break-words">{stats.totals.files} file totali</div>
         </div>
-        <div className="border border-border rounded-2xl p-3 bg-surface2/40">
+        <div className="border border-border rounded-2xl p-3 bg-surface2/40 min-w-0">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Peso</div>
-          <div className="text-2xl font-semibold mt-1">{fmtBytes(stats.totals.bytes)}</div>
-          <div className="text-xs text-muted-foreground mt-1">{stats.totals.vaults} cervell{stats.totals.vaults === 1 ? 'o' : 'i'}</div>
+          <div className="text-lg font-semibold mt-1 leading-tight break-words tabular-nums">{fmtBytes(stats.totals.bytes)}</div>
+          <div className="text-xs text-muted-foreground mt-1 break-words">{stats.totals.vaults} cervell{stats.totals.vaults === 1 ? 'o' : 'i'}</div>
         </div>
-        <div className="border border-border rounded-2xl p-3 bg-surface2/40">
+        <div className="border border-border rounded-2xl p-3 bg-surface2/40 min-w-0">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Attività 7gg</div>
-          <div className="text-2xl font-semibold mt-1">{stats.totals.updatedLast7Days}</div>
-          <div className="text-xs text-muted-foreground mt-1">note aggiornate</div>
+          <div className="text-lg font-semibold mt-1 leading-tight break-words tabular-nums">{stats.totals.updatedLast7Days}</div>
+          <div className="text-xs text-muted-foreground mt-1 break-words">note aggiornate</div>
         </div>
-        <div className="border border-border rounded-2xl p-3 bg-surface2/40">
+        <div className="border border-border rounded-2xl p-3 bg-surface2/40 min-w-0">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Ultimo update</div>
-          <div className="text-2xl font-semibold mt-1">{fmtAgo(stats.totals.lastUpdate)}</div>
-          <div className="text-xs text-muted-foreground mt-1">{stats.totals.lastUpdate ? new Date(stats.totals.lastUpdate).toLocaleString() : '—'}</div>
+          <div className="text-base font-semibold mt-1 leading-tight break-words">{fmtAgo(stats.totals.lastUpdate)}</div>
+          <div className="text-xs text-muted-foreground mt-1 break-words">{stats.totals.lastUpdate ? new Date(stats.totals.lastUpdate).toLocaleString() : '—'}</div>
         </div>
       </div>
 

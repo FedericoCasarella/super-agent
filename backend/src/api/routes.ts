@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { config } from '../config.js';
+import { config, AVAILABLE_MODELS, MODEL_IDS } from '../config.js';
 import { query, getSetting, setSetting } from '../db/index.js';
 import { quotaGuard } from '../quota.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
-import { buildGraph } from '../brain/graph.js';
+import { buildGraph, invalidateGraphCache } from '../brain/graph.js';
 import { listConnectors, ensureUserConnectorRows } from '../connectors/registry.js';
 import { restartTelegramForUser } from '../telegram/bot.js';
 import { bus } from '../bus.js';
@@ -339,19 +339,66 @@ router.post('/connectors/imap/test', async (req, res) => {
   }
 });
 
+// Apply the visibility/origin filters consistently across graph + meta.
+function filterGraphNodes(nodes: any[], filter: string, origin: string): any[] {
+  let out = nodes;
+  if (filter !== 'all') out = out.filter((n) => n.visibility === filter);
+  if (origin === 'native') out = out.filter((n) => !n.origin_user_id);
+  else if (origin !== 'all') out = out.filter((n) => n.origin_email === origin);
+  return out;
+}
+
 router.get('/brain/graph', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
   const origin = req.query.origin ? String(req.query.origin) : 'all';
   const vaultFilter = req.query.vault ? String(req.query.vault) : 'all';
   const g = await buildGraph(req.user!.id, { vaultFilter });
-  let nodes = g.nodes;
-  if (filter !== 'all') nodes = nodes.filter((n) => n.visibility === filter);
-  if (origin === 'native') nodes = nodes.filter((n) => !n.origin_user_id);
-  else if (origin !== 'all') nodes = nodes.filter((n) => n.origin_email === origin);
+  const nodes = filterGraphNodes(g.nodes, filter, origin);
   const ids = new Set(nodes.map((n) => n.id));
-  const links = g.links.filter((l) => ids.has(l.source) && ids.has(l.target));
+  const clusterById = new Map(nodes.map((n) => [n.id, n.cluster]));
+  // Payload shrink: the 3D view connects clusters ONLY through the center
+  // (leaf→hub→brain) and drops cross-cluster wikilinks. Sending them is dead
+  // weight (was ~26MB / 158k links). Keep only same-cluster links — the ones
+  // the client actually renders. Cross-cluster relations still live in the
+  // node clustering; nothing visible is lost.
+  // Keep only same-cluster links (cross-cluster ones are dropped by the 3D
+  // view anyway), AND cap how many we keep per node. Big clusters (super-agent,
+  // inbox) have tens of thousands of internal links — feeding them all to the
+  // d3 force sim + LineSegments is what froze the client for minutes. A handful
+  // per node preserves intra-cluster cohesion at a fraction of the cost.
+  const MAX_LINKS_PER_NODE = 24;
+  const perNode = new Map<string, number>();
+  const links: any[] = [];
+  for (const l of g.links) {
+    if (!ids.has(l.source) || !ids.has(l.target)) continue;
+    if (clusterById.get(l.source) !== clusterById.get(l.target)) continue;
+    const sc = perNode.get(l.source) ?? 0;
+    const tc = perNode.get(l.target) ?? 0;
+    if (sc >= MAX_LINKS_PER_NODE || tc >= MAX_LINKS_PER_NODE) continue;
+    perNode.set(l.source, sc + 1);
+    perNode.set(l.target, tc + 1);
+    links.push(l);
+  }
   const origins = Array.from(new Set(g.nodes.map((n) => n.origin_email).filter(Boolean))) as string[];
   res.json({ nodes, links, origins, vaults: g.vaults });
+});
+
+// Phase-1 structure endpoint: cluster macro-sets + counts, NO node/link bodies.
+// Lets the client paint the brain + cluster hubs instantly while the full node
+// list streams in. Served from the same cached graph build → ~instant.
+router.get('/brain/graph/meta', async (req, res) => {
+  const filter = String(req.query.visibility ?? 'all');
+  const origin = req.query.origin ? String(req.query.origin) : 'all';
+  const vaultFilter = req.query.vault ? String(req.query.vault) : 'all';
+  const g = await buildGraph(req.user!.id, { vaultFilter });
+  const nodes = filterGraphNodes(g.nodes, filter, origin);
+  const counts = new Map<string, number>();
+  for (const n of nodes) counts.set(n.cluster, (counts.get(n.cluster) ?? 0) + 1);
+  const clusters = Array.from(counts.entries())
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count);
+  const origins = Array.from(new Set(g.nodes.map((n) => n.origin_email).filter(Boolean))) as string[];
+  res.json({ clusters, total: nodes.length, origins, vaults: g.vaults });
 });
 
 // Internal agents
@@ -437,6 +484,7 @@ router.put('/brain/note', async (req, res) => {
     const md = matter.stringify(content, frontmatter);
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, md, 'utf8');
+    invalidateGraphCache(userId);
     res.json({ ok: true });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
@@ -466,6 +514,7 @@ router.delete('/brain/note', async (req, res) => {
     await fs.unlink(full);
     // Also drop the row from brain_index if present.
     try { await query(`DELETE FROM brain_index WHERE user_id=$1 AND path=$2`, [userId, rel]); } catch {}
+    invalidateGraphCache(userId);
     res.json({ ok: true });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
@@ -1856,6 +1905,42 @@ router.get('/tool-events', async (req, res) => {
 // Plugins (.skill)
 import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+// Ingestion upload — DISK storage (streams to ~/super-agent-ingest, doesn't
+// buffer 650MB in RAM) + a high 2GB ceiling. Filenames sanitized + prefixed
+// with a timestamp-ish random to avoid collisions.
+const ingestUpload = multer({
+  storage: multer.diskStorage({
+    destination: async (_req, _file, cb) => {
+      try { const { ensureIngestRoot } = await import('../ingest/index.js'); cb(null, await ensureIngestRoot()); }
+      catch (e: any) { cb(e, ''); }
+    },
+    filename: (_req, file, cb) => {
+      const safe = (file.originalname || 'file').replace(/[/\\?%*:|"<>]/g, '_').slice(0, 180);
+      cb(null, `${crypto.randomBytes(4).toString('hex')}__${safe}`);
+    },
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 * 1024 },
+});
+router.post('/ingest', ingestUpload.single('file'), async (req, res) => {
+  try {
+    const f = (req as any).file;
+    const prompt = String(req.body?.prompt ?? '').trim();
+    if (!f) return res.status(400).json({ error: 'file mancante' });
+    if (!prompt) return res.status(400).json({ error: 'prompt mancante' });
+    const { createIngestion } = await import('../ingest/index.js');
+    const ing = await createIngestion(req.user!.id, {
+      filename: f.originalname, absPath: f.path, sizeBytes: f.size, prompt,
+    });
+    res.json({ ok: true, ingestion: ing });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.get('/ingest', async (req, res) => {
+  try {
+    const { listIngestions } = await import('../ingest/index.js');
+    res.json({ rows: await listIngestions(req.user!.id) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 router.get('/plugins', async (_req, res) => {
   const m = await import('../plugins/index.js');
   res.json(await m.listPlugins());
@@ -2122,7 +2207,8 @@ router.get('/settings', async (req, res) => {
   const vault = await getVaultRoot(userId);
   const language = (await getSetting<string>(userId, 'language')) ?? 'it';
   const sound_on_message = (await getSetting<boolean>(userId, 'sound_on_message')) ?? true;
-  res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message });
+  const claude_model = (await getSetting<string>(userId, 'claude_model')) ?? config.claudeModel;
+  res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message, claude_model, models: AVAILABLE_MODELS });
 });
 // Branding (per-user customizable title + logo)
 // ---------------------------------------------------------------------------
@@ -2772,6 +2858,12 @@ router.put('/settings/language', async (req, res) => {
   const { language } = req.body ?? {};
   if (!['it', 'en'].includes(language)) return res.status(400).json({ error: 'language must be it|en' });
   await setSetting(req.user!.id, 'language', language);
+  res.json({ ok: true });
+});
+router.put('/settings/model', async (req, res) => {
+  const { model } = req.body ?? {};
+  if (!MODEL_IDS.includes(model)) return res.status(400).json({ error: `model must be one of ${MODEL_IDS.join(', ')}` });
+  await setSetting(req.user!.id, 'claude_model', model);
   res.json({ ok: true });
 });
 router.put('/settings/sound', async (req, res) => {

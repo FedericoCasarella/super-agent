@@ -115,15 +115,23 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
     version = v.version as any;
     dlog(`[wa:u${userId}] using WA version ${version?.join('.')}`);
   } catch (e) { dwarn(`[wa:u${userId}] could not fetch latest WA version`, e); }
+  // Compute fresh-pair BEFORE socket creation so we only request the (heavy)
+  // full history sync on the FIRST pairing. Re-downloading the whole history on
+  // every reconnect kept the socket busy → timeouts → WA drops → re-QR loop.
+  const credsAny0 = (state.creds as any) ?? {};
+  const isFreshPair = !credsAny0.me?.id && !credsAny0.noiseKey;
   const sock = makeWASocket({
     auth: state,
     logger,
     version,
     browser: Browsers.macOS('Desktop'),
-    syncFullHistory: true,
+    syncFullHistory: isFreshPair,        // full history only on first pair; light reconnects after
     markOnlineOnConnect: false,
     printQRInTerminal: false,
     generateHighQualityLinkPreview: false,
+    keepAliveIntervalMs: 25_000,         // proactive ping → detect dead links + keep session warm
+    connectTimeoutMs: 60_000,
+    retryRequestDelayMs: 2_000,
   } as any);
   // Fresh pair (no creds yet) = stale wa_messages/wa_contacts from a previous
   // pair must be wiped before the new history sync lands. Otherwise Baileys
@@ -133,8 +141,6 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
   // on a legit returning session at process start (Baileys flips it on first
   // `connection: 'open'`). Real fresh pair: no `creds.me?.id` AND no signal
   // keys yet (`creds.noiseKey` is set after pair). Either present = returning.
-  const credsAny = (state.creds as any) ?? {};
-  const isFreshPair = !credsAny.me?.id && !credsAny.noiseKey;
   const session: Session = { sock, status: 'starting', startedAt: Date.now(), needsHistoryWipe: isFreshPair };
   sessions.set(userId, session);
   if (isFreshPair) dlog(`[wa:u${userId}] fresh pair detected — will wipe stale rows on first history batch`);
