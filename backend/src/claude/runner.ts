@@ -287,7 +287,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
                 if (hit) {
                   bus.emit('brain:access', {
                     userId, vaultName: hit.vaultName, rel: hit.rel,
-                    tool: name, ts: Date.now(),
+                    tool: name, kind: opts.kind ?? null, ts: Date.now(),
                   });
                 }
               }

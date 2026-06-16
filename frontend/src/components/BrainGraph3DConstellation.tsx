@@ -340,11 +340,23 @@ export default function BrainGraph3DConstellation({
   const mriRef = useRef<Map<string, { start: number; end: number }>>(new Map());
   // Halo objects added to active node groups (for cleanup)
   const haloRef = useRef<Map<string, THREE.Group>>(new Map());
+  // Thunder effect: additive glow sprites flashing around just-read nodes
+  // (lightning-in-clouds). Pool keyed by node id; lives in its own scene group.
+  const thunderGroupRef = useRef<THREE.Group | null>(null);
+  const thunderSpritesRef = useRef<Map<string, THREE.Sprite>>(new Map()); // keyed by cluster
+  // Per-cluster bounding geom (centroid + radius) so a flash lights the whole
+  // SECTOR of spheres, not a single node. Rebuilt on data change.
+  const clusterGeomRef = useRef<Map<string, { x: number; y: number; z: number; r: number }>>(new Map());
   const [mriTick, setMriTick] = useState(0);
   useWS((msg) => {
     if (msg?.type !== 'brain:access') return;
     const p = msg.payload ?? {};
     if (!p.rel) return;
+    // Only flash for the user's interactive chat turn — background perks
+    // (reflection, consolidator, ingest, …) read notes constantly and would
+    // make the brain strobe with "random" thunder when nothing user-facing
+    // is happening.
+    if (p.kind !== 'chat_turn') return;
     const rel = String(p.rel);
     const now = Date.now();
     // Match by exact <vault>::<rel> AND by rel-suffix fallback — graph may use a different
@@ -538,6 +550,27 @@ export default function BrainGraph3DConstellation({
   useEffect(() => {
     const fg: any = fgRef.current;
     if (!fg) return;
+    // Per-cluster centroid + radius → a thunder flash lights the whole sector.
+    {
+      const acc = new Map<string, { sx: number; sy: number; sz: number; n: number }>();
+      for (const n of data.nodes as any[]) {
+        if (n.__isRoot) continue;
+        const c = n.__cluster ?? '_misc';
+        const a = acc.get(c) ?? { sx: 0, sy: 0, sz: 0, n: 0 };
+        a.sx += n.x ?? 0; a.sy += n.y ?? 0; a.sz += n.z ?? 0; a.n++;
+        acc.set(c, a);
+      }
+      const geom = new Map<string, { x: number; y: number; z: number; r: number }>();
+      for (const [c, a] of acc) geom.set(c, { x: a.sx / a.n, y: a.sy / a.n, z: a.sz / a.n, r: 60 });
+      for (const n of data.nodes as any[]) {
+        if (n.__isRoot) continue;
+        const c = n.__cluster ?? '_misc';
+        const g = geom.get(c)!;
+        const d = Math.hypot((n.x ?? 0) - g.x, (n.y ?? 0) - g.y, (n.z ?? 0) - g.z);
+        if (d > g.r) g.r = d;
+      }
+      clusterGeomRef.current = geom;
+    }
     // Auto-rotate ON (slow), edge particle animations OFF
     const ctrls0: any = fg.controls?.();
     if (ctrls0) { ctrls0.autoRotate = true; ctrls0.autoRotateSpeed = 0.04; }
@@ -776,6 +809,62 @@ export default function BrainGraph3DConstellation({
             if (next >= total && advanceTo >= total) revealActiveRef.current = false;
           }
         }
+        // ⚡ THUNDER — lightning-in-clouds glow around just-read nodes. Driven by
+        // mriRef (filled on brain:access WS). Additive sprites flicker + fade
+        // over MRI_DURATION_MS. Layout untouched; pure overlay light.
+        {
+          const sceneT = fg.scene?.();
+          if (sceneT) {
+            if (!thunderGroupRef.current) {
+              const g = new THREE.Group(); g.name = 'brain-thunder'; g.renderOrder = 999;
+              sceneT.add(g); thunderGroupRef.current = g;
+            }
+            const grp = thunderGroupRef.current!;
+            const nowMs = Date.now();
+            const sprites = thunderSpritesRef.current;       // keyed by cluster
+            const nodes = data.nodes as any[];
+            const cg = clusterGeomRef.current;
+            // Collapse active read-nodes into their CLUSTERS → a flash lights the
+            // whole sector, not one sphere. Latest start wins; count = intensity.
+            const activeC = new Map<string, { start: number; end: number; count: number }>();
+            for (const [id, v] of mriRef.current) {
+              if (v.end <= nowMs) continue;
+              const idx = idToIdxRef.current.get(id);
+              const n = idx != null ? nodes[idx] : null;
+              if (!n) continue;
+              const c = n.__cluster ?? '_misc';
+              const cur = activeC.get(c);
+              if (!cur) activeC.set(c, { start: v.start, end: v.end, count: 1 });
+              else { cur.count++; if (v.start > cur.start) { cur.start = v.start; cur.end = v.end; } }
+            }
+            // Drop sprites for clusters no longer flashing.
+            for (const [c, spr] of sprites) {
+              if (!activeC.has(c)) { grp.remove(spr); (spr.material as THREE.Material).dispose(); sprites.delete(c); }
+            }
+            // One big sector glow per active cluster.
+            for (const [c, info] of activeC) {
+              const geom = cg.get(c);
+              if (!geom) continue;
+              let spr = sprites.get(c);
+              if (!spr) {
+                const m = new THREE.SpriteMaterial({ map: cloudSprite, color: 0x39ff7a, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+                spr = new THREE.Sprite(m);
+                spr.userData.seed = (Math.abs(c.split('').reduce((a, ch) => a + ch.charCodeAt(0), 0)) % 100);
+                grp.add(spr); sprites.set(c, spr);
+              }
+              spr.position.set(geom.x, geom.y, geom.z);
+              const t01 = Math.max(0, Math.min(1, (nowMs - info.start) / (info.end - info.start)));
+              const env = Math.sin(t01 * Math.PI);                 // rise→fall
+              const seed = spr.userData.seed as number;
+              // Lightning: irregular sharp flashes riding the fade envelope.
+              const flick = 0.3 + 0.7 * Math.pow(Math.abs(Math.sin(nowMs * 0.016 + seed)), 6);
+              const intensity = Math.min(1, 0.55 + 0.18 * info.count);
+              (spr.material as THREE.SpriteMaterial).opacity = env * flick * intensity * 0.8;
+              const sc = geom.r * 2.6;                              // cover the whole sector
+              spr.scale.set(sc, sc, 1);
+            }
+          }
+        }
         const renderer = fg.renderer?.();
         const scene = fg.scene?.();
         if (renderer && scene && cam) renderer.render(scene, cam);
@@ -795,6 +884,16 @@ export default function BrainGraph3DConstellation({
       try {
         const ctrls: any = fg.controls?.();
         if (ctrls) ctrls.autoRotate = false;
+      } catch {}
+      // Tear down thunder sprites + group.
+      try {
+        const grp = thunderGroupRef.current;
+        if (grp) {
+          for (const [, spr] of thunderSpritesRef.current) { (spr.material as THREE.Material).dispose(); }
+          thunderSpritesRef.current.clear();
+          grp.parent?.remove(grp);
+          thunderGroupRef.current = null;
+        }
       } catch {}
     };
   }, [data]);
@@ -1436,37 +1535,6 @@ export default function BrainGraph3DConstellation({
     return baseW;
   }, [hover, selected, showParticles]);
 
-  function triggerMriDemo() {
-    if (data.nodes.length === 0) return;
-    // Simulate agent traversing brain: random walk along edges, MRI hops node→node
-    let cur = 0, bestDeg = -1;
-    for (let i = 0; i < data.nodes.length; i++) {
-      const deg = (neighborsRef.current.get(i) ?? []).length;
-      if (deg > bestDeg) { bestDeg = deg; cur = i; }
-    }
-    const walkLen = 8;
-    const stepMs = 900; // gap between successive node activations
-    const now = Date.now();
-    const visited = new Set<number>();
-    visited.add(cur);
-    let prev = -1;
-    for (let s = 0; s < walkLen; s++) {
-      const node = data.nodes[cur];
-      const off = s * stepMs;
-      mriRef.current.set(node.id, { start: now + off, end: now + off + MRI_DURATION_MS });
-      // Pick next: prefer unvisited neighbor, fallback random neighbor
-      const nbrs = neighborsRef.current.get(cur) ?? [];
-      if (nbrs.length === 0) break;
-      const fresh = nbrs.filter((i) => !visited.has(i) && i !== prev);
-      const pool = fresh.length ? fresh : nbrs;
-      prev = cur;
-      cur = pool[Math.floor(Math.random() * pool.length)];
-      visited.add(cur);
-    }
-    focusDirtyRef.current = true;
-    setMriTick((t) => t + 1);
-  }
-
   function zoom(factor: number) {
     const fg: any = fgRef.current;
     if (!fg) return;
@@ -1508,11 +1576,6 @@ export default function BrainGraph3DConstellation({
           }`}
           title={showLabels ? 'Nascondi nomi' : 'Mostra nomi'}
         >Aa</button>
-        <button
-          onClick={triggerMriDemo}
-          className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/60 text-emerald-300 hover:bg-emerald-500/30 backdrop-blur transition flex items-center justify-center text-xs font-semibold"
-          title="Demo MRI animation"
-        >MRI</button>
         {onToggleExplorer && (
           <button
             onClick={onToggleExplorer}
