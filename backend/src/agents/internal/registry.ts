@@ -13,9 +13,10 @@ import thoughtDigest from './thought_digest.js';
 import brainConsolidator from './brain_consolidator.js';
 import waPeopleSync from './wa_people_sync.js';
 import goalSteward from './goal_steward.js';
+import goalPursuit from './goal_pursuit.js';
 import { sendTelegram } from '../../telegram/bot.js';
 
-const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer, vaultDreamer, vaultLibrarian, vaultGardener, thoughtDigest, brainConsolidator, waPeopleSync, goalSteward];
+const REGISTRY: InternalAgent[] = [brainClassifier, linkWeaver, peopleAnalyzer, vaultDreamer, vaultLibrarian, vaultGardener, thoughtDigest, brainConsolidator, waPeopleSync, goalSteward, goalPursuit];
 
 export function listInternalAgents(): InternalAgent[] {
   return REGISTRY;
@@ -132,13 +133,12 @@ export async function runInternalAgent(userId: number, name: string) {
     // hear about (e.g. goal_steward fires daily but reviews only on Friday).
     if (rows[0]?.notify_on_run && report?.silent !== true) {
       const lang = ((await getSetting<string>(userId, 'language')) ?? 'it') as Lang;
-      let msg = agent.humanize
+      // Solo il riepilogo ragionato dell'humanize — NESSUN elenco/conteggio di
+      // file. I file toccati restano consultabili in /perks e nel brain, ma il
+      // messaggio Telegram dev'essere segnale, non rumore.
+      const msg = agent.humanize
         ? agent.humanize(report, lang, status as 'ok' | 'error')
         : fallbackHumanize(agent.title, report, lang, status as 'ok' | 'error');
-      if (status === 'ok') {
-        const paths = extractCreatedPaths(name, report);
-        msg = appendFileLinks(msg, paths, lang);
-      }
       console.log(`[internal-agents:u${userId}:${name}] sending telegram (${lang})`);
       await sendTelegram(userId, msg, `perk:${name}`);
       console.log(`[internal-agents:u${userId}:${name}] telegram sent`);

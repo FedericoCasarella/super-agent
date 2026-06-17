@@ -271,6 +271,18 @@ export async function buildSystemContext(userId: number): Promise<string> {
     parts.push(`QUIET MODE until ${quiet.until} (${quiet.reason ?? 'n/a'}). Answer briefly when messaged, don't push.`);
   }
 
+  // Voce autonoma: se ElevenLabs/TTS è configurato, l'agente decide DA SOLO
+  // quando rispondere con un audio anteponendo <<VOICE>> al messaggio.
+  try {
+    const { getTtsConfig } = await import('../connectors/builtin/tts/index.js');
+    const tts = await getTtsConfig(userId);
+    if (tts?.apiKey) {
+      parts.push(
+        'VOCE (ElevenLabs attivo) — Hai LIBERTÀ di rispondere con un messaggio VOCALE invece che testuale: anteponi il marker `<<VOICE>>` all\'inizio della risposta e il backend la invia come audio (il resto del testo diventa il parlato). DECIDI TU quando ha senso: messaggi personali, motivazionali, di conforto, hype dopo un traguardo, racconti, o quando l\'utente ti scrive a voce. Per risposte operative/tecniche/liste resta testo. Usa con parsimonia (non ogni messaggio), niente link/markdown nel vocale. È una tua scelta espressiva, non chiedere il permesso.',
+      );
+    }
+  } catch {}
+
   return parts.join('\n\n');
 }
 

@@ -155,6 +155,20 @@ export async function startScheduler() {
   cron.schedule('0 0 * * *', () => { runSnapshotSweep('cron').catch(() => {}); }, { timezone: 'Europe/Rome' });
   console.log('[scheduler] brain-snapshot loop armed (daily 00:00 Europe/Rome)');
 
+  // Tone Mirror — fine giornata (23:30): l'agente rilegge la conversazione del
+  // giorno e auto-aggiorna il proprio tono di voce per somigliare all'utente.
+  cron.schedule('30 23 * * *', async () => {
+    try {
+      const { runToneMirror } = await import('../agent/tone_mirror.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try { const r = await runToneMirror(u.id); console.log(`[tone-mirror:u${u.id}]`, r.updated ? 'aggiornato' : (r.reason ?? r.error ?? 'ok')); }
+        catch (e) { console.error(`[tone-mirror:u${u.id}]`, e); }
+      }
+    } catch (e) { console.error('[tone-mirror] sweep failed', e); }
+  }, { timezone: 'Europe/Rome' });
+  console.log('[scheduler] tone-mirror armed (daily 23:30 Europe/Rome)');
+
   // Catch-up: backend was down at midnight, or process restarted mid-sweep.
   // On boot, check whether a cron snapshot for TODAY already exists per user;
   // if not, run one now. Guarantees daily coverage even with frequent restarts.
