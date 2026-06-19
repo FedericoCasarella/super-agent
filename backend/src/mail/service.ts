@@ -433,6 +433,96 @@ export async function sendMail(userId: number, opts: {
   }
 }
 
+// Salva (o aggiorna) una BOZZA via IMAP APPEND nella cartella Drafts. Usata
+// dall'autosave del composer (debounce). `replaceUid` rimpiazza la bozza
+// precedente: append nuova + delete vecchia (no duplicati a ogni keystroke).
+export async function saveDraft(userId: number, opts: {
+  accountLabel: string;
+  to?: string; cc?: string; bcc?: string;
+  subject?: string; body?: string; html?: string;
+  inReplyTo?: string; references?: string[];
+  replaceUid?: number;
+}): Promise<{ ok: boolean; uid?: number; mailbox?: string; error?: string }> {
+  const accs = await listAccounts(userId);
+  if (!accs.length) return { ok: false, error: 'nessun account email configurato' };
+  const acc = pickAccount(accs, opts.accountLabel);
+  const s = smtpCreds(acc);
+  const from = s.fromName ? `${s.fromName} <${s.user}>` : s.user;
+  // Cartella Drafts reale dell'account.
+  const draftsRow = await query<{ name: string }>(
+    `SELECT name FROM mail_folders WHERE user_id=$1 AND account_label=$2 AND kind='drafts' LIMIT 1`,
+    [userId, acc.label],
+  ).catch(() => [] as { name: string }[]);
+  const mailbox = draftsRow[0]?.name ?? 'Drafts';
+  const headers: Record<string, string> = {};
+  if (opts.inReplyTo) headers['In-Reply-To'] = `<${opts.inReplyTo}>`;
+  if (opts.references?.length) headers['References'] = opts.references.map((r) => `<${r}>`).join(' ');
+  // Costruisci il MIME senza inviarlo (MailComposer).
+  const MailComposer = (await import('nodemailer/lib/mail-composer/index.js')).default as any;
+  const raw: Buffer = await new MailComposer({
+    from, to: opts.to || undefined, cc: opts.cc || undefined, bcc: opts.bcc || undefined,
+    subject: opts.subject || '', text: opts.body || '', html: opts.html || undefined, headers,
+  }).compile().build();
+  const client = new ImapFlow({ host: acc.host, port: acc.port ?? 993, secure: true, auth: { user: acc.user, pass: acc.pass }, logger: false });
+  try {
+    await client.connect();
+    let uid: number | undefined;
+    const lock = await client.getMailboxLock(mailbox);
+    try {
+      const r = await client.append(mailbox, raw, ['\\Draft', '\\Seen']);
+      uid = (r as any)?.uid;
+      // Rimuovi la bozza precedente.
+      if (opts.replaceUid) {
+        try { await client.messageFlagsAdd({ uid: String(opts.replaceUid) }, ['\\Deleted'], { uid: true }); await client.messageDelete({ uid: String(opts.replaceUid) }, { uid: true }); } catch { /* best-effort */ }
+      }
+    } finally { lock.release(); }
+    // Specchia la bozza in DB così appare SUBITO nella cartella Bozze della UI
+    // (la lista legge da mail_messages, non fa fetch IMAP live).
+    try {
+      if (opts.replaceUid) {
+        await query(`DELETE FROM mail_messages WHERE user_id=$1 AND account_label=$2 AND folder=$3 AND uid=$4`,
+          [userId, acc.label, mailbox, opts.replaceUid]);
+      }
+      const toArr = (opts.to ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      const ccArr = (opts.cc ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      const bccArr = (opts.bcc ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      await query(
+        `INSERT INTO mail_messages(user_id, account_label, uid, message_id, in_reply_to, refs, thread_key,
+           folder, direction, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, subject, preview, body_text, body_html,
+           raw_size, ts, seen)
+         VALUES($1,$2,$3,NULL,$4,$5,$6,$7,'out',$8,$9,$10,$11,$12,$13,$14,$15,$16,0,now(),true)`,
+        [userId, acc.label, uid ?? null, opts.inReplyTo ?? null, opts.references ?? [], opts.inReplyTo ?? null,
+         mailbox, s.user, s.fromName ?? null, toArr, ccArr, bccArr, opts.subject ?? '', previewOf(opts.body ?? ''), opts.body ?? '', opts.html ?? null],
+      );
+    } catch { /* DB mirror best-effort */ }
+    return { ok: true, uid, mailbox };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  } finally {
+    try { await client.logout(); } catch { /* ignore */ }
+  }
+}
+
+// Elimina una bozza dalla cartella Drafts (dopo l'invio → niente doppione).
+export async function deleteDraft(userId: number, accountLabel: string, uid: number): Promise<{ ok: boolean; error?: string }> {
+  const accs = await listAccounts(userId);
+  const acc = pickAccount(accs, accountLabel);
+  const draftsRow = await query<{ name: string }>(
+    `SELECT name FROM mail_folders WHERE user_id=$1 AND account_label=$2 AND kind='drafts' LIMIT 1`,
+    [userId, acc.label],
+  ).catch(() => [] as { name: string }[]);
+  const mailbox = draftsRow[0]?.name ?? 'Drafts';
+  const client = new ImapFlow({ host: acc.host, port: acc.port ?? 993, secure: true, auth: { user: acc.user, pass: acc.pass }, logger: false });
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock(mailbox);
+    try { await client.messageDelete({ uid: String(uid) }, { uid: true }); } finally { lock.release(); }
+    await query(`DELETE FROM mail_messages WHERE user_id=$1 AND account_label=$2 AND folder=$3 AND uid=$4`, [userId, acc.label, mailbox, uid]).catch(() => {});
+    return { ok: true };
+  } catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
+  finally { try { await client.logout(); } catch { /* ignore */ } }
+}
+
 // ---------------------------------------------------------------------------
 // Folder discovery — enumerate IMAP folders/labels for an account.
 // Maps the special-use flags (`\Sent`, `\Drafts`, `\Trash`, `\Junk`, `\All`)

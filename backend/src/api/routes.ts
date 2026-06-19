@@ -656,7 +656,7 @@ router.get('/goals/:id/execution', async (req, res) => {
     );
     const agents = await query<any>(
       `SELECT id::int, title, brief, status, cost_usd, created_at, started_at, ended_at, goal_id, milestone_id,
-              left(coalesce(result, ''), 1500) AS result, error
+              left(coalesce(result, ''), 1500) AS result, error, actions
        FROM sub_agents WHERE user_id=$1 AND goal_id=$2 ORDER BY created_at DESC LIMIT 100`,
       [userId, goalId],
     );
@@ -667,7 +667,75 @@ router.get('/goals/:id/execution', async (req, res) => {
     );
     const msById = new Map(propsWithMs.map((p: any) => [p.id, p.milestone_id]));
     for (const p of proposals) (p as any).milestone_id = msById.get(p.id) ?? null;
+    // Risorse per agente: file .md/.txt/… toccati (Read/Write/Edit dalle azioni),
+    // dedup per path, SOLO quelli realmente esistenti su disco (gli agenti
+    // registrano anche tentativi di lettura falliti → niente nodi fantasma).
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    for (const a of agents) {
+      const acts: any[] = Array.isArray(a.actions) ? a.actions : [];
+      const map = new Map<string, boolean>();
+      for (const act of acts) {
+        if (act?.name !== 'Read' && act?.name !== 'Write' && act?.name !== 'Edit') continue;
+        const p = String(act.brief ?? '').trim();
+        if (!p || !/\.(md|txt|pdf|csv|json|docx?)$/i.test(p)) continue;
+        map.set(p, (map.get(p) ?? false) || act.name !== 'Read');
+      }
+      const resources: { path: string; written: boolean }[] = [];
+      for (const [p, written] of map) {
+        const ok = await fs.access(path.resolve(p)).then(() => true).catch(() => false);
+        if (ok) resources.push({ path: p, written });
+      }
+      a.resources = resources;
+      delete a.actions;
+    }
     res.json({ proposals, agents });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Anteprima di un file-risorsa toccato da un agente (path assoluto). Per
+// sicurezza il path deve risiedere dentro uno dei vault dell'utente.
+router.get('/goals/:id/resource', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.query.path ?? '');
+    if (!raw) return res.status(400).json({ error: 'path richiesto' });
+    const path = await import('node:path');
+    const fs = await import('node:fs/promises');
+    const abs = path.resolve(raw);
+    const { listVaults } = await import('../brain/vaults.js');
+    const vaults = await listVaults(userId);
+    // Gli agenti scrivono nell'intero albero `memory/` (es. people/ è sibling
+    // di MyCEO/), non solo dentro i vault registrati. Boundary = parent del
+    // vault root → copre le directory fratelle dello stesso brain.
+    const roots = new Set<string>();
+    for (const v of vaults) { const r = path.resolve(v.path); roots.add(r); roots.add(path.dirname(r)); }
+    const inside = [...roots].some((r) => abs === r || abs.startsWith(r + path.sep));
+    if (!inside) return res.status(403).json({ error: 'fuori dai vault' });
+    const txt = await fs.readFile(abs, 'utf8').catch(() => null);
+    if (txt == null) return res.status(404).json({ error: 'non trovato' });
+    let content = txt, title: string | undefined;
+    if (/\.md$/i.test(abs)) {
+      try { const matter = (await import('gray-matter')).default; const p = matter(txt); content = p.content; title = p.data?.title; } catch { /* keep raw */ }
+    }
+    res.json({ path: abs, name: path.basename(abs), title, content: content.slice(0, 60_000) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Diario dei round di goal_pursuit (append giornaliero in brain). Tasto "Recap"
+// nella pagina obiettivo.
+router.get('/goals/:id/pursuit-log', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const goalId = Number(req.params.id);
+    const { getGoal } = await import('../goals/index.js');
+    const g = await getGoal(userId, goalId);
+    if (!g) return res.status(404).json({ error: 'goal non trovato' });
+    const slug = g.title.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'goal';
+    const note = await readNote(userId, `goals/${slug}/pursuit-log.md`);
+    if (!note) return res.json({ content: null });
+    res.json({ content: note.content, title: note.title });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
@@ -2464,6 +2532,61 @@ router.post('/mail/send', upload.array('attachments', 10), async (req, res) => {
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// Autosave bozza (debounce dal composer) → IMAP APPEND in Drafts.
+router.post('/mail/draft', async (req, res) => {
+  try {
+    const { saveDraft } = await import('../mail/service.js');
+    const b = req.body ?? {};
+    const refs: string[] = Array.isArray(b.references) ? b.references : [];
+    const r = await saveDraft(req.user!.id, {
+      accountLabel: String(b.account ?? ''),
+      to: b.to ? String(b.to) : undefined,
+      cc: b.cc ? String(b.cc) : undefined,
+      bcc: b.bcc ? String(b.bcc) : undefined,
+      subject: b.subject ? String(b.subject) : undefined,
+      body: b.body ? String(b.body) : undefined,
+      html: b.html ? String(b.html) : undefined,
+      inReplyTo: b.inReplyTo ? String(b.inReplyTo) : undefined,
+      references: refs,
+      replaceUid: b.replaceUid ? Number(b.replaceUid) : undefined,
+    });
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/draft/delete', async (req, res) => {
+  try {
+    const { deleteDraft } = await import('../mail/service.js');
+    const b = req.body ?? {};
+    if (!b.uid) return res.status(400).json({ ok: false, error: 'uid richiesto' });
+    res.json(await deleteDraft(req.user!.id, String(b.account ?? ''), Number(b.uid)));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+// L'agente gira nel contesto-sistema dell'utente (caveman mode incluso), quindi
+// a volte avvolge la bozza con un preambolo ("Email body… Draft sotto:"), la
+// racchiude tra fence `---` e ci attacca delle "Note (caveman)". Qui teniamo
+// SOLO il corpo della mail.
+function extractEmailBody(raw: string): string {
+  let t = (raw ?? '').trim();
+  // 1) Marcatori espliciti: prendi SOLO ciò che sta tra <<<EMAIL>>> e <<<END>>>.
+  const mk = t.match(/<<<\s*EMAIL\s*>>>\s*([\s\S]*?)\s*(?:<<<\s*END\s*>>>|$)/i);
+  if (mk) t = mk[1].trim();
+  else {
+    // 2) Fallback: corpo tra fence ---.
+    const parts = t.split(/^\s*---\s*$/m);
+    if (parts.length >= 3) t = parts[1].trim();
+  }
+  // 3) Pulizia difensiva di righe meta che a volte sfuggono comunque.
+  t = t.replace(/^.*\bDraft sotto\b.*$/im, '').trim();
+  t = t.replace(/^(?:Email body|Ecco (?:la|una) bozza|Bozza)[^\n]*:?\s*$/im, '').trim();
+  // Taglia un eventuale blocco di note/commenti FINALE (caveman, "Nota:",
+  // "Note:", "N.B.", "PS") fino a fine testo.
+  t = t.replace(/\n{2,}\s*(?:Note\s*\(caveman\)|Note?:|Nota:|N\.?B\.?:?|P\.?S\.?:?)[\s\S]*$/i, '').trim();
+  return t;
+}
+
 // AI-drafted reply — same pattern as WA suggestReply.
 router.post('/mail/messages/:id/suggest', quotaGuard, async (req, res) => {
   try {
@@ -2485,11 +2608,16 @@ router.post('/mail/messages/:id/suggest', quotaGuard, async (req, res) => {
       String(m.body_text ?? '').slice(0, 4000),
       `--- FINE EMAIL ---`,
       ``,
-      `Restituisci SOLO il corpo della risposta, niente subject né intestazioni.`,
+      `OUTPUT: restituisci ESCLUSIVAMENTE il corpo della risposta racchiuso tra i marcatori esatti qui sotto.`,
+      `Vietato qualsiasi testo fuori dai marcatori: niente preamboli, niente subject, niente note/commenti/avvertenze, niente "Nota:", niente spiegazioni su placeholder o scelte. Solo il corpo della mail, pronto da inviare.`,
+      `Se servono dati che non hai, lascia un placeholder tra [graffe] DENTRO il corpo — non spiegarlo fuori.`,
+      `<<<EMAIL>>>`,
+      `(qui SOLO il corpo della mail)`,
+      `<<<END>>>`,
     ].join('\n');
     const r = await runClaude(req.user!.id, prompt, { timeoutMs: 60_000, kind: 'mail_suggest', meta: { mailId: m.id } });
     if (!r.ok) return res.status(400).json({ ok: false, error: r.stderr || 'agent error' });
-    res.json({ ok: true, draft: r.text.trim() });
+    res.json({ ok: true, draft: extractEmailBody(r.text) });
   } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
 

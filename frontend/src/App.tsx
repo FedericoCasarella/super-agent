@@ -176,6 +176,7 @@ function AppInner() {
             the viewport exactly — e.g. the mail client 3-pane). */}
         <Routes>
           <Route path="/mail" element={<div className="overflow-hidden h-[calc(100dvh-56px)] md:h-[calc(100dvh-72px)]"><Mail /></div>} />
+          <Route path="/goals/:id" element={<div className="flex-1 min-h-0 overflow-hidden"><GoalDetailPage /></div>} />
           <Route path="*" element={
             <div className="p-4 sm:p-6 lg:p-8 min-w-0">
               <Routes>
@@ -183,7 +184,6 @@ function AppInner() {
                 <Route path="/connectors" element={<Connectors />} />
                 <Route path="/brain" element={<Brain />} />
                 <Route path="/roadmap" element={<Roadmap />} />
-                <Route path="/goals/:id" element={<GoalDetailPage />} />
                 <Route path="/ingestion" element={<FileIngestionPage />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/perks" element={<Agents />} />

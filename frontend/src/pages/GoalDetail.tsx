@@ -12,7 +12,8 @@ import { Button, Card, Chip, Field, Input, useToast } from '../components/ui';
 import { useDialog } from '../components/dialog';
 import { useSetBreadcrumb } from '../components/Breadcrumbs';
 import GoalGraph2D from '../components/GoalGraph2D';
-import { Target, Sparkles, TrendingUp, CalendarDays, Bot, Send, Rocket, Clock, CheckCircle2, XCircle, Loader2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, Layers, Pause, Play, X, ArrowLeft } from 'lucide-react';
+import MarkdownView from '../components/MarkdownView';
+import { Target, Sparkles, TrendingUp, CalendarDays, Bot, Send, Rocket, Clock, CheckCircle2, XCircle, Loader2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, Layers, Pause, Play, X, ArrowLeft, FileText, History } from 'lucide-react';
 
 type GoalKpi = { id: string; name: string; unit?: string; target: number; current: number; history: { ts: string; value: number }[] };
 type Milestone = { id: string; title: string; due?: string; status: 'pending' | 'in_progress' | 'done'; area?: string; order?: number };
@@ -22,7 +23,7 @@ type Goal = {
   status: string; kpis: GoalKpi[]; plan: Plan | null; pending_plan: Plan | null;
   last_review_at: string | null; created_at: string;
 };
-type SubAgent = { id: number; title: string; brief: string | null; status: string; cost_usd: number | null; created_at: string; started_at: string | null; ended_at: string | null; goal_id: number | null; milestone_id: string | null; result: string; error: string | null };
+type SubAgent = { id: number; title: string; brief: string | null; status: string; cost_usd: number | null; created_at: string; started_at: string | null; ended_at: string | null; goal_id: number | null; milestone_id: string | null; result: string; error: string | null; resources?: { path: string; written: boolean }[] };
 type Proposal = { id: number; title: string; proposals: { title: string; brief: string }[]; status: string; milestone_id: string | null; created_at: string };
 
 function pace(goal: Goal, kpi: GoalKpi): { expected: number; ratio: number | null } {
@@ -79,20 +80,47 @@ export default function GoalDetailPage({ goalId: goalIdProp, embedded, onClose }
   const [openAgent, setOpenAgent] = useState<number | null>(null);
   const [msEdit, setMsEdit] = useState<Milestone | 'new' | null>(null);
   const [deployFor, setDeployFor] = useState<Milestone | null>(null);
-  const [drawer, setDrawer] = useState<{ kind: 'agent' | 'kpi'; id: string } | null>(null);
+  const [drawer, setDrawer] = useState<{ kind: 'agent' | 'kpi' | 'resource' | 'recap'; id: string } | null>(null);
+  const [resDoc, setResDoc] = useState<{ loading: boolean; name?: string; title?: string; content?: string; error?: string } | null>(null);
+  const [recap, setRecap] = useState<{ loading: boolean; content?: string | null; error?: string } | null>(null);
+  const [pursuit, setPursuit] = useState<{ enabled: boolean; hour: number; minute: number; last_run_at: string | null } | null>(null);
 
   useSetBreadcrumb(!embedded && goal ? [{ label: 'Roadmap', to: '/roadmap' }, { label: goal.title }] : null);
   const goBack = () => { if (onClose) onClose(); else nav('/roadmap'); };
 
   async function load() {
     try {
-      const [g, ex] = await Promise.all([api.goalsList(), api.goalExecution(goalId)]);
+      const [g, ex, ia] = await Promise.all([api.goalsList(), api.goalExecution(goalId), api.internalAgents().catch(() => [])]);
       setGoal(g.rows.find((x: Goal) => x.id === goalId) ?? null);
       setAgents(ex.agents);
       setProposals(ex.proposals);
+      const gp = (ia as any[]).find((a) => a.name === 'goal_pursuit');
+      setPursuit(gp ? { enabled: gp.enabled, hour: gp.hour, minute: gp.minute, last_run_at: gp.last_run_at } : null);
     } catch {}
   }
   useEffect(() => { load(); const iv = setInterval(load, 20_000); return () => clearInterval(iv); /* eslint-disable-next-line */ }, [goalId]);
+
+  // Anteprima risorsa quando si clicca un doc-node nel grafico.
+  useEffect(() => {
+    if (drawer?.kind !== 'resource') { setResDoc(null); return; }
+    let alive = true;
+    setResDoc({ loading: true });
+    api.goalResource(goalId, drawer.id)
+      .then((r) => { if (alive) setResDoc({ loading: false, name: r.name, title: r.title, content: r.content }); })
+      .catch((e) => { if (alive) setResDoc({ loading: false, error: String(e?.message ?? e) }); });
+    return () => { alive = false; };
+  }, [drawer, goalId]);
+
+  // Recap round Goal Pursuit (pursuit-log.md).
+  useEffect(() => {
+    if (drawer?.kind !== 'recap') { setRecap(null); return; }
+    let alive = true;
+    setRecap({ loading: true });
+    api.goalPursuitLog(goalId)
+      .then((r) => { if (alive) setRecap({ loading: false, content: r.content }); })
+      .catch((e) => { if (alive) setRecap({ loading: false, error: String(e?.message ?? e) }); });
+    return () => { alive = false; };
+  }, [drawer, goalId]);
 
   if (!goal) return <div className="text-sm text-muted-foreground py-10 text-center">Caricamento obiettivo…</div>;
 
@@ -204,16 +232,20 @@ export default function GoalDetailPage({ goalId: goalIdProp, embedded, onClose }
   const drawerKpi = drawer?.kind === 'kpi' ? (goal.kpis ?? []).find((k) => k.id === drawer.id) ?? null : null;
 
   return (
-    <div className={embedded ? 'relative w-full h-[82vh] overflow-hidden bg-[#0b0d14] rounded-xl' : 'relative -m-4 sm:-m-6 lg:-m-8 h-[calc(100dvh-3.5rem)] overflow-hidden bg-[#0b0d14]'}>
+    <div className={embedded ? 'relative w-full h-[82vh] overflow-hidden bg-[#0b0d14] rounded-xl' : 'relative w-full h-full overflow-hidden bg-[#0b0d14]'}>
       {/* Full-bleed 2D graph — no cards, no borders */}
       <div className="absolute inset-0">
         <GoalGraph2D
           goalTitle={goal.title}
           kpis={(goal.kpis ?? []).map((k) => ({ id: k.id, name: k.name, unit: k.unit, target: k.target, current: k.current }))}
           milestones={(goal.plan?.milestones ?? []).map((m) => ({ id: m.id, title: m.title, area: m.area, status: m.status }))}
-          agents={agents.map((a) => ({ id: a.id, title: a.title, status: a.status, milestoneId: a.milestone_id }))}
+          agents={agents.map((a) => ({ id: a.id, title: a.title, status: a.status, milestoneId: a.milestone_id, resources: a.resources ?? [] }))}
           storageKey={String(goalId)}
           onPick={(sel) => setDrawer(sel)}
+          onToggleMilestone={async (mid, done) => {
+            try { await api.goalMilestoneUpdate(goalId, mid, { status: done ? 'done' : 'pending' }); await load(); }
+            catch (e: any) { toast.push(String(e?.message ?? e), 'err'); }
+          }}
         />
       </div>
 
@@ -228,17 +260,89 @@ export default function GoalDetailPage({ goalId: goalIdProp, embedded, onClose }
           {goal.pending_plan && <div className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-400/30 rounded-full px-2.5 py-0.5"><Sparkles size={11} /> Piano in attesa di ✅ Telegram</div>}
         </div>
         <div className="ml-auto flex items-center gap-2 pointer-events-auto shrink-0">
+          <button title="Recap giornalieri (Goal Pursuit)" onClick={() => setDrawer({ kind: 'recap', id: String(goalId) })} className="h-9 px-3 inline-flex items-center gap-1.5 rounded-lg bg-bg/60 backdrop-blur border border-white/10 text-foreground/80 hover:text-foreground hover:bg-bg/80 transition text-xs font-medium"><History size={15} /> Recap</button>
           {goal.status === 'active' && <button title="Pausa" onClick={() => setGoalStatus('paused')} className="h-9 w-9 inline-flex items-center justify-center rounded-lg bg-bg/60 backdrop-blur border border-white/10 text-foreground/80 hover:bg-bg/80 transition"><Pause size={15} /></button>}
           {goal.status === 'paused' && <button title="Riattiva" onClick={() => setGoalStatus('active')} className="h-9 w-9 inline-flex items-center justify-center rounded-lg bg-bg/60 backdrop-blur border border-white/10 text-foreground/80 hover:bg-bg/80 transition"><Play size={15} /></button>}
           <button title="Elimina obiettivo" onClick={delGoal} className="h-9 w-9 inline-flex items-center justify-center rounded-lg bg-bg/60 backdrop-blur border border-white/10 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"><Trash2 size={15} /></button>
         </div>
       </div>
 
+      {/* ── STATS OVERLAY (lato destro) ───────────────────────────── */}
+      {!drawer && (() => {
+        const byDay = new Map<string, number>();
+        for (const a of agents) { const d = new Date(a.created_at); byDay.set(`${d.getDate()}/${d.getMonth() + 1}`, (byDay.get(`${d.getDate()}/${d.getMonth() + 1}`) ?? 0) + 1); }
+        const days = [...byDay.entries()].slice(-8);
+        const maxDay = Math.max(1, ...days.map((d) => d[1]));
+        const sc: Record<string, number> = {};
+        for (const a of agents) sc[a.status] = (sc[a.status] ?? 0) + 1;
+        const kpiPaces = (goal.kpis ?? []).map((k) => pace(goal, k).ratio).filter((r): r is number => r != null);
+        const avgPace = kpiPaces.length ? Math.round((kpiPaces.reduce((s, r) => s + Math.min(1, r), 0) / kpiPaces.length) * 100) : null;
+        const Stat = ({ icon, label, children }: { icon: any; label: string; children: any }) => (
+          <div className="rounded-xl bg-surface/85 backdrop-blur border border-border p-3">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold inline-flex items-center gap-1.5 mb-2">{icon}{label}</div>
+            {children}
+          </div>
+        );
+        // Prossimo round Goal Pursuit: oggi all'ora schedulata se non ancora
+        // passata (e non già girato oggi), altrimenti domani.
+        const nextRound = (() => {
+          if (!pursuit?.enabled) return null;
+          const now = new Date();
+          const next = new Date(); next.setHours(pursuit.hour, pursuit.minute, 0, 0);
+          const ranToday = pursuit.last_run_at && new Date(pursuit.last_run_at).toDateString() === now.toDateString();
+          if (next <= now || ranToday) next.setDate(next.getDate() + 1);
+          const mins = Math.round((next.getTime() - now.getTime()) / 60000);
+          const rel = mins < 60 ? `tra ${mins}m` : mins < 1440 ? `tra ${Math.round(mins / 60)}h` : `tra ${Math.round(mins / 1440)}g`;
+          const hh = String(pursuit.hour).padStart(2, '0'), mm = String(pursuit.minute).padStart(2, '0');
+          const day = next.toDateString() === now.toDateString() ? 'oggi' : next.getDate() === now.getDate() + 1 ? 'domani' : next.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' });
+          return { rel, label: `${day} ${hh}:${mm}` };
+        })();
+        return (
+          <div className="absolute top-16 right-3 z-10 w-[210px] max-h-[calc(100%-5rem)] overflow-y-auto flex flex-col gap-2.5 pointer-events-auto">
+            {nextRound && (
+              <button onClick={() => setDrawer({ kind: 'recap', id: String(goalId) })} className="rounded-xl bg-surface/85 backdrop-blur border border-border px-3 py-2 text-left hover:border-emerald-400/40 transition group">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold inline-flex items-center gap-1.5"><History size={11} /> Prossimo round</div>
+                <div className="flex items-baseline justify-between mt-1"><span className="text-sm font-semibold text-emerald-400">{nextRound.rel}</span><span className="text-[10px] text-muted-foreground">{nextRound.label}</span></div>
+              </button>
+            )}
+            <Stat icon={<TrendingUp size={11} />} label="Avanzamento">
+              <div className="text-2xl font-semibold tabular-nums">{overallPct}<span className="text-sm text-muted-foreground">%</span></div>
+              <div className="mt-1.5 h-1.5 rounded-full bg-surface2 overflow-hidden"><div className="h-full rounded-full bg-emerald-400/80 transition-all" style={{ width: `${overallPct}%` }} /></div>
+              <div className="text-[10px] text-muted-foreground mt-1">{doneMs}/{totMs} milestone · {avgPace != null ? `KPI ${avgPace}%` : 'KPI —'}</div>
+            </Stat>
+            <Stat icon={<CalendarDays size={11} />} label="Agenti / giorno">
+              {days.length ? (
+                <div className="flex items-end gap-1 h-14">
+                  {days.map(([d, c]) => (
+                    <div key={d} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+                      <div className="w-full rounded-t bg-gradient-to-t from-primary to-[hsl(var(--accent-2))]" style={{ height: `${(c / maxDay) * 100}%`, minHeight: 3 }} title={`${c} il ${d}`} />
+                      <span className="text-[8px] text-muted-foreground truncate w-full text-center">{d}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="text-[11px] text-muted-foreground">nessun agente</div>}
+            </Stat>
+            <Stat icon={<Bot size={11} />} label="Stato agenti">
+              <div className="flex items-end justify-between"><span className="text-2xl font-semibold tabular-nums">{agents.length}</span><span className="text-[10px] text-muted-foreground">totali</span></div>
+              <div className="mt-2 space-y-1">
+                {([['done', 'bg-emerald-400'], ['running', 'bg-violet-400'], ['pending', 'bg-amber-400'], ['error', 'bg-red-400']] as const).filter(([s]) => sc[s]).map(([s, col]) => (
+                  <div key={s} className="flex items-center gap-2 text-[11px]"><span className={`w-1.5 h-1.5 rounded-full ${col}`} /><span className="text-muted-foreground capitalize flex-1">{s}</span><span className="font-mono">{sc[s]}</span></div>
+                ))}
+              </div>
+            </Stat>
+            <Stat icon={<Rocket size={11} />} label="Costo agenti">
+              <div className="text-2xl font-semibold tabular-nums">${totalCost.toFixed(2)}</div>
+              <div className="text-[10px] text-muted-foreground mt-1">spesi finora</div>
+            </Stat>
+          </div>
+        );
+      })()}
+
       {/* DRAWER — agente o KPI cliccato */}
       {drawer && (
-          <div className="absolute top-0 right-0 bottom-0 z-30 w-full sm:w-[380px] bg-surface border-l border-border shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-200">
+          <div className="absolute top-0 right-0 bottom-0 z-30 w-full sm:w-[560px] max-w-[90vw] bg-surface border-l border-border shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-200">
             <div className="sticky top-0 bg-surface/95 backdrop-blur border-b border-border px-4 py-3 flex items-center justify-between gap-2">
-              <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold inline-flex items-center gap-1.5">{drawer.kind === 'agent' ? <><Bot size={13} /> Agente</> : <><TrendingUp size={13} /> KPI</>}</span>
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold inline-flex items-center gap-1.5">{drawer.kind === 'agent' ? <><Bot size={13} /> Agente</> : drawer.kind === 'resource' ? <><FileText size={13} /> Risorsa</> : drawer.kind === 'recap' ? <><History size={13} /> Recap giornalieri</> : <><TrendingUp size={13} /> KPI</>}</span>
               <button className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface2 transition" onClick={() => setDrawer(null)}><X size={15} /></button>
             </div>
             <div className="p-4">
@@ -252,8 +356,28 @@ export default function GoalDetailPage({ goalId: goalIdProp, embedded, onClose }
                   </div>
                   {drawerAgent.brief && <div className="text-xs text-muted-foreground mb-3 italic">{drawerAgent.brief}</div>}
                   {(drawerAgent.result || drawerAgent.error)
-                    ? <div className="text-xs whitespace-pre-wrap leading-relaxed border-t border-border/60 pt-3">{drawerAgent.error ? <span className="text-red-400">{drawerAgent.error}</span> : drawerAgent.result}</div>
+                    ? <div className="border-t border-border/60 pt-3">{drawerAgent.error ? <div className="text-xs whitespace-pre-wrap text-red-400">{drawerAgent.error}</div> : <div className="text-sm"><MarkdownView content={drawerAgent.result} /></div>}</div>
                     : <div className="text-xs text-muted-foreground">Nessun risultato ancora.</div>}
+                </div>
+              )}
+              {drawer.kind === 'recap' && (
+                <div>
+                  <h3 className="font-semibold text-sm">Goal Pursuit — round giornalieri</h3>
+                  <div className="text-[11px] text-muted-foreground mt-1 mb-3">Ogni mattina misura i KPI, ragiona e propone le azioni del giorno.</div>
+                  {recap?.loading && <div className="text-xs text-muted-foreground">Carico…</div>}
+                  {recap?.error && <div className="text-xs text-red-400">{recap.error}</div>}
+                  {recap && !recap.loading && !recap.error && (recap.content
+                    ? <div className="border-t border-border/60 pt-3 text-sm"><MarkdownView content={recap.content} /></div>
+                    : <div className="text-xs text-muted-foreground">Nessun round registrato ancora. Il primo digest arriva domani mattina (8:30).</div>)}
+                </div>
+              )}
+              {drawer.kind === 'resource' && (
+                <div>
+                  <h3 className="font-semibold text-sm break-all">{resDoc?.title || resDoc?.name || drawer.id.split('/').pop()}</h3>
+                  <div className="text-[10px] text-muted-foreground font-mono break-all mt-1 mb-3">{drawer.id}</div>
+                  {resDoc?.loading && <div className="text-xs text-muted-foreground">Carico…</div>}
+                  {resDoc?.error && <div className="text-xs text-red-400">{resDoc.error}</div>}
+                  {resDoc?.content != null && <div className="border-t border-border/60 pt-3 text-sm"><MarkdownView content={resDoc.content} /></div>}
                 </div>
               )}
               {drawerKpi && (() => {

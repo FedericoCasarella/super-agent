@@ -231,6 +231,8 @@ export const api = {
   goalDelete: (id: number) => req<{ ok: boolean }>(`/goals/${id}`, { method: 'DELETE' }),
   goalMilestoneDeploy: (id: number, mid: string, instruction: string) => req<{ ok: boolean; proposalId?: number; error?: string }>(`/goals/${id}/milestones/${encodeURIComponent(mid)}/deploy`, { method: 'POST', body: JSON.stringify({ instruction }) }),
   goalExecution: (id: number) => req<{ proposals: any[]; agents: any[] }>(`/goals/${id}/execution`),
+  goalResource: (id: number, path: string) => req<{ path: string; name: string; title?: string; content: string }>(`/goals/${id}/resource?path=${encodeURIComponent(path)}`),
+  goalPursuitLog: (id: number) => req<{ content: string | null; title?: string }>(`/goals/${id}/pursuit-log`),
   roadmapGet: () => req<any>('/roadmap-v2'),
   roadmapStats: () => req<any>('/roadmap-v2/stats'),
   roadmapAddTodo: (horizon: 'shortTerm' | 'midTerm' | 'longTerm', data: any) => req<any>(`/roadmap-v2/${horizon}/todos`, { method: 'POST', body: JSON.stringify(data) }),
@@ -307,6 +309,8 @@ export const api = {
   igUnread: () => req<{ count: number }>('/instagram/unread'),
   mailSuggest: (id: number, hint?: string) => req<any>(`/mail/messages/${id}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
   mailCompose: (intent: string, to?: string) => req<{ ok: boolean; subject: string; body: string; error?: string }>('/mail/compose', { method: 'POST', body: JSON.stringify({ intent, to }) }),
+  mailSaveDraft: (payload: { account: string; to?: string; cc?: string; bcc?: string; subject?: string; body?: string; html?: string; inReplyTo?: string; references?: string[]; replaceUid?: number }) => req<{ ok: boolean; uid?: number; mailbox?: string; error?: string }>('/mail/draft', { method: 'POST', body: JSON.stringify(payload) }),
+  mailDeleteDraft: (account: string, uid: number) => req<{ ok: boolean; error?: string }>('/mail/draft/delete', { method: 'POST', body: JSON.stringify({ account, uid }) }),
   mailSend: (payload: { account: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html?: string; inReplyTo?: string; references?: string[]; attachments?: File[] }) => {
     const fd = new FormData();
     fd.append('account', payload.account);

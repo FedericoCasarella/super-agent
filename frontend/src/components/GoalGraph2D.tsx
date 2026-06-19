@@ -3,23 +3,29 @@
 // e hub Agenti sotto, figli in riga. Icone lucide vere. Click su KPI/agente →
 // onPick (la pagina apre il drawer).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Target, BarChart3, TrendingUp, Bot, CheckCircle2, Loader2, Clock, XCircle, RotateCcw, Plus, Minus } from 'lucide-react';
+import { Target, BarChart3, TrendingUp, Bot, CheckCircle2, Loader2, Clock, XCircle, RotateCcw, Plus, Minus, Check, FileText, FilePen } from 'lucide-react';
 
 type Kpi = { id: string; name: string; unit?: string; target: number; current: number };
-type Agent = { id: number; title: string; status: string; milestoneId?: string | null };
+type Resource = { path: string; written: boolean };
+type Agent = { id: number; title: string; status: string; milestoneId?: string | null; resources?: Resource[] };
 type Milestone = { id: string; title: string; area?: string; status: string };
 
 const C_GOAL = '#ff6680';
 const C_KPI = '#34d399';
 const C_AGENT = '#a78bfa';
+const C_RES = '#60a5fa';
 const C_MS = '#fbbf24';
+// HEX palette only — colors get `${tone}55` hex-alpha suffixes in styles, so
+// hsl()/rgb() strings would produce invalid values and the browser silently
+// drops the whole background/border. Keep everything #rrggbb.
+const MS_PALETTE = ['#fbbf24', '#38bdf8', '#f472b6', '#34d399', '#a78bfa', '#fb923c', '#22d3ee', '#facc15'];
 function areaColor(area?: string): string {
   if (!area) return C_MS;
   let h = 0; for (let i = 0; i < area.length; i++) h = (h * 31 + area.charCodeAt(i)) | 0;
-  return `hsl(${Math.abs(h) % 360}, 72%, 62%)`;
+  return MS_PALETTE[Math.abs(h) % MS_PALETTE.length];
 }
 
-type Pos = { id: string; kind: 'goal' | 'hub' | 'kpi' | 'agent' | 'milestone'; label: string; sub?: string; tone: string; x: number; y: number; pickId?: string; status?: string };
+type Pos = { id: string; kind: 'goal' | 'hub' | 'kpi' | 'agent' | 'milestone' | 'resource'; label: string; sub?: string; tone: string; x: number; y: number; pickId?: string; status?: string; resPath?: string };
 
 function AgentStatusIcon({ status, size, color }: { status?: string; size: number; color: string }) {
   const p = { size, style: { color } };
@@ -32,12 +38,13 @@ function AgentStatusIcon({ status, size, color }: { status?: string; size: numbe
 
 type View = { tx: number; ty: number; zoom: number };
 
-export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPick, storageKey }: {
+export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPick, onToggleMilestone, storageKey }: {
   goalTitle: string;
   kpis: Kpi[];
   agents: Agent[];
   milestones: Milestone[];
-  onPick?: (sel: { kind: 'agent' | 'kpi'; id: string }) => void;
+  onPick?: (sel: { kind: 'agent' | 'kpi' | 'resource'; id: string }) => void;
+  onToggleMilestone?: (id: string, done: boolean) => void;
   storageKey?: string;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -113,15 +120,43 @@ export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPic
       node: { id: 'agentshub', kind: 'hub', label: 'Agenti', tone: C_AGENT, x: 0, y: 0 },
       items: general,
     });
-    const COLW = 200, HEAD_Y = HUB_GAP, AGENT_ROW = 175;
+    // Risorse: NON impilate sotto l'agente, ma distribuite a lato (gutter a
+    // destra della colonna), ventaglio verticale centrato sull'agente. Larghezza
+    // colonna VARIABILE: milestone restano compatte (200), solo le colonne con
+    // risorse ricevono il gutter extra → il resto non si sparpaglia.
+    // Milestone più LONTANE dal goal (uniforme) e più RAGGRUPPATE tra loro.
+    const HEAD_Y = HUB_GAP + 90, AGENT_ROW = 200;
+    const RES_DX = 215;   // offset orizzontale agente → risorse
+    const RES_ROW = 96;   // passo verticale tra risorse
+    const BASE_COLW = 184;
+    // Lato del ventaglio risorse: colonne nella metà DESTRA ventagliano a
+    // SINISTRA (verso il centro, lontano dal pannello stats); le altre a destra.
+    // Le risorse occupano lo spazio verticalmente vuoto sotto la riga milestone,
+    // quindi NON serve allargare le colonne: restano compatte.
+    const sideOf = (ci: number) => (ci >= columns.length / 2 ? -1 : 1);
+    const colCenter = (columns.length - 1) / 2 * BASE_COLW;
     columns.forEach((col, ci) => {
-      const cx = (ci - (columns.length - 1) / 2) * COLW;
+      const cx = ci * BASE_COLW - colCenter;
+      const side = sideOf(ci);
       col.node.x = cx; col.node.y = HEAD_Y;
       nd.push(col.node);
       ed.push({ from: 'goal', to: col.key });
-      col.items.forEach((a, j) => {
-        nd.push({ id: `agent:${a.id}`, kind: 'agent', label: a.title, sub: a.status, tone: C_AGENT, x: cx, y: HEAD_Y + CHILD_GAP + j * AGENT_ROW, pickId: String(a.id), status: a.status });
-        ed.push({ from: col.key, to: `agent:${a.id}` });
+      let y = HEAD_Y + CHILD_GAP;
+      col.items.forEach((a) => {
+        const aid = `agent:${a.id}`;
+        nd.push({ id: aid, kind: 'agent', label: a.title, sub: a.status, tone: C_AGENT, x: cx, y, pickId: String(a.id), status: a.status });
+        ed.push({ from: col.key, to: aid });
+        const ress = a.resources ?? [];
+        // ventaglio verticale centrato sull'agente, sul lato scelto
+        ress.forEach((r, ri) => {
+          const rid = `res:${a.id}:${ri}`;
+          const ry = y + (ri - (ress.length - 1) / 2) * RES_ROW;
+          nd.push({ id: rid, kind: 'resource', label: r.path.split('/').pop() || r.path, sub: r.written ? 'scritto' : 'letto', tone: C_RES, x: cx + side * RES_DX, y: ry, resPath: r.path });
+          ed.push({ from: aid, to: rid });
+        });
+        // avanza così che né l'agente né il suo ventaglio si sovrappongano al prossimo
+        const resSpan = ress.length > 0 ? (ress.length - 1) * RES_ROW + 120 : 0;
+        y += Math.max(AGENT_ROW, resSpan);
       });
     });
 
@@ -157,7 +192,7 @@ export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPic
     const s = sizes.get(id);
     if (s) return s.h / 2;
     const k = nodeMap.get(id)?.kind;
-    return k === 'goal' || k === 'hub' ? 24 : k === 'milestone' ? 40 : 78; // fallback
+    return k === 'goal' || k === 'hub' ? 24 : k === 'resource' ? 34 : k === 'milestone' ? 40 : 78; // fallback
   };
   // Posizione effettiva del nodo (override drag se presente, altrimenti layout).
   const posFinal = (id: string): { x: number; y: number } => {
@@ -166,27 +201,37 @@ export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPic
     const n = nodeMap.get(id)!; return { x: n.x, y: n.y };
   };
   // Connettore smooth (bezier verticale) da bordo a bordo.
+  // Connettore a gomito (ortogonale) con angoli leggermente arrotondati →
+  // tracciato netto/angolare invece della curva morbida.
   const edgePath = (from: string, to: string): string => {
     const P = posFinal(from), C = posFinal(to);
     const dir = C.y >= P.y ? 1 : -1;
     const sx = P.x, sy = P.y + dir * halfH(from);
     const ex = C.x, ey = C.y - dir * halfH(to);
     const my = (sy + ey) / 2;
-    return `M ${sx} ${sy} C ${sx} ${my}, ${ex} ${my}, ${ex} ${ey}`;
+    if (Math.abs(ex - sx) < 1) return `M ${sx} ${sy} L ${ex} ${ey}`; // dritto
+    const hsign = ex > sx ? 1 : -1;
+    const r = Math.min(14, Math.abs(ex - sx) / 2, Math.abs(my - sy), Math.abs(ey - my));
+    return [
+      `M ${sx} ${sy}`,
+      `L ${sx} ${my - dir * r}`,
+      `Q ${sx} ${my} ${sx + hsign * r} ${my}`,
+      `L ${ex - hsign * r} ${my}`,
+      `Q ${ex} ${my} ${ex} ${my + dir * r}`,
+      `L ${ex} ${ey}`,
+    ].join(' ');
   };
 
   const eff = scale * view.zoom; // scala effettiva
   // Drag (pan sfondo + drag nodo) e soppressione click post-drag.
-  const drag = useRef<{ kind: 'pan' | 'node'; id?: string; lx: number; ly: number; moved: boolean } | null>(null);
+  const drag = useRef<{ kind: 'pan' | 'node'; id?: string; lx: number; ly: number; moved: boolean; captured: boolean; pid: number } | null>(null);
   const suppressClick = useRef(false);
   const onPointerDownBg = (e: React.PointerEvent) => {
-    drag.current = { kind: 'pan', lx: e.clientX, ly: e.clientY, moved: false };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    drag.current = { kind: 'pan', lx: e.clientX, ly: e.clientY, moved: false, captured: false, pid: e.pointerId };
   };
   const onPointerDownNode = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
-    drag.current = { kind: 'node', id, lx: e.clientX, ly: e.clientY, moved: false };
-    try { wrapRef.current?.setPointerCapture(e.pointerId); } catch {}
+    drag.current = { kind: 'node', id, lx: e.clientX, ly: e.clientY, moved: false, captured: false, pid: e.pointerId };
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const d = drag.current; if (!d) return;
@@ -194,6 +239,9 @@ export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPic
     if (!d.moved && Math.hypot(dx, dy) > 3) d.moved = true;
     d.lx = e.clientX; d.ly = e.clientY;
     if (!d.moved) return;
+    // Cattura il pointer SOLO quando inizia il drag — così un click puro non
+    // viene mangiato dal pointer capture (altrimenti il drawer non si apriva).
+    if (!d.captured) { try { wrapRef.current?.setPointerCapture(d.pid); } catch {} d.captured = true; }
     if (d.kind === 'pan') setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
     else if (d.id) {
       const cur = posFinal(d.id);
@@ -206,7 +254,14 @@ export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPic
     drag.current = null;
   };
   const zoomBy = (f: number) => setView((v) => ({ ...v, zoom: Math.max(0.3, Math.min(3, v.zoom * f)) }));
-  const onWheel = (e: React.WheelEvent) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.12 : 0.89); };
+  // Trackpad mac emette molti eventi wheel ravvicinati: fattore proporzionale a
+  // deltaY con coefficiente piccolo → zoom dolce. Pinch (ctrlKey) ancora più lento.
+  const onWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const k = e.ctrlKey ? 0.012 : 0.0022;
+    const f = Math.exp(-e.deltaY * k);
+    setView((v) => ({ ...v, zoom: Math.max(0.3, Math.min(3, v.zoom * f)) }));
+  };
   const reset = () => { setOverrides(new Map()); setView({ tx: 0, ty: 0, zoom: 1 }); if (STORE) try { localStorage.removeItem(STORE); } catch {} };
 
   return (
@@ -242,6 +297,35 @@ export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPic
         const setRef = (el: HTMLDivElement | null) => { nodeEls.current.set(n.id, el); };
         const HubIcon = n.id === 'kpihub' ? BarChart3 : Bot;
 
+        // ── RESOURCE: documento prodotto/letto da un agente. Click → anteprima.
+        if (n.kind === 'resource') {
+          const written = n.sub === 'scritto';
+          return (
+            <div
+              key={n.id}
+              ref={setRef}
+              title={n.resPath}
+              onMouseEnter={() => setHover(n.id)}
+              onMouseLeave={() => setHover(null)}
+              onPointerDown={(e) => onPointerDownNode(e, n.id)}
+              onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } if (onPick && n.resPath) onPick({ kind: 'resource', id: n.resPath }); }}
+              className={`absolute -translate-x-1/2 -translate-y-1/2 w-[190px] rounded-xl border flex items-start gap-2 px-2.5 py-2.5 transition cursor-grab active:cursor-grabbing ${dim ? 'opacity-30' : 'opacity-100'}`}
+              style={{
+                left: x, top: y,
+                borderColor: `${n.tone}80`,
+                background: `linear-gradient(155deg, ${n.tone}1f, ${n.tone}0a 60%, ${n.tone}05 100%), #0c0e15`,
+                boxShadow: hover === n.id ? `0 0 0 1px ${n.tone}, 0 10px 30px -10px ${n.tone}88` : undefined,
+              }}
+            >
+              <span className="h-7 w-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${n.tone}22`, border: `1px solid ${n.tone}55`, color: n.tone }}>{written ? <FilePen size={15} /> : <FileText size={15} />}</span>
+              <div className="min-w-0 text-left">
+                <div className="text-[11px] font-semibold leading-snug text-foreground break-all">{n.label}</div>
+                <div className="text-[8px] uppercase tracking-wider mt-0.5" style={{ color: n.tone }}>{n.sub}</div>
+              </div>
+            </div>
+          );
+        }
+
         // ── KPI / AGENT / MILESTONE: card verticali coerenti (icona in box sopra,
         // titolo COMPLETO che va a capo, sotto valore/stato). Gradiente per tono.
         if (n.kind === 'kpi' || n.kind === 'agent' || n.kind === 'milestone') {
@@ -266,10 +350,23 @@ export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPic
               style={{
                 left: x, top: y,
                 borderColor: `${n.tone}99`,
-                background: `linear-gradient(155deg, ${n.tone}2e, rgba(13,15,22,0.96) 70%)`,
+                // gradiente colore SOPRA una base SOLIDA chiara (surface) → box
+                // ben visibile e opaca, niente righe che traspaiono.
+                background: `linear-gradient(155deg, ${n.tone}24, ${n.tone}10 55%, ${n.tone}05 100%), #0c0e15`,
                 boxShadow: hover === n.id ? `0 0 0 1px ${n.tone}, 0 10px 30px -10px ${n.tone}88` : undefined,
               }}
             >
+              {n.kind === 'milestone' && onToggleMilestone && (
+                <button
+                  title={n.status === 'done' ? 'Segna da fare' : 'Segna come fatta'}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); onToggleMilestone(n.id.slice(3), n.status !== 'done'); }}
+                  className="absolute top-2.5 right-2.5 h-6 w-6 rounded-md flex items-center justify-center border transition hover:scale-110 cursor-pointer"
+                  style={{ borderColor: `${n.tone}99`, background: n.status === 'done' ? n.tone : `${n.tone}1a`, color: n.status === 'done' ? '#0c0e15' : n.tone }}
+                >
+                  {n.status === 'done' ? <Check size={15} strokeWidth={3} /> : null}
+                </button>
+              )}
               <span className="h-11 w-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${n.tone}22`, border: `1px solid ${n.tone}55`, color: n.tone }}>{Icon}</span>
               <div className="text-[12px] font-semibold leading-snug text-foreground break-words">{n.label}</div>
               {subText && <div className={`leading-tight ${n.kind === 'milestone' ? 'text-[9px] uppercase tracking-wider' : 'text-[12px] font-bold tabular-nums'}`} style={{ color: n.tone }}>{subText}</div>}
@@ -290,7 +387,7 @@ export default function GoalGraph2D({ goalTitle, kpis, agents, milestones, onPic
               left: x, top: y,
               borderColor: n.tone,
               borderWidth: 2,
-              background: `linear-gradient(155deg, ${n.tone}2a, rgba(13,15,22,0.96) 75%)`,
+              background: `linear-gradient(155deg, ${n.tone}44, ${n.tone}14 90%), #1a1e2b`,
             }}
           >
             <span className="shrink-0" style={{ color: n.tone }}>{n.kind === 'goal' ? <Target size={18} /> : <HubIcon size={16} />}</span>
