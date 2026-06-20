@@ -54,6 +54,8 @@ async function main() {
   await startScheduler();
   const { startClientMsgScheduler } = await import('./arm/client_messages.js');
   startClientMsgScheduler();
+  const { startDigestScheduler } = await import('./supervisor/task_digest.js');
+  startDigestScheduler();
   const flows = await import('./flows/index.js');
   flows.attachFlowDispatchers();
   flows.startFlowScheduler();

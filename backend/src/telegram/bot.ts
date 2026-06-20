@@ -259,6 +259,20 @@ async function startBotForUser(userId: number) {
     }
   });
 
+  // Task Supervisor: digest on-demand (stesso contenuto del digest 9:00).
+  bot.command('digest', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { sendDigest } = await import('../supervisor/task_digest.js');
+      const r = await sendDigest(userId);
+      if (!r.ok) await ctx.reply(`Errore: ${r.error}`);
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
+  });
+
   // Inline keyboard callback — approve/deny proposals + email drafts
   bot.on('callback_query', async (ctx) => {
     const cq: any = ctx.callbackQuery;

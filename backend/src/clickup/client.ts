@@ -43,6 +43,7 @@ export type ClickUpTask = {
   list: { id: string; name: string };
   text_content?: string;
   url: string;
+  dueDate?: number | null;
 };
 
 // Fetch tasks assigned to Marco currently in a given status. ClickUp's filtered
@@ -64,6 +65,34 @@ export async function getTasksByStatus(status: string, page = 0): Promise<ClickU
     text_content: t.text_content ?? t.description ?? '',
     url: t.url,
   }));
+}
+
+// All open tasks assigned to Marco (any status except closed). Used by the
+// task-supervisor digest. include_closed=false drops `completato`; `cancelled`
+// is filtered in the digest. subtasks=true so [PDP] subtasks are included.
+export async function getOpenTasks(): Promise<ClickUpTask[]> {
+  const all: ClickUpTask[] = [];
+  // ClickUp pagina a 100 per pagina: cicla finché una pagina è piena.
+  for (let page = 0; ; page++) {
+    const qs = new URLSearchParams();
+    qs.set('page', String(page));
+    qs.append('assignees[]', ASSIGNEE_ID);
+    qs.set('subtasks', 'true');
+    qs.set('include_closed', 'false');
+    const data = await cu<{ tasks: any[] }>(`/team/${TEAM_ID}/task?${qs.toString()}`);
+    const batch = data.tasks ?? [];
+    for (const t of batch) all.push({
+      id: t.id,
+      name: t.name,
+      status: t.status?.status ?? '',
+      list: { id: t.list?.id ?? '', name: t.list?.name ?? '' },
+      text_content: t.text_content ?? t.description ?? '',
+      url: t.url,
+      dueDate: t.due_date ? Number(t.due_date) : null,
+    });
+    if (batch.length < 100) break;
+  }
+  return all;
 }
 
 export type ClickUpComment = { id: string; text: string; date: string };
