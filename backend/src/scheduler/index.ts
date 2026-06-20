@@ -8,7 +8,7 @@ import { sendTelegram } from '../telegram/bot.js';
 import { getVaultRoot } from '../brain/vault.js';
 import { runReflectionForUser, runReflectionAllUsers } from '../agent/reflection.js';
 import { refreshTasks as refreshScheduledTasks } from './tasks.js';
-import { startInternalAgentsScheduler } from '../agents/internal/registry.js';
+import { startInternalAgentsScheduler, catchUpInternalAgents } from '../agents/internal/registry.js';
 // seedDefaultTasksAllUsers removed from boot — re-seeded deleted/disabled user tasks.
 // Defaults now seeded ONLY at register time (auth/routes.ts).
 
@@ -55,6 +55,31 @@ async function catchUpOnBoot() {
       }
     }
   } catch (e) { console.error('[catchup] connectors check failed', e); }
+}
+
+// ── Wake/drift watchdog ─────────────────────────────────────────────────────
+// I timer cron (node-cron, setInterval) si FERMANO quando il Mac dorme o il
+// processo va in App Nap. Al risveglio node-cron NON replica i tick persi →
+// email non sincronizzate per ore, perk del minuto-anchor saltati ("a spot").
+// Questo battito ogni 30s misura il tempo reale trascorso: se il gap è molto
+// maggiore dell'atteso, il processo è stato sospeso → ri-eseguiamo i catch-up
+// (perk daily mancati + tick connettori mancati, IMAP incluso) così tutto
+// riparte subito invece di aspettare un riavvio.
+const HEARTBEAT_MS = 30_000;
+const SUSPEND_GAP_MS = 90_000; // >3× l'atteso ⇒ sospensione/sleep
+function startWakeWatchdog() {
+  let lastBeat = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const gap = now - lastBeat;
+    lastBeat = now;
+    if (gap > SUSPEND_GAP_MS) {
+      console.warn(`[wake-watchdog] gap ${Math.round(gap / 1000)}s rilevato (sleep/App-Nap) → ri-eseguo catch-up`);
+      catchUpOnBoot().catch((e) => console.error('[wake-watchdog] catchUpOnBoot', e));
+      catchUpInternalAgents().catch((e) => console.error('[wake-watchdog] catchUpInternalAgents', e));
+    }
+  }, HEARTBEAT_MS).unref?.();
+  console.log('[scheduler] wake-watchdog armed (30s heartbeat, drift>90s → catch-up)');
 }
 
 const connectorTasks = new Map<string, cron.ScheduledTask>(); // `${userId}:${name}` → task
@@ -275,6 +300,7 @@ export async function startScheduler() {
   await refreshScheduledTasks();
   console.log('[scheduler] user-defined tasks loaded');
   startInternalAgentsScheduler();
+  startWakeWatchdog();
 
   await catchUpOnBoot();
 

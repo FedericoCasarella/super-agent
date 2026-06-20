@@ -326,7 +326,13 @@ const connector: Connector = {
             range = `${from}:*`;
             maxUid = from - 1;
           }
-          for await (const msg of client.fetch(range, { uid: true, source: true })) {
+          // Terzo param { uid: true } OBBLIGATORIO: senza, imapflow tratta il
+          // range come NUMERI DI SEQUENZA, non UID. `range` è costruito su UID
+          // (lastUid+1:*) → su server strict (Dovecot/privateemail) un seq-set
+          // oltre il numero messaggi dà BAD "Invalid messageset"; su Gmail
+          // matcha nulla in silenzio (polling incrementale rotto). Stesso fix
+          // già presente in syncAccount.
+          for await (const msg of client.fetch(range, { uid: true, source: true }, { uid: true })) {
             if (msg.uid <= maxUid) continue;
             try {
               const parsed = await simpleParser(msg.source as Buffer);

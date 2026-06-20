@@ -169,7 +169,7 @@ export async function updateAgentSchedule(userId: number, name: string, p: { hou
 
 // Catch-up: if scheduled time today passed and last_run_at < that time → fire now.
 // Survives app downtime — daily agents will fire on next boot.
-async function catchUpInternalAgents() {
+export async function catchUpInternalAgents() {
   const users = await listActiveUsers();
   for (const u of users) {
     await ensureUserAgentRows(u.id);
