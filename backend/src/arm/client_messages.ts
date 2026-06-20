@@ -117,17 +117,18 @@ type ClientMap = {
   clickup_list_id: string;
   clickup_list_name: string;
   channel: 'whatsapp' | 'clickup' | null;
+  clickup_channel_id?: string | null;
   wa_group_name: string | null;
   wa_group_jid: string | null;
   verified: boolean;
 };
 
-// Is this client ready for real sending? WhatsApp needs a jid; ClickUp just
-// needs the channel set (target is the task itself).
+// Is this client ready for real sending? WhatsApp needs a group jid; ClickUp
+// needs the [EXT] chat channel id.
 function isReady(c: ClientMap): boolean {
   if (!c.verified) return false;
   if (c.channel === 'whatsapp') return !!c.wa_group_jid;
-  if (c.channel === 'clickup') return true;
+  if (c.channel === 'clickup') return !!c.clickup_channel_id;
   return false;
 }
 
@@ -254,15 +255,14 @@ export async function approveClientMsg(userId: number, id: number, editedBody?: 
       return { ok: false, error: res.error };
     }
   } else if (channel === 'clickup') {
-    // Post the update as a comment on the first batched task (notifies the
-    // client who's on the ClickUp task). TODO: ClickUp Chat channel + @mention.
-    const { createComment } = await import('../clickup/client.js');
-    const target = taskIds[0];
-    if (!target) return { ok: false, error: 'nessuna task per il commento ClickUp' };
-    try { await createComment(target, finalBody); }
+    // Post to the client's [EXT] ClickUp Chat channel.
+    const channelId = client?.clickup_channel_id;
+    if (!channelId) return { ok: false, error: 'nessun canale Chat ClickUp mappato' };
+    const { createChatMessage } = await import('../clickup/client.js');
+    try { await createChatMessage(channelId, finalBody); }
     catch (e: any) {
-      await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [e?.message ?? 'comment failed', id]);
-      return { ok: false, error: e?.message ?? 'comment failed' };
+      await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [e?.message ?? 'chat failed', id]);
+      return { ok: false, error: e?.message ?? 'chat failed' };
     }
   } else {
     return { ok: false, error: 'canale non configurato' };

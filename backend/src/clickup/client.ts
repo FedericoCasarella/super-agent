@@ -96,11 +96,24 @@ export async function setTaskStatus(taskId: string, status: string): Promise<voi
   await cu(`/task/${taskId}`, { method: 'PUT', body: JSON.stringify({ status }) });
 }
 
-// Post a comment on a task — used for clients whose update channel is ClickUp
-// (not WhatsApp). notify_all so the client (watcher/guest on the task) is pinged.
+// Post a comment on a task (kept as a fallback option).
 export async function createComment(taskId: string, text: string): Promise<void> {
   await cu(`/task/${taskId}/comment`, {
     method: 'POST',
     body: JSON.stringify({ comment_text: text, notify_all: true }),
   });
+}
+
+// Post a message to a ClickUp Chat channel (v3 API) — used for clients whose
+// update channel is the [EXT] client chat (e.g. Boutique Tones, Emanuel Folco).
+export async function createChatMessage(channelId: string, text: string): Promise<void> {
+  const res = await fetch(`https://api.clickup.com/api/v3/workspaces/${TEAM_ID}/chat/channels/${channelId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: token(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'message', content: text, content_format: 'text/md' }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`ClickUp Chat POST ${channelId} → ${res.status} ${body.slice(0, 200)}`);
+  }
 }
