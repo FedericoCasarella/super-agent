@@ -9,9 +9,9 @@
     { "clickup_list_id": "901515814487", "clickup_list_name": "Mr Filler",               "channel": "whatsapp", "wa_group_name": "[INT] Performa | Mr. Filler - Ecommerce",        "wa_group_jid": "120363409226322791@g.us", "verified": true, "_note": "Marco scrive nel gruppo [INT], non in quello senza [INT]" },
     { "clickup_list_id": "901521296844", "clickup_list_name": "Boutique Tones",          "channel": "clickup",  "clickup_channel_id": "8cnmpfp-6615", "wa_group_name": null, "wa_group_jid": null, "verified": true, "_note": "canale Chat [EXT] Boutique Tones" },
     { "clickup_list_id": "901523466724", "clickup_list_name": "Emanuel Folco",           "channel": "clickup",  "clickup_channel_id": "8cnmpfp-7135", "wa_group_name": null, "wa_group_jid": null, "verified": true, "_note": "canale Chat [EXT] Emanuel Folco" },
-    { "clickup_list_id": "901518123351", "clickup_list_name": "Be Clinic",              "channel": null, "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "canale da definire" },
-    { "clickup_list_id": "901523768132", "clickup_list_name": "Diva Shopping",          "channel": null, "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "store da costruire" },
-    { "clickup_list_id": "901522297410", "clickup_list_name": "GEARXPro",               "channel": null, "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "canale da definire" },
-    { "clickup_list_id": "901523746279", "clickup_list_name": "Wikirose",               "channel": null, "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "canale da definire" }
+    { "clickup_list_id": "901523746279", "clickup_list_name": "Wikirose",               "channel": "clickup", "clickup_channel_id": "8cnmpfp-7335", "wa_group_name": null, "wa_group_jid": null, "verified": true, "_note": "canale Chat [EXT] Wikirose" },
+    { "clickup_list_id": "901523768132", "clickup_list_name": "Diva Shopping",          "channel": "clickup", "clickup_channel_id": "8cnmpfp-7375", "wa_group_name": null, "wa_group_jid": null, "verified": true, "_note": "canale Chat [EXT] Diva Shopping" },
+    { "clickup_list_id": "901518123351", "clickup_list_name": "Be Clinic",              "channel": null, "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "NON gestito da Marco in Performa — il braccio non lo tocca" },
+    { "clickup_list_id": "901522297410", "clickup_list_name": "GEARXPro",               "channel": null, "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "RELAY via Luca: il messaggio va a Luca (id ClickUp 38410184), non al cliente — tono interno + @Luca su commento task. Variante non ancora implementata nel braccio." }
   ]
 }
