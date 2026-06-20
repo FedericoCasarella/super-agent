@@ -8,13 +8,106 @@
 // template here — swap in an LLM micro-turn (runClaude) for nicer tone later.
 
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import url from 'node:url';
 import { query } from '../db/index.js';
 import { bus } from '../bus.js';
+import { runClaude } from '../claude/runner.js';
+import { getVaultRoot } from '../brain/vault.js';
 import { isClickUpConfigured, getTasksByStatus, findPreviewLink, setTaskStatus, type ClickUpTask } from '../clickup/client.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+
+const PREVIEW_PLACEHOLDER = '{{incolla qui il link preview}}';
+
+// Few-shot: messaggi VERI di Marco (anonimizzati) per trasmettere il registro
+// reale — corto, sbrigativo, energico — che la sola checklist non passa.
+const TONE_EXAMPLES = `Esempio A:
+Buondi @cliente! Abbiamo corretto i bug che ci hai segnalato
+
+Link anteprima:
+https://...shopifypreview.com/pages/sillage
+
+Fatemi sapere se va bene
+
+Esempio B:
+Abbiamo corretto su questo link:
+Icona ricerca su mobile
+Prezzo in rosso nelle pagine gender
+https://...shopifypreview.com
+
+Esempio C:
+Buondi @cliente! qui l'anteprima del banner informativo, visibile su tutti i prodotti tranne quelli col checkbox. Fatemi sapere se va bene così lo mando live 🔥
+https://...shopifypreview.com`;
+
+// Read the live checklist from Marco's vault so he can tune the tone there
+// without touching code. Falls back to null if the note is missing.
+async function loadChecklist(userId: number): Promise<string | null> {
+  try {
+    const root = await getVaultRoot(userId);
+    if (!root) return null;
+    return await fsp.readFile(path.join(root, 'operativo/checklist-messaggio-cliente.md'), 'utf8');
+  } catch { return null; }
+}
+
+// Generate the message in Marco's tone via a focused Claude turn. Self-contained
+// prompt (no tools, no vault cwd) — just the checklist + task data in, message
+// text out. Throws on empty/failed output so the caller can fall back to the
+// deterministic template.
+// Deterministic check: does the task text actually describe the change, or is
+// it empty / just an external link (e.g. a Google Doc with the real details)?
+// Strips boilerplate + URLs; if little prose remains, there's nothing concrete
+// to report and the model must NOT invent.
+function taskForPrompt(t: ClickUpTask, idx: number): string {
+  const raw = (t.text_content ?? '').trim();
+  const prose = raw
+    .replace(/descrizione task/gi, '')
+    .replace(/documento con[^\n]*/gi, '')
+    .replace(/google doc/gi, '')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (prose.length < 25) {
+    return `Task ${idx + 1}: ${t.name}\n[SENZA descrizione concreta — solo titolo o link esterno. NON inventare la modifica: scrivi {{descrivi le modifiche}}]`;
+  }
+  return `Task ${idx + 1}: ${t.name}\n${raw.slice(0, 800)}`;
+}
+
+async function draftBodyLLM(userId: number, client: ClientMap, tasks: ClickUpTask[], previewLink: string | null): Promise<string> {
+  const checklist = await loadChecklist(userId);
+  const taskBlock = tasks.map((t, i) => taskForPrompt(t, i)).join('\n\n');
+  const prompt = [
+    'Sei l\'assistente di Marco Orsi (Shopify dev). Scrivi UN messaggio WhatsApp di update per il cliente, riformulando le richieste come LAVORO COMPLETATO.',
+    '',
+    checklist ? `Segui ALLA LETTERA questa checklist:\n\n${checklist}` : 'Regole: niente trattini, verbi al participio, link preview con avviso admin Shopify, una emoji leggera in chiusura, saluto solo a inizio thread.',
+    '',
+    'IMITA ESATTAMENTE il registro di questi messaggi veri di Marco: corto, diretto, sbrigativo, energico. VIETATO suonare formali o impostati — niente "Ti informo che", "abbiamo provveduto a", "restiamo a disposizione", niente frasi lunghe o educate. Scrivi come scrive lui.',
+    '',
+    TONE_EXAMPLES,
+    '',
+    `Cliente: ${client.clickup_list_name}. Numero di modifiche: ${tasks.length}.`,
+    `Link preview da usare: ${previewLink ?? PREVIEW_PLACEHOLDER}`,
+    '',
+    'Dati delle task (la "Richiesta" descrive cosa fare → riformulala come fatto, NON inventare nulla che non sia qui):',
+    taskBlock,
+    '',
+    'REGOLA ANTI-INVENZIONE (critica): se una task ha descrizione vuota o troppo generica per sapere COSA CONCRETAMENTE è stato fatto (es. "ottimizzazioni CRO settimanali"), NON inventare la modifica. Al suo posto scrivi il segnaposto {{descrivi le modifiche}} e basta. Meglio un segnaposto che Marco compila, che un messaggio sicuro ma sbagliato.',
+    '',
+    'Output: SOLO il testo del messaggio, pronto da inviare. Nessun preambolo, nessun markdown, nessuna spiegazione.',
+    'Il messaggio FINISCE con la riga di chiusura. NON aggiungere dopo: separatori (---), note per Marco, commenti o spiegazioni. Quello che scrivi va dritto al cliente.',
+  ].join('\n');
+
+  const res = await runClaude(userId, prompt, { kind: 'client-msg-draft', timeoutMs: 120_000 });
+  let text = (res.text ?? '').trim();
+  if (!res.ok || !text || text === 'SKIP') throw new Error(`draft LLM vuoto (ok=${res.ok})`);
+  // Strip any model meta-commentary appended after the message (a "---" rule or
+  // a "Nota:" block addressed to Marco) — it must never reach the client.
+  text = text.split(/\n\s*---\s*\n/)[0];
+  text = text.replace(/\n+\**\s*(nota|note|n\.b\.?)\b[\s\S]*$/i, '');
+  // Safety net for the checklist form rules even if the model slips.
+  return text.replace(/^[\-—]\s*/gm, '').trim();
+}
 
 const TRIGGER_STATUS = 'mandare mex cliente';
 const DONE_STATUS = 'waiting feedback client';
@@ -55,7 +148,7 @@ function buildDraftBody(client: ClientMap, tasks: ClickUpTask[], previewLink: st
   for (const c of changes) lines.push(c);
   lines.push('');
   lines.push('Link preview:');
-  lines.push(previewLink ?? '{{incolla qui il link preview}}');
+  lines.push(previewLink ?? PREVIEW_PLACEHOLDER);
   lines.push('(per vederla, accedi prima al tuo admin Shopify e poi apri il link)');
   lines.push('');
   lines.push('Fatemi sapere se va bene così lo mando live 🔥');
@@ -99,7 +192,9 @@ export async function proposeClientMessages(userId: number): Promise<{ created: 
     }
 
     const verified = client.verified && !!client.wa_group_jid;
-    const body = buildDraftBody(client, listTasks, previewLink);
+    // Tone via Claude; deterministic template as fallback if the turn fails.
+    const body = await draftBodyLLM(userId, client, listTasks, previewLink)
+      .catch((e) => { console.error('[arm] draftBodyLLM fallback', e?.message ?? e); return buildDraftBody(client, listTasks, previewLink); });
     const status = verified ? 'pending' : 'held';
 
     const rows = await query<{ id: number }>(
