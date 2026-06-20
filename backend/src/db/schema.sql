@@ -358,7 +358,7 @@ CREATE TABLE IF NOT EXISTS client_msg_drafts (
   body TEXT NOT NULL,
   body_edited TEXT,                  -- Marco's edit at approval, if any
   preview_link TEXT,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','sent','held','error')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','sent','held','error','queued')),
   telegram_message_id BIGINT,
   telegram_chat_id BIGINT,
   decided_at TIMESTAMPTZ,
@@ -368,6 +368,10 @@ CREATE TABLE IF NOT EXISTS client_msg_drafts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS client_msg_drafts_user_status_idx ON client_msg_drafts(user_id, status, created_at DESC);
+-- Allow 'queued' (deferred send outside the Mon-Fri 9:00-18:30 window) on
+-- tables created before this status existed.
+ALTER TABLE client_msg_drafts DROP CONSTRAINT IF EXISTS client_msg_drafts_status_check;
+ALTER TABLE client_msg_drafts ADD CONSTRAINT client_msg_drafts_status_check CHECK (status IN ('pending','approved','denied','sent','held','error','queued'));
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='email_drafts' AND column_name='account_label') THEN

@@ -52,6 +52,8 @@ async function main() {
 
   startOrchestrator();
   await startScheduler();
+  const { startClientMsgScheduler } = await import('./arm/client_messages.js');
+  startClientMsgScheduler();
   const flows = await import('./flows/index.js');
   flows.attachFlowDispatchers();
   flows.startFlowScheduler();

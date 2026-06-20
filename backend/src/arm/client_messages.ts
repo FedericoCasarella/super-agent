@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import url from 'node:url';
+import cron from 'node-cron';
 import { query } from '../db/index.js';
 import { bus } from '../bus.js';
 import { runClaude } from '../claude/runner.js';
@@ -111,6 +112,38 @@ async function draftBodyLLM(userId: number, client: ClientMap, tasks: ClickUpTas
 
 const TRIGGER_STATUS = 'mandare mex cliente';
 const DONE_STATUS = 'waiting feedback client';
+
+// ── Finestra di invio: Lun-Ven 9:00-18:30 Europe/Rome ───────────────────────
+const TZ = 'Europe/Rome';
+const OPEN_MIN = 9 * 60;        // 09:00
+const CLOSE_MIN = 18 * 60 + 30; // 18:30
+const DAY_IT = ['lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato', 'domenica'];
+
+// Rome-local weekday (0=Mon..6=Sun) and minutes-of-day for a given instant.
+function romeNow(d = new Date()): { dow: number; min: number } {
+  const p = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d);
+  const wd = p.find((x) => x.type === 'weekday')?.value ?? 'Mon';
+  const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(wd);
+  const hh = Number(p.find((x) => x.type === 'hour')?.value ?? 0);
+  const mm = Number(p.find((x) => x.type === 'minute')?.value ?? 0);
+  return { dow, min: hh * 60 + mm };
+}
+
+function inSendWindow(d = new Date()): boolean {
+  const { dow, min } = romeNow(d);
+  return dow <= 4 && min >= OPEN_MIN && min <= CLOSE_MIN;
+}
+
+// Human label for when a queued message will go out (the flusher opens at 9:00).
+function nextOpenLabel(d = new Date()): string {
+  const { dow, min } = romeNow(d);
+  if (dow <= 4 && min < OPEN_MIN) return 'oggi alle 9:00';
+  for (let i = 1; i <= 7; i++) {
+    const nd = (dow + i) % 7;
+    if (nd <= 4) return `${DAY_IT[nd]} alle 9:00`;
+  }
+  return 'lunedì alle 9:00';
+}
 
 // ── Client → WhatsApp group mapping ────────────────────────────────────────
 type ClientMap = {
@@ -227,41 +260,27 @@ export async function proposeClientMessages(userId: number): Promise<{ created: 
   return { created, held, skipped };
 }
 
-// ── Approve: send to WhatsApp, move ClickUp tasks ───────────────────────────
-export async function approveClientMsg(userId: number, id: number, editedBody?: string): Promise<{ ok: boolean; error?: string }> {
-  const rows = await query<any>(`SELECT * FROM client_msg_drafts WHERE id=$1 AND user_id=$2`, [id, userId]);
-  const d = rows[0];
-  if (!d) return { ok: false, error: 'draft non trovata' };
-  if (d.status === 'sent') return { ok: true };
-  if (d.status !== 'pending') return { ok: false, error: `stato ${d.status}` };
-
+// ── Send (shared by approve-in-window and the queue flusher) ────────────────
+async function dispatchSend(userId: number, d: any, finalBody: string): Promise<{ ok: boolean; error?: string }> {
   const client = resolveClient(d.clickup_list_id);
   const channel = client?.channel ?? (d.wa_group_jid ? 'whatsapp' : null);
-
-  const finalBody = (editedBody ?? d.body) as string;
-  if (editedBody && editedBody !== d.body) {
-    await query(`UPDATE client_msg_drafts SET body_edited=$1 WHERE id=$2`, [editedBody, id]); // graduation signal
-  }
-
   const taskIds: string[] = Array.isArray(d.task_ids) ? d.task_ids : [];
 
-  // Send on the client's channel.
   if (channel === 'whatsapp') {
     if (!d.wa_group_jid) return { ok: false, error: 'nessun gruppo WhatsApp mappato' };
     const { sendWaMessage } = await import('../connectors/builtin/whatsapp/index.js');
     const res = await sendWaMessage(userId, d.wa_group_jid, finalBody, 'agent', 'ai');
     if (!res.ok) {
-      await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [res.error ?? 'send failed', id]);
+      await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [res.error ?? 'send failed', d.id]);
       return { ok: false, error: res.error };
     }
   } else if (channel === 'clickup') {
-    // Post to the client's [EXT] ClickUp Chat channel.
     const channelId = client?.clickup_channel_id;
     if (!channelId) return { ok: false, error: 'nessun canale Chat ClickUp mappato' };
     const { createChatMessage } = await import('../clickup/client.js');
     try { await createChatMessage(channelId, finalBody); }
     catch (e: any) {
-      await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [e?.message ?? 'chat failed', id]);
+      await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [e?.message ?? 'chat failed', d.id]);
       return { ok: false, error: e?.message ?? 'chat failed' };
     }
   } else {
@@ -273,10 +292,66 @@ export async function approveClientMsg(userId: number, id: number, editedBody?: 
     try { await setTaskStatus(tid, DONE_STATUS); }
     catch (e: any) { console.error(`[arm] setTaskStatus ${tid} failed`, e?.message ?? e); }
   }
-
-  await query(`UPDATE client_msg_drafts SET status='sent', sent_at=now(), decided_at=now() WHERE id=$1`, [id]);
-  bus.emit('client_msg:sent', { userId, id });
+  await query(`UPDATE client_msg_drafts SET status='sent', sent_at=now(), decided_at=COALESCE(decided_at, now()) WHERE id=$1`, [d.id]);
+  bus.emit('client_msg:sent', { userId, id: d.id });
   return { ok: true };
+}
+
+// ── Approve: invia subito se in finestra, altrimenti metti in coda ──────────
+export async function approveClientMsg(userId: number, id: number, editedBody?: string): Promise<{ ok: boolean; error?: string; queued?: boolean; when?: string }> {
+  const rows = await query<any>(`SELECT * FROM client_msg_drafts WHERE id=$1 AND user_id=$2`, [id, userId]);
+  const d = rows[0];
+  if (!d) return { ok: false, error: 'draft non trovata' };
+  if (d.status === 'sent') return { ok: true };
+  if (d.status !== 'pending' && d.status !== 'queued') return { ok: false, error: `stato ${d.status}` };
+
+  const finalBody = (editedBody ?? d.body) as string;
+  if (editedBody && editedBody !== d.body) {
+    // Persisti la modifica (la usa anche il flusher) + segnale di graduazione.
+    await query(`UPDATE client_msg_drafts SET body=$1, body_edited=$1 WHERE id=$2`, [editedBody, id]);
+    d.body = editedBody;
+  }
+
+  // Fuori dalla finestra Lun-Ven 9:00-18:30 → coda, parte all'apertura.
+  if (!inSendWindow()) {
+    await query(`UPDATE client_msg_drafts SET status='queued', decided_at=now() WHERE id=$1`, [id]);
+    bus.emit('client_msg:queued', { userId, id });
+    return { ok: true, queued: true, when: nextOpenLabel() };
+  }
+  return dispatchSend(userId, d, finalBody);
+}
+
+// ── Queue flusher: svuota la coda quando la finestra è aperta ────────────────
+export async function flushQueued(userId: number): Promise<number> {
+  if (!inSendWindow()) return 0;
+  const rows = await query<any>(`SELECT * FROM client_msg_drafts WHERE user_id=$1 AND status='queued' ORDER BY id`, [userId]);
+  let sent = 0;
+  for (const d of rows) {
+    const r = await dispatchSend(userId, d, d.body);
+    if (r.ok) {
+      sent++;
+      try {
+        const { sendTelegram } = await import('../telegram/bot.js');
+        await sendTelegram(userId, `📤 Inviato (era in coda): ${d.client_name}`);
+      } catch {}
+    }
+  }
+  return sent;
+}
+
+let cronStarted = false;
+export function startClientMsgScheduler(): void {
+  if (cronStarted) return;
+  cronStarted = true;
+  // Ogni 10 minuti; agisce solo dentro la finestra Lun-Ven 9:00-18:30 Europe/Rome.
+  cron.schedule('*/10 * * * *', async () => {
+    if (!inSendWindow()) return;
+    try {
+      const users = await query<{ user_id: number }>(`SELECT DISTINCT user_id FROM client_msg_drafts WHERE status='queued'`);
+      for (const u of users) await flushQueued(u.user_id).catch((e) => console.error('[arm] flush', e));
+    } catch (e) { console.error('[arm] scheduler', e); }
+  });
+  console.log('[arm] client-message scheduler armed (flush coda, finestra Lun-Ven 9:00-18:30 Europe/Rome)');
 }
 
 export async function denyClientMsg(userId: number, id: number): Promise<void> {

@@ -343,10 +343,13 @@ async function startBotForUser(userId: number) {
       try {
         const arm = await import('../arm/client_messages.js');
         if (action === 'approve') {
-          await ctx.answerCbQuery('📤 invio in corso…');
+          await ctx.answerCbQuery('📤 elaboro…');
           const r = await arm.approveClientMsg(userId, msgId);
           try { await ctx.editMessageReplyMarkup(undefined); } catch {}
-          try { await ctx.editMessageText(r.ok ? '✅ Inviato al cliente. Task → waiting feedback client.' : `⚠️ ${r.error}`); } catch {}
+          const txt = !r.ok ? `⚠️ ${r.error}`
+            : r.queued ? `📅 In coda — parte ${r.when} (fuori dall'orario invii Lun-Ven 9:00-18:30).`
+            : '✅ Inviato al cliente. Task → waiting feedback client.';
+          try { await ctx.editMessageText(txt); } catch {}
         } else {
           await arm.denyClientMsg(userId, msgId);
           await ctx.answerCbQuery('❌ Bozza scartata');
