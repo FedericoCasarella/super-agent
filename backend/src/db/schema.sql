@@ -373,6 +373,17 @@ CREATE INDEX IF NOT EXISTS client_msg_drafts_user_status_idx ON client_msg_draft
 ALTER TABLE client_msg_drafts DROP CONSTRAINT IF EXISTS client_msg_drafts_status_check;
 ALTER TABLE client_msg_drafts ADD CONSTRAINT client_msg_drafts_status_check CHECK (status IN ('pending','approved','denied','sent','held','error','queued'));
 
+-- Task Supervisor: traccia da quando una task ClickUp è nel suo stato attuale
+-- (ClickUp time-in-status non disponibile). `since` = transizione osservata
+-- (seed iniziale = date_updated). `last_nudged_at` per la cadenza dei nudge.
+CREATE TABLE IF NOT EXISTS task_status_seen (
+  task_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  since TIMESTAMPTZ NOT NULL,
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_nudged_at TIMESTAMPTZ
+);
+
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='email_drafts' AND column_name='account_label') THEN
     ALTER TABLE email_drafts ADD COLUMN account_label TEXT;

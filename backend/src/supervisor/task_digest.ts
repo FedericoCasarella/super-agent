@@ -7,6 +7,7 @@
 import cron from 'node-cron';
 import { query } from '../db/index.js';
 import { isClickUpConfigured, getOpenTasks, type ClickUpTask } from '../clickup/client.js';
+import { isSupervised } from './scope.js';
 
 // Stato ClickUp → di chi è la palla (dalla call: lo stato È la verità).
 const BALL: Record<string, 'te' | 'cliente' | 'luca' | 'assistenza' | 'standby'> = {
@@ -41,7 +42,7 @@ function overdueOrToday(t: ClickUpTask, now: Date): 'scaduta' | 'oggi' | null {
 }
 
 export function buildDigest(tasks: ClickUpTask[], now: Date = new Date()): { msg1: string; msg2: string } {
-  const open = tasks.filter((t) => t.status !== 'cancelled' && t.status !== 'completato');
+  const open = tasks.filter((t) => isSupervised(t) && t.status !== 'cancelled' && t.status !== 'completato');
 
   // ── Msg 1 "Agisci ora" (scope Medio): mandare mex + in progress + scadute/oggi ──
   const act1 = open.filter((t) =>

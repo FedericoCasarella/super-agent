@@ -273,6 +273,20 @@ async function startBotForUser(userId: number) {
     }
   });
 
+  // Task Supervisor: nudge on-demand (task ferme oltre soglia).
+  bot.command('nudge', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { sendNudges } = await import('../supervisor/nudge.js');
+      const r = await sendNudges(userId);
+      if (r.ok && r.count === 0) await ctx.reply('Nessuna task ferma oltre soglia. 👍');
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
+  });
+
   // Inline keyboard callback — approve/deny proposals + email drafts
   bot.on('callback_query', async (ctx) => {
     const cq: any = ctx.callbackQuery;

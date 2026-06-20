@@ -44,6 +44,7 @@ export type ClickUpTask = {
   text_content?: string;
   url: string;
   dueDate?: number | null;
+  updatedAt?: number | null;
 };
 
 // Fetch tasks assigned to Marco currently in a given status. ClickUp's filtered
@@ -89,6 +90,7 @@ export async function getOpenTasks(): Promise<ClickUpTask[]> {
       text_content: t.text_content ?? t.description ?? '',
       url: t.url,
       dueDate: t.due_date ? Number(t.due_date) : null,
+      updatedAt: t.date_updated ? Number(t.date_updated) : null,
     });
     if (batch.length < 100) break;
   }
