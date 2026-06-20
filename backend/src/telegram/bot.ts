@@ -239,6 +239,26 @@ async function startBotForUser(userId: number) {
     }
   });
 
+  // The "arm": draft client update messages from the ClickUp "mandare mex
+  // cliente" pile. On-demand — Marco runs it when he wants to clear the pile.
+  bot.command('comunica', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      await ctx.reply('📨 Controllo le task in "mandare mex cliente"…');
+      const { proposeClientMessages } = await import('../arm/client_messages.js');
+      const r = await proposeClientMessages(userId);
+      const parts = [`Bozze pronte: ${r.created}`];
+      if (r.held) parts.push(`in attesa di mappatura gruppo: ${r.held}`);
+      if (r.skipped) parts.push(`clienti non in mappa: ${r.skipped}`);
+      if (!r.created && !r.held) parts.push('niente da comunicare.');
+      await ctx.reply(`✅ ${parts.join(' · ')}`);
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
+  });
+
   // Inline keyboard callback — approve/deny proposals + email drafts
   bot.on('callback_query', async (ctx) => {
     const cq: any = ctx.callbackQuery;
@@ -305,6 +325,30 @@ async function startBotForUser(userId: number) {
           try { await ctx.editMessageText('✅ Email inviata.'); } catch {}
         } else {
           await email.denyDraft(userId, draftId);
+          await ctx.answerCbQuery('❌ Bozza scartata');
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText('❌ Bozza scartata.'); } catch {}
+        }
+      } catch (e: any) {
+        await ctx.answerCbQuery(`Errore: ${String(e?.message ?? e).slice(0, 100)}`);
+      }
+      return;
+    }
+
+    // Client message (the arm) approval
+    m = data.match(/^cmsg:(\d+):(approve|deny)$/);
+    if (m) {
+      const msgId = Number(m[1]);
+      const action = m[2];
+      try {
+        const arm = await import('../arm/client_messages.js');
+        if (action === 'approve') {
+          await ctx.answerCbQuery('📤 invio in corso…');
+          const r = await arm.approveClientMsg(userId, msgId);
+          try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+          try { await ctx.editMessageText(r.ok ? '✅ Inviato al cliente. Task → waiting feedback client.' : `⚠️ ${r.error}`); } catch {}
+        } else {
+          await arm.denyClientMsg(userId, msgId);
           await ctx.answerCbQuery('❌ Bozza scartata');
           try { await ctx.editMessageReplyMarkup(undefined); } catch {}
           try { await ctx.editMessageText('❌ Bozza scartata.'); } catch {}
@@ -833,6 +877,36 @@ export async function sendGoalPlanKeyboard(userId: number, goal: { id: number; t
     return { message_id: (sent as any).message_id, chat_id: cfg.chatId };
   } catch (e: any) {
     console.error('[telegram] goal plan send failed', e?.message ?? e);
+    return null;
+  }
+}
+
+// Client update message (the "arm"). Mirrors sendEmailDraftKeyboard. When held
+// (no verified WhatsApp mapping), shows no send button — just informs Marco.
+export async function sendClientMsgKeyboard(userId: number, draft: { id: number; client_name: string; body: string; held: boolean }): Promise<{ message_id: number; chat_id: number } | null> {
+  const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
+  if (!cfg?.token || !cfg?.chatId) return null;
+  if (!bots.get(userId)) await startBotForUser(userId);
+  const entry = bots.get(userId);
+  if (!entry) return null;
+  const chatId = cfg.chatId;
+  const header = draft.held
+    ? `📨 *Messaggio cliente — ${draft.client_name}*\n⚠️ Nessun gruppo WhatsApp mappato: bozza pronta ma non inviabile. Aggiungi il gruppo in \`client-wa-map.json\`.`
+    : `📨 *Messaggio cliente pronto — ${draft.client_name}*`;
+  const msg = [header, '', '```', draft.body, '```', '', draft.held ? '' : 'Invio al gruppo?'].join('\n');
+  try {
+    const sent = await entry.bot.telegram.sendMessage(chatId, msg, {
+      parse_mode: 'Markdown' as any,
+      reply_markup: draft.held ? undefined : {
+        inline_keyboard: [[
+          { text: '📤 Invia', callback_data: `cmsg:${draft.id}:approve` },
+          { text: '❌ Scarta', callback_data: `cmsg:${draft.id}:deny` },
+        ]],
+      },
+    });
+    return { message_id: (sent as any).message_id, chat_id: chatId };
+  } catch (e: any) {
+    console.error('[telegram] client_msg send failed', e?.message ?? e);
     return null;
   }
 }

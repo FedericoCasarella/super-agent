@@ -1,0 +1,17 @@
+{
+  "_doc": "Mappa cliente ClickUp (list) -> gruppo WhatsApp per il braccio messaggi cliente. 'verified' va messo a true da Marco dopo controllo. Il braccio invia SOLO a mapping con verified=true e jid valorizzato. jid=null => braccio prepara la bozza ma si ferma.",
+  "clients": [
+    { "clickup_list_id": "901518211838", "clickup_list_name": "Amiche di Borsette",     "wa_group_name": "Performa | Amiche di Borsette - Ecommerce",       "wa_group_jid": "120363422756482274@g.us", "verified": false },
+    { "clickup_list_id": "901521296844", "clickup_list_name": "Boutique Tones",          "wa_group_name": "Performa | Boutique Tones - Ecommerce",          "wa_group_jid": "120363425574794242@g.us", "verified": false },
+    { "clickup_list_id": "901506233321", "clickup_list_name": "Easysea",                 "wa_group_name": "Performa | Easysea - Ecommerce",                 "wa_group_jid": "120363299345549615@g.us", "verified": false },
+    { "clickup_list_id": "901505185057", "clickup_list_name": "La Gatta Con Gli Stivali","wa_group_name": "Performa | La Gatta Con Gli Stivali - Ecommerce", "wa_group_jid": "120363302034073428@g.us", "verified": false },
+    { "clickup_list_id": "901519996171", "clickup_list_name": "Little America Store",    "wa_group_name": "Performa | Little America Store - Ecommerce",    "wa_group_jid": "120363405814342206@g.us", "verified": false },
+    { "clickup_list_id": "901515814487", "clickup_list_name": "Mr Filler",               "wa_group_name": "Performa | Mr. Filler - Ecommerce",              "wa_group_jid": "120363403780954227@g.us", "verified": false, "_note": "NON il gruppo [INT] (team interno 120363409226322791)" },
+    { "clickup_list_id": "901521715231", "clickup_list_name": "Vimavì Materassi",        "wa_group_name": "Performa | Vimavi Materassi - Ecommerce",        "wa_group_jid": "120363405209699212@g.us", "verified": false },
+    { "clickup_list_id": "901518123351", "clickup_list_name": "Be Clinic",              "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "nessun gruppo WA trovato nei dati" },
+    { "clickup_list_id": "901523768132", "clickup_list_name": "Diva Shopping",          "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "store da costruire, nessun gruppo" },
+    { "clickup_list_id": "901523466724", "clickup_list_name": "Emanuel Folco",          "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "4 task in coda ma nessun gruppo WA trovato — da indicare" },
+    { "clickup_list_id": "901522297410", "clickup_list_name": "GEARXPro",               "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "nessun gruppo WA trovato" },
+    { "clickup_list_id": "901523746279", "clickup_list_name": "Wikirose",               "wa_group_name": null, "wa_group_jid": null, "verified": false, "_note": "nessun gruppo WA trovato" }
+  ]
+}

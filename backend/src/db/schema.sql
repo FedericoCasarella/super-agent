@@ -344,6 +344,31 @@ CREATE TABLE IF NOT EXISTS email_drafts (
 );
 CREATE INDEX IF NOT EXISTS email_drafts_user_status_idx ON email_drafts(user_id, status, created_at DESC);
 
+-- Client update messages: drafted by the "arm" from ClickUp tasks in status
+-- "mandare mex cliente", approved by Marco on Telegram, sent to the client's
+-- WhatsApp group. body_edited holds Marco's edited version (graduation signal).
+-- task_ids = the ClickUp tasks batched into this one message (per client).
+CREATE TABLE IF NOT EXISTS client_msg_drafts (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  clickup_list_id TEXT NOT NULL,
+  client_name TEXT NOT NULL,
+  wa_group_jid TEXT,                 -- null => no verified mapping, draft held
+  task_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  body TEXT NOT NULL,
+  body_edited TEXT,                  -- Marco's edit at approval, if any
+  preview_link TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','sent','held','error')),
+  telegram_message_id BIGINT,
+  telegram_chat_id BIGINT,
+  decided_at TIMESTAMPTZ,
+  sent_at TIMESTAMPTZ,
+  error TEXT,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS client_msg_drafts_user_status_idx ON client_msg_drafts(user_id, status, created_at DESC);
+
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='email_drafts' AND column_name='account_label') THEN
     ALTER TABLE email_drafts ADD COLUMN account_label TEXT;
