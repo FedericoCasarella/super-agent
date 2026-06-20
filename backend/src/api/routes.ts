@@ -82,7 +82,70 @@ router.get('/files', async (req, res) => {
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// ── Spotify OAuth callback (PUBBLICA) ───────────────────────────────────────
+// Spotify reindirizza il browser qui senza il nostro cookie di sessione, quindi
+// la rotta è prima del gate auth e si fida dello `state` firmato (JWT con uid).
+function spotifyRedirectUri(): string {
+  return `http://127.0.0.1:${config.port}/api/connectors/spotify/callback`;
+}
+router.get('/connectors/spotify/callback', async (req, res) => {
+  const send = (msg: string, ok: boolean) =>
+    res.redirect(`${config.frontendOrigin.replace(/\/+$/, '')}/connectors?spotify=${ok ? 'connected' : 'error'}&msg=${encodeURIComponent(msg)}`);
+  try {
+    const code = String(req.query.code ?? '');
+    const stateTok = String(req.query.state ?? '');
+    if (req.query.error) return send(String(req.query.error), false);
+    if (!code || !stateTok) return send('parametri mancanti', false);
+    const jwt = (await import('jsonwebtoken')).default;
+    let uid: number;
+    try { uid = (jwt.verify(stateTok, config.jwtSecret) as any).uid; } catch { return send('state non valido o scaduto', false); }
+    const rows = await query<{ config: any; state: any }>(`SELECT config, state FROM connectors WHERE user_id=$1 AND name='spotify'`, [uid]);
+    const cfg = rows[0]?.config ?? {};
+    if (!cfg.clientId || !cfg.clientSecret) return send('Client ID/Secret mancanti', false);
+    const tokRes = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: 'Basic ' + Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64') },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: spotifyRedirectUri() }),
+    });
+    const j: any = await tokRes.json().catch(() => ({}));
+    if (!tokRes.ok || !j.refresh_token) return send(j.error_description || j.error || 'scambio token fallito', false);
+    const nextState = {
+      ...(rows[0]?.state ?? {}),
+      refreshToken: j.refresh_token,
+      accessToken: j.access_token,
+      expiresAt: Date.now() + ((j.expires_in ?? 3600) as number) * 1000,
+      connectedAt: new Date().toISOString(),
+    };
+    await query(`UPDATE connectors SET state=$1::jsonb, enabled=true, updated_at=now() WHERE user_id=$2 AND name='spotify'`, [JSON.stringify(nextState), uid]);
+    return send('Spotify collegato', true);
+  } catch (e: any) {
+    return send(String(e?.message ?? e), false);
+  }
+});
+
 router.use(requireUser);
+
+// Avvio OAuth Spotify (autenticato): restituisce l'URL di autorizzazione che il
+// frontend apre. Lo `state` è un JWT con l'uid (10 min) verificato nel callback.
+router.get('/connectors/spotify/auth', async (req, res) => {
+  try {
+    const uid = req.user!.id;
+    const rows = await query<{ config: any }>(`SELECT config FROM connectors WHERE user_id=$1 AND name='spotify'`, [uid]);
+    const cfg = rows[0]?.config ?? {};
+    if (!cfg.clientId) return res.status(400).json({ error: 'Inserisci e salva prima Client ID e Client Secret.' });
+    const jwt = (await import('jsonwebtoken')).default;
+    const { SPOTIFY_SCOPES } = await import('../connectors/builtin/spotify/index.js');
+    const state = jwt.sign({ uid, p: 'spotify' }, config.jwtSecret, { expiresIn: '10m' });
+    const url = 'https://accounts.spotify.com/authorize?' + new URLSearchParams({
+      response_type: 'code',
+      client_id: cfg.clientId,
+      scope: SPOTIFY_SCOPES.join(' '),
+      redirect_uri: spotifyRedirectUri(),
+      state,
+    }).toString();
+    res.json({ url, redirectUri: spotifyRedirectUri() });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 
 router.get('/status', async (req, res) => {
   const userId = req.user!.id;

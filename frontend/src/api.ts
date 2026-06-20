@@ -33,6 +33,7 @@ export const api = {
   connectors: () => req<any[]>('/connectors'),
   updateConnector: (name: string, body: any) => req(`/connectors/${name}`, { method: 'PUT', body: JSON.stringify(body) }),
   runConnector: (name: string) => req(`/connectors/${name}/run`, { method: 'POST' }),
+  spotifyAuth: () => req<{ url: string; redirectUri: string }>('/connectors/spotify/auth'),
   testImapAccount: (acc: any) => req<any>('/connectors/imap/test', { method: 'POST', body: JSON.stringify(acc) }),
   brainSearch: (q: string) => req<any[]>(`/brain/search?q=${encodeURIComponent(q)}`),
   brainIndex: () => req<any[]>('/brain/index'),

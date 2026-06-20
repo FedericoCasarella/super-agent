@@ -50,7 +50,29 @@ export default function Connectors() {
     setItems(conns); setExternals(exts);
   }
   useEffect(() => { load(); }, []);
+  // Feedback dopo il redirect OAuth Spotify (?spotify=connected|error&msg=...).
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const s = p.get('spotify');
+    if (!s) return;
+    if (s === 'connected') toast.push('Spotify collegato ✓', 'on');
+    else toast.push('Spotify: ' + (p.get('msg') || 'errore collegamento'), 'err');
+    window.history.replaceState({}, '', '/connectors');
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function refreshExt() { setExternals(await api.externalMcps(true)); toast.push(t('connectors.toastRefreshed'), 'on'); }
+
+  // Salva la config e avvia il flow OAuth Spotify in una nuova scheda.
+  async function connectSpotify(name: string) {
+    try {
+      await api.updateConnector(name, { config: draft });
+      const { url } = await api.spotifyAuth();
+      window.location.href = url;
+    } catch (e: any) {
+      toast.push(String(e?.message ?? e), 'err');
+    }
+  }
 
   async function toggle(name: string, enabled: boolean) {
     await api.updateConnector(name, { enabled });
@@ -178,6 +200,16 @@ export default function Connectors() {
                         )}
                       </Field>
                     ))}
+                    {c.manifest.name === 'spotify' && (
+                      <div className="rounded-lg border border-border/60 bg-surface2/40 p-3 text-xs text-muted-foreground space-y-2">
+                        <div>1. Crea un'app su <span className="font-mono">developer.spotify.com/dashboard</span>, imposta come Redirect URI: <span className="font-mono break-all text-foreground">http://127.0.0.1:8787/api/connectors/spotify/callback</span></div>
+                        <div>2. Salva Client ID/Secret qui sotto, poi collega l'account. Serve Spotify Premium + app aperta sul PC.</div>
+                        <div className="flex items-center gap-2 pt-1">
+                          <Button variant="primary" onClick={() => connectSpotify(c.manifest.name)}>Collega account Spotify</Button>
+                          {c.state?.connectedAt && <Chip tone="on">collegato</Chip>}
+                        </div>
+                      </div>
+                    )}
                     <div className="flex gap-2 justify-end">
                       <Button variant="ghost" onClick={() => setEditing(null)}>{t('connectors.cancel')}</Button>
                       <Button onClick={() => save(c.manifest.name)}>{t('connectors.save')}</Button>
