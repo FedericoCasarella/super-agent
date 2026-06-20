@@ -287,6 +287,22 @@ async function startBotForUser(userId: number) {
     }
   });
 
+  // Interruttore auto-follow-up al cliente (step 2b).
+  bot.command('followups', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    const arg = (ctx.message as any)?.text?.split(/\s+/)[1]?.toLowerCase();
+    if (arg === 'on' || arg === 'off') {
+      await setSetting(userId, 'autofollowup', { enabled: arg === 'on' });
+      await ctx.reply(arg === 'on' ? '✅ Auto-follow-up al cliente ATTIVO.' : '⏸ Auto-follow-up al cliente DISATTIVATO (i solleciti li gestisci tu).');
+    } else {
+      const s = await getSetting<{ enabled?: boolean }>(userId, 'autofollowup');
+      const on = s?.enabled !== false;
+      await ctx.reply(`Auto-follow-up al cliente: ${on ? 'ATTIVO' : 'disattivato'}. Usa /followups on | off.`);
+    }
+  });
+
   // Inline keyboard callback — approve/deny proposals + email drafts
   bot.on('callback_query', async (ctx) => {
     const cq: any = ctx.callbackQuery;

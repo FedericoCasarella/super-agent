@@ -5,7 +5,7 @@
 // Blueprint: vault operativo/task-supervisor-architecture.md.
 
 import cron from 'node-cron';
-import { query } from '../db/index.js';
+import { query, getSetting } from '../db/index.js';
 import { isClickUpConfigured, getOpenTasks, type ClickUpTask } from '../clickup/client.js';
 import { supervised } from './scope.js';
 
@@ -27,7 +27,7 @@ function daysBetween(a: number, b: number): number {
 
 // Upsert dello stato osservato: rileva le transizioni (status cambiato → since
 // = ora, reset del nudge). Seed iniziale di `since` con date_updated.
-async function trackStatuses(tasks: ClickUpTask[]): Promise<void> {
+export async function trackStatuses(tasks: ClickUpTask[]): Promise<void> {
   const ids = tasks.map((t) => t.id);
   if (!ids.length) return;
   const existing = await query<{ task_id: string; status: string }>(
@@ -42,7 +42,7 @@ async function trackStatuses(tasks: ClickUpTask[]): Promise<void> {
          ON CONFLICT(task_id) DO NOTHING`, [t.id, t.status, since]);
     } else if (prev !== t.status) {
       await query(
-        `UPDATE task_status_seen SET status=$2, since=now(), last_seen=now(), last_nudged_at=NULL WHERE task_id=$1`,
+        `UPDATE task_status_seen SET status=$2, since=now(), last_seen=now(), last_nudged_at=NULL, last_followup_at=NULL, followup_count=0 WHERE task_id=$1`,
         [t.id, t.status]);
     } else {
       await query(`UPDATE task_status_seen SET last_seen=now() WHERE task_id=$1`, [t.id]);
@@ -56,9 +56,12 @@ export async function computeNudges(userId: number): Promise<Nudge[]> {
   const tasks = supervised(await getOpenTasks()).filter((t) => t.status !== 'cancelled' && t.status !== 'completato');
   await trackStatuses(tasks);
   const ids = tasks.map((t) => t.id);
-  const rows = await query<{ task_id: string; since: string; last_nudged_at: string | null }>(
-    `SELECT task_id, since, last_nudged_at FROM task_status_seen WHERE task_id = ANY($1)`, [ids]);
+  const rows = await query<{ task_id: string; since: string; last_nudged_at: string | null; followup_count: number }>(
+    `SELECT task_id, since, last_nudged_at, followup_count FROM task_status_seen WHERE task_id = ANY($1)`, [ids]);
   const seen = new Map(rows.map((r) => [r.task_id, r]));
+  // Se l'auto-follow-up (2b) è attivo, il "cliente fermo" lo gestisce lui finché
+  // non esaurisce i 3 tentativi: non nudgiamo Marco prima.
+  const autoFollowup = (await getSetting<{ enabled?: boolean }>(userId, 'autofollowup'))?.enabled !== false;
   const now = Date.now();
   const out: Nudge[] = [];
   for (const t of tasks) {
@@ -68,7 +71,12 @@ export async function computeNudges(userId: number): Promise<Nudge[]> {
     const days = daysBetween(now, new Date(s.since).getTime());
     if (days < rule.days) continue;
     if (s.last_nudged_at && daysBetween(now, new Date(s.last_nudged_at).getTime()) < RENUDGE_DAYS) continue;
-    out.push({ task: t, days, text: rule.msg(days) });
+    let text = rule.msg(days);
+    if (t.status === 'waiting feedback client' && autoFollowup) {
+      if ((s.followup_count ?? 0) < 3) continue; // lo gestisce il follow-up auto
+      text = `cliente non risponde dopo ${s.followup_count} follow-up → intervieni tu`;
+    }
+    out.push({ task: t, days, text });
   }
   return out;
 }

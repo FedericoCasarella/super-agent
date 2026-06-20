@@ -58,6 +58,8 @@ async function main() {
   startDigestScheduler();
   const { startNudgeScheduler } = await import('./supervisor/nudge.js');
   startNudgeScheduler();
+  const { startFollowupScheduler } = await import('./supervisor/followup.js');
+  startFollowupScheduler();
   const flows = await import('./flows/index.js');
   flows.attachFlowDispatchers();
   flows.startFlowScheduler();

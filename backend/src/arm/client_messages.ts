@@ -129,7 +129,7 @@ function romeNow(d = new Date()): { dow: number; min: number } {
   return { dow, min: hh * 60 + mm };
 }
 
-function inSendWindow(d = new Date()): boolean {
+export function inSendWindow(d = new Date()): boolean {
   const { dow, min } = romeNow(d);
   return dow <= 4 && min >= OPEN_MIN && min <= CLOSE_MIN;
 }
@@ -146,7 +146,7 @@ function nextOpenLabel(d = new Date()): string {
 }
 
 // ── Client → WhatsApp group mapping ────────────────────────────────────────
-type ClientMap = {
+export type ClientMap = {
   clickup_list_id: string;
   clickup_list_name: string;
   channel: 'whatsapp' | 'clickup' | null;
@@ -171,8 +171,25 @@ function loadMap(): ClientMap[] {
   return (raw.clients ?? []) as ClientMap[];
 }
 
-function resolveClient(listId: string): ClientMap | undefined {
+export function resolveClient(listId: string): ClientMap | undefined {
   return loadMap().find((c) => c.clickup_list_id === listId);
+}
+
+// Invia un testo sul canale del cliente (WhatsApp o ClickUp Chat [EXT]).
+// Riusato sia dal braccio sia dall'auto-follow-up del supervisore.
+export async function sendOnChannel(userId: number, client: ClientMap, text: string): Promise<{ ok: boolean; error?: string }> {
+  if (client.channel === 'whatsapp') {
+    if (!client.wa_group_jid) return { ok: false, error: 'nessun gruppo WhatsApp' };
+    const { sendWaMessage } = await import('../connectors/builtin/whatsapp/index.js');
+    return sendWaMessage(userId, client.wa_group_jid, text, 'agent', 'ai');
+  }
+  if (client.channel === 'clickup') {
+    if (!client.clickup_channel_id) return { ok: false, error: 'nessun canale Chat ClickUp' };
+    const { createChatMessage } = await import('../clickup/client.js');
+    try { await createChatMessage(client.clickup_channel_id, text); return { ok: true }; }
+    catch (e: any) { return { ok: false, error: e?.message ?? 'chat failed' }; }
+  }
+  return { ok: false, error: 'canale non configurato' };
 }
 
 // ── Draft body (template skeleton; checklist Liv. 1 baked in) ───────────────
