@@ -116,10 +116,20 @@ const DONE_STATUS = 'waiting feedback client';
 type ClientMap = {
   clickup_list_id: string;
   clickup_list_name: string;
+  channel: 'whatsapp' | 'clickup' | null;
   wa_group_name: string | null;
   wa_group_jid: string | null;
   verified: boolean;
 };
+
+// Is this client ready for real sending? WhatsApp needs a jid; ClickUp just
+// needs the channel set (target is the task itself).
+function isReady(c: ClientMap): boolean {
+  if (!c.verified) return false;
+  if (c.channel === 'whatsapp') return !!c.wa_group_jid;
+  if (c.channel === 'clickup') return true;
+  return false;
+}
 
 function loadMap(): ClientMap[] {
   const p = path.resolve(__dirname, '../../config/client-wa-map.json');
@@ -191,11 +201,11 @@ export async function proposeClientMessages(userId: number): Promise<{ created: 
       if (previewLink) break;
     }
 
-    const verified = client.verified && !!client.wa_group_jid;
+    const ready = isReady(client);
     // Tone via Claude; deterministic template as fallback if the turn fails.
     const body = await draftBodyLLM(userId, client, listTasks, previewLink)
       .catch((e) => { console.error('[arm] draftBodyLLM fallback', e?.message ?? e); return buildDraftBody(client, listTasks, previewLink); });
-    const status = verified ? 'pending' : 'held';
+    const status = ready ? 'pending' : 'held';
 
     const rows = await query<{ id: number }>(
       `INSERT INTO client_msg_drafts(user_id, clickup_list_id, client_name, wa_group_jid, task_ids, body, preview_link, status)
@@ -205,21 +215,13 @@ export async function proposeClientMessages(userId: number): Promise<{ created: 
     const id = rows[0]?.id;
     bus.emit('client_msg:created', { userId, id, status });
 
-    if (verified) {
-      try {
-        const { sendClientMsgKeyboard } = await import('../telegram/bot.js');
-        const sent = await sendClientMsgKeyboard(userId, { id, client_name: client.clickup_list_name, body, held: false });
-        if (sent) await query(`UPDATE client_msg_drafts SET telegram_message_id=$1, telegram_chat_id=$2 WHERE id=$3`, [sent.message_id, sent.chat_id, id]);
-      } catch (e: any) { console.error('[arm] tg send failed', e?.message ?? e); }
-      created++;
-    } else {
-      // Held: tell Marco the mapping is missing so he can fix client-wa-map.json.
-      try {
-        const { sendClientMsgKeyboard } = await import('../telegram/bot.js');
-        await sendClientMsgKeyboard(userId, { id, client_name: client.clickup_list_name, body, held: true });
-      } catch {}
-      held++;
-    }
+    const dest = client.channel === 'clickup' ? 'commento ClickUp' : client.channel === 'whatsapp' ? (client.wa_group_name ?? 'WhatsApp') : null;
+    try {
+      const { sendClientMsgKeyboard } = await import('../telegram/bot.js');
+      const sent = await sendClientMsgKeyboard(userId, { id, client_name: client.clickup_list_name, body, held: !ready, dest });
+      if (sent && ready) await query(`UPDATE client_msg_drafts SET telegram_message_id=$1, telegram_chat_id=$2 WHERE id=$3`, [sent.message_id, sent.chat_id, id]);
+    } catch (e: any) { console.error('[arm] tg send failed', e?.message ?? e); }
+    if (ready) created++; else held++;
   }
   return { created, held, skipped };
 }
@@ -231,22 +233,42 @@ export async function approveClientMsg(userId: number, id: number, editedBody?: 
   if (!d) return { ok: false, error: 'draft non trovata' };
   if (d.status === 'sent') return { ok: true };
   if (d.status !== 'pending') return { ok: false, error: `stato ${d.status}` };
-  if (!d.wa_group_jid) return { ok: false, error: 'nessun gruppo WhatsApp mappato' };
+
+  const client = resolveClient(d.clickup_list_id);
+  const channel = client?.channel ?? (d.wa_group_jid ? 'whatsapp' : null);
 
   const finalBody = (editedBody ?? d.body) as string;
   if (editedBody && editedBody !== d.body) {
     await query(`UPDATE client_msg_drafts SET body_edited=$1 WHERE id=$2`, [editedBody, id]); // graduation signal
   }
 
-  const { sendWaMessage } = await import('../connectors/builtin/whatsapp/index.js');
-  const res = await sendWaMessage(userId, d.wa_group_jid, finalBody, 'agent', 'ai');
-  if (!res.ok) {
-    await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [res.error ?? 'send failed', id]);
-    return { ok: false, error: res.error };
+  const taskIds: string[] = Array.isArray(d.task_ids) ? d.task_ids : [];
+
+  // Send on the client's channel.
+  if (channel === 'whatsapp') {
+    if (!d.wa_group_jid) return { ok: false, error: 'nessun gruppo WhatsApp mappato' };
+    const { sendWaMessage } = await import('../connectors/builtin/whatsapp/index.js');
+    const res = await sendWaMessage(userId, d.wa_group_jid, finalBody, 'agent', 'ai');
+    if (!res.ok) {
+      await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [res.error ?? 'send failed', id]);
+      return { ok: false, error: res.error };
+    }
+  } else if (channel === 'clickup') {
+    // Post the update as a comment on the first batched task (notifies the
+    // client who's on the ClickUp task). TODO: ClickUp Chat channel + @mention.
+    const { createComment } = await import('../clickup/client.js');
+    const target = taskIds[0];
+    if (!target) return { ok: false, error: 'nessuna task per il commento ClickUp' };
+    try { await createComment(target, finalBody); }
+    catch (e: any) {
+      await query(`UPDATE client_msg_drafts SET status='error', error=$1 WHERE id=$2`, [e?.message ?? 'comment failed', id]);
+      return { ok: false, error: e?.message ?? 'comment failed' };
+    }
+  } else {
+    return { ok: false, error: 'canale non configurato' };
   }
 
   // Move every batched task to "waiting feedback client". Best-effort per task.
-  const taskIds: string[] = Array.isArray(d.task_ids) ? d.task_ids : [];
   for (const tid of taskIds) {
     try { await setTaskStatus(tid, DONE_STATUS); }
     catch (e: any) { console.error(`[arm] setTaskStatus ${tid} failed`, e?.message ?? e); }

@@ -883,7 +883,7 @@ export async function sendGoalPlanKeyboard(userId: number, goal: { id: number; t
 
 // Client update message (the "arm"). Mirrors sendEmailDraftKeyboard. When held
 // (no verified WhatsApp mapping), shows no send button — just informs Marco.
-export async function sendClientMsgKeyboard(userId: number, draft: { id: number; client_name: string; body: string; held: boolean }): Promise<{ message_id: number; chat_id: number } | null> {
+export async function sendClientMsgKeyboard(userId: number, draft: { id: number; client_name: string; body: string; held: boolean; dest?: string | null }): Promise<{ message_id: number; chat_id: number } | null> {
   const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
   if (!cfg?.token || !cfg?.chatId) return null;
   if (!bots.get(userId)) await startBotForUser(userId);
@@ -891,9 +891,9 @@ export async function sendClientMsgKeyboard(userId: number, draft: { id: number;
   if (!entry) return null;
   const chatId = cfg.chatId;
   const header = draft.held
-    ? `📨 *Messaggio cliente — ${draft.client_name}*\n⚠️ Nessun gruppo WhatsApp mappato: bozza pronta ma non inviabile. Aggiungi il gruppo in \`client-wa-map.json\`.`
-    : `📨 *Messaggio cliente pronto — ${draft.client_name}*`;
-  const msg = [header, '', '```', draft.body, '```', '', draft.held ? '' : 'Invio al gruppo?'].join('\n');
+    ? `📨 *Messaggio cliente — ${draft.client_name}*\n⚠️ Canale non configurato: bozza pronta ma non inviabile. Definisci il canale in \`client-wa-map.json\`.`
+    : `📨 *Messaggio cliente pronto — ${draft.client_name}*${draft.dest ? `\n→ ${draft.dest}` : ''}`;
+  const msg = [header, '', '```', draft.body, '```', '', draft.held ? '' : 'Invio?'].join('\n');
   try {
     const sent = await entry.bot.telegram.sendMessage(chatId, msg, {
       parse_mode: 'Markdown' as any,

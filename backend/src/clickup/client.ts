@@ -95,3 +95,12 @@ export async function findPreviewLink(taskId: string): Promise<string | null> {
 export async function setTaskStatus(taskId: string, status: string): Promise<void> {
   await cu(`/task/${taskId}`, { method: 'PUT', body: JSON.stringify({ status }) });
 }
+
+// Post a comment on a task — used for clients whose update channel is ClickUp
+// (not WhatsApp). notify_all so the client (watcher/guest on the task) is pinged.
+export async function createComment(taskId: string, text: string): Promise<void> {
+  await cu(`/task/${taskId}/comment`, {
+    method: 'POST',
+    body: JSON.stringify({ comment_text: text, notify_all: true }),
+  });
+}
