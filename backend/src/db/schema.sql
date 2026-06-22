@@ -911,3 +911,20 @@ DO $$ BEGIN
     ALTER TABLE agent_proposals ADD COLUMN milestone_id TEXT;
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
+
+-- File ingestion — upload da UI con un prompt; l'agente legge il file dal disco
+-- (no limite Telegram 20MB), lo elabora e notifica su Telegram a fine.
+CREATE TABLE IF NOT EXISTS file_ingestions (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  path TEXT NOT NULL,                 -- absolute path on disk
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('processing','done','error')),
+  result TEXT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  done_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS file_ingestions_user_idx ON file_ingestions(user_id, created_at DESC);

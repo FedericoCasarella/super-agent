@@ -9,7 +9,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 export type PageKey =
   | 'whatsapp' | 'instagram' | 'people' | 'teams'
-  | 'flows' | 'outbound' | 'logs';
+  | 'flows' | 'outbound' | 'logs'
+  | 'report' | 'perks' | 'agents' | 'tasks' | 'roadmap' | 'ingestion' | 'connectors';
 
 export const PAGE_META: Record<PageKey, { label: string; description: string }> = {
   whatsapp:  { label: 'WhatsApp',  description: 'Chat WA + auto-bonifica + suggerimenti AI' },
@@ -19,6 +20,13 @@ export const PAGE_META: Record<PageKey, { label: string; description: string }> 
   flows:     { label: 'Flows',     description: 'Trigger → step automazioni' },
   outbound:  { label: 'Inviati',   description: 'Log comunicazioni outbound' },
   logs:      { label: 'Logs',      description: 'Log raw agent + connector' },
+  report:    { label: 'Report',    description: 'Report periodici' },
+  perks:     { label: 'Perks',     description: 'Agenti interni schedulati' },
+  agents:    { label: 'Agents',    description: 'Hub agenti' },
+  tasks:     { label: 'Tasks',     description: 'Attività' },
+  roadmap:   { label: 'Roadmap',   description: 'Obiettivi e roadmap' },
+  ingestion: { label: 'File-ingestion', description: 'Ingestione file' },
+  connectors:{ label: 'Connettori', description: 'Connettori e integrazioni' },
 };
 
 const ALL_KEYS: PageKey[] = Object.keys(PAGE_META) as PageKey[];
@@ -32,6 +40,13 @@ const DEFAULT_VISIBLE: Record<PageKey, boolean> = {
   flows: false,
   outbound: false,
   logs: false,
+  report: true,
+  perks: true,
+  agents: true,
+  tasks: true,
+  roadmap: true,
+  ingestion: true,
+  connectors: true,
 };
 
 function readLS(): Record<PageKey, boolean> {

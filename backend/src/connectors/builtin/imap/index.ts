@@ -326,7 +326,13 @@ const connector: Connector = {
             range = `${from}:*`;
             maxUid = from - 1;
           }
-          for await (const msg of client.fetch(range, { uid: true, source: true })) {
+          // Terzo param { uid: true } OBBLIGATORIO: senza, imapflow tratta il
+          // range come NUMERI DI SEQUENZA, non UID. `range` è costruito su UID
+          // (lastUid+1:*) → su server strict (Dovecot/privateemail) un seq-set
+          // oltre il numero messaggi dà BAD "Invalid messageset"; su Gmail
+          // matcha nulla in silenzio (polling incrementale rotto). Stesso fix
+          // già presente in syncAccount.
+          for await (const msg of client.fetch(range, { uid: true, source: true }, { uid: true })) {
             if (msg.uid <= maxUid) continue;
             try {
               const parsed = await simpleParser(msg.source as Buffer);
@@ -640,7 +646,7 @@ const connector: Connector = {
     },
     {
       name: 'drafts_list',
-      description: 'Lista bozze email (pending = in attesa di approvazione utente).',
+      description: 'Lista bozze email con CORPO COMPLETO (pending = in attesa di approvazione utente). Usa per RILEGGERE/RISCRIVERE una bozza esistente: leggi qui il body, non dire mai "non riesco a recuperare la bozza".',
       inputSchema: {
         type: 'object',
         properties: { status: { type: 'string', enum: ['pending', 'approved', 'denied', 'sent', 'error'] } },
@@ -648,7 +654,7 @@ const connector: Connector = {
       },
       handler: async (ctx, { status }) => {
         const list = await listDrafts(ctx.userId, status);
-        return list.map((d) => ({ id: d.id, account: d.account_label, to: d.to_addr, subject: d.subject, status: d.status, created_at: d.created_at }));
+        return list.map((d) => ({ id: d.id, account: d.account_label, to: d.to_addr, subject: d.subject, body: d.body, status: d.status, created_at: d.created_at }));
       },
     },
     {

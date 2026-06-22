@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { config } from '../config.js';
+import { config, AVAILABLE_MODELS, MODEL_IDS } from '../config.js';
 import { query, getSetting, setSetting } from '../db/index.js';
 import { quotaGuard } from '../quota.js';
 import { setVaultRoot, getVaultRoot, searchNotes, readNote } from '../brain/vault.js';
-import { buildGraph } from '../brain/graph.js';
+import { buildGraph, invalidateGraphCache } from '../brain/graph.js';
 import { listConnectors, ensureUserConnectorRows } from '../connectors/registry.js';
 import { restartTelegramForUser } from '../telegram/bot.js';
 import { bus } from '../bus.js';
@@ -82,7 +82,70 @@ router.get('/files', async (req, res) => {
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// ── Spotify OAuth callback (PUBBLICA) ───────────────────────────────────────
+// Spotify reindirizza il browser qui senza il nostro cookie di sessione, quindi
+// la rotta è prima del gate auth e si fida dello `state` firmato (JWT con uid).
+function spotifyRedirectUri(): string {
+  return `http://127.0.0.1:${config.port}/api/connectors/spotify/callback`;
+}
+router.get('/connectors/spotify/callback', async (req, res) => {
+  const send = (msg: string, ok: boolean) =>
+    res.redirect(`${config.frontendOrigin.replace(/\/+$/, '')}/connectors?spotify=${ok ? 'connected' : 'error'}&msg=${encodeURIComponent(msg)}`);
+  try {
+    const code = String(req.query.code ?? '');
+    const stateTok = String(req.query.state ?? '');
+    if (req.query.error) return send(String(req.query.error), false);
+    if (!code || !stateTok) return send('parametri mancanti', false);
+    const jwt = (await import('jsonwebtoken')).default;
+    let uid: number;
+    try { uid = (jwt.verify(stateTok, config.jwtSecret) as any).uid; } catch { return send('state non valido o scaduto', false); }
+    const rows = await query<{ config: any; state: any }>(`SELECT config, state FROM connectors WHERE user_id=$1 AND name='spotify'`, [uid]);
+    const cfg = rows[0]?.config ?? {};
+    if (!cfg.clientId || !cfg.clientSecret) return send('Client ID/Secret mancanti', false);
+    const tokRes = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: 'Basic ' + Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64') },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: spotifyRedirectUri() }),
+    });
+    const j: any = await tokRes.json().catch(() => ({}));
+    if (!tokRes.ok || !j.refresh_token) return send(j.error_description || j.error || 'scambio token fallito', false);
+    const nextState = {
+      ...(rows[0]?.state ?? {}),
+      refreshToken: j.refresh_token,
+      accessToken: j.access_token,
+      expiresAt: Date.now() + ((j.expires_in ?? 3600) as number) * 1000,
+      connectedAt: new Date().toISOString(),
+    };
+    await query(`UPDATE connectors SET state=$1::jsonb, enabled=true, updated_at=now() WHERE user_id=$2 AND name='spotify'`, [JSON.stringify(nextState), uid]);
+    return send('Spotify collegato', true);
+  } catch (e: any) {
+    return send(String(e?.message ?? e), false);
+  }
+});
+
 router.use(requireUser);
+
+// Avvio OAuth Spotify (autenticato): restituisce l'URL di autorizzazione che il
+// frontend apre. Lo `state` è un JWT con l'uid (10 min) verificato nel callback.
+router.get('/connectors/spotify/auth', async (req, res) => {
+  try {
+    const uid = req.user!.id;
+    const rows = await query<{ config: any }>(`SELECT config FROM connectors WHERE user_id=$1 AND name='spotify'`, [uid]);
+    const cfg = rows[0]?.config ?? {};
+    if (!cfg.clientId) return res.status(400).json({ error: 'Inserisci e salva prima Client ID e Client Secret.' });
+    const jwt = (await import('jsonwebtoken')).default;
+    const { SPOTIFY_SCOPES } = await import('../connectors/builtin/spotify/index.js');
+    const state = jwt.sign({ uid, p: 'spotify' }, config.jwtSecret, { expiresIn: '10m' });
+    const url = 'https://accounts.spotify.com/authorize?' + new URLSearchParams({
+      response_type: 'code',
+      client_id: cfg.clientId,
+      scope: SPOTIFY_SCOPES.join(' '),
+      redirect_uri: spotifyRedirectUri(),
+      state,
+    }).toString();
+    res.json({ url, redirectUri: spotifyRedirectUri() });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 
 router.get('/status', async (req, res) => {
   const userId = req.user!.id;
@@ -339,19 +402,66 @@ router.post('/connectors/imap/test', async (req, res) => {
   }
 });
 
+// Apply the visibility/origin filters consistently across graph + meta.
+function filterGraphNodes(nodes: any[], filter: string, origin: string): any[] {
+  let out = nodes;
+  if (filter !== 'all') out = out.filter((n) => n.visibility === filter);
+  if (origin === 'native') out = out.filter((n) => !n.origin_user_id);
+  else if (origin !== 'all') out = out.filter((n) => n.origin_email === origin);
+  return out;
+}
+
 router.get('/brain/graph', async (req, res) => {
   const filter = String(req.query.visibility ?? 'all');
   const origin = req.query.origin ? String(req.query.origin) : 'all';
   const vaultFilter = req.query.vault ? String(req.query.vault) : 'all';
   const g = await buildGraph(req.user!.id, { vaultFilter });
-  let nodes = g.nodes;
-  if (filter !== 'all') nodes = nodes.filter((n) => n.visibility === filter);
-  if (origin === 'native') nodes = nodes.filter((n) => !n.origin_user_id);
-  else if (origin !== 'all') nodes = nodes.filter((n) => n.origin_email === origin);
+  const nodes = filterGraphNodes(g.nodes, filter, origin);
   const ids = new Set(nodes.map((n) => n.id));
-  const links = g.links.filter((l) => ids.has(l.source) && ids.has(l.target));
+  const clusterById = new Map(nodes.map((n) => [n.id, n.cluster]));
+  // Payload shrink: the 3D view connects clusters ONLY through the center
+  // (leaf→hub→brain) and drops cross-cluster wikilinks. Sending them is dead
+  // weight (was ~26MB / 158k links). Keep only same-cluster links — the ones
+  // the client actually renders. Cross-cluster relations still live in the
+  // node clustering; nothing visible is lost.
+  // Keep only same-cluster links (cross-cluster ones are dropped by the 3D
+  // view anyway), AND cap how many we keep per node. Big clusters (super-agent,
+  // inbox) have tens of thousands of internal links — feeding them all to the
+  // d3 force sim + LineSegments is what froze the client for minutes. A handful
+  // per node preserves intra-cluster cohesion at a fraction of the cost.
+  const MAX_LINKS_PER_NODE = 24;
+  const perNode = new Map<string, number>();
+  const links: any[] = [];
+  for (const l of g.links) {
+    if (!ids.has(l.source) || !ids.has(l.target)) continue;
+    if (clusterById.get(l.source) !== clusterById.get(l.target)) continue;
+    const sc = perNode.get(l.source) ?? 0;
+    const tc = perNode.get(l.target) ?? 0;
+    if (sc >= MAX_LINKS_PER_NODE || tc >= MAX_LINKS_PER_NODE) continue;
+    perNode.set(l.source, sc + 1);
+    perNode.set(l.target, tc + 1);
+    links.push(l);
+  }
   const origins = Array.from(new Set(g.nodes.map((n) => n.origin_email).filter(Boolean))) as string[];
   res.json({ nodes, links, origins, vaults: g.vaults });
+});
+
+// Phase-1 structure endpoint: cluster macro-sets + counts, NO node/link bodies.
+// Lets the client paint the brain + cluster hubs instantly while the full node
+// list streams in. Served from the same cached graph build → ~instant.
+router.get('/brain/graph/meta', async (req, res) => {
+  const filter = String(req.query.visibility ?? 'all');
+  const origin = req.query.origin ? String(req.query.origin) : 'all';
+  const vaultFilter = req.query.vault ? String(req.query.vault) : 'all';
+  const g = await buildGraph(req.user!.id, { vaultFilter });
+  const nodes = filterGraphNodes(g.nodes, filter, origin);
+  const counts = new Map<string, number>();
+  for (const n of nodes) counts.set(n.cluster, (counts.get(n.cluster) ?? 0) + 1);
+  const clusters = Array.from(counts.entries())
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count);
+  const origins = Array.from(new Set(g.nodes.map((n) => n.origin_email).filter(Boolean))) as string[];
+  res.json({ clusters, total: nodes.length, origins, vaults: g.vaults });
 });
 
 // Internal agents
@@ -437,6 +547,7 @@ router.put('/brain/note', async (req, res) => {
     const md = matter.stringify(content, frontmatter);
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, md, 'utf8');
+    invalidateGraphCache(userId);
     res.json({ ok: true });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
@@ -466,6 +577,7 @@ router.delete('/brain/note', async (req, res) => {
     await fs.unlink(full);
     // Also drop the row from brain_index if present.
     try { await query(`DELETE FROM brain_index WHERE user_id=$1 AND path=$2`, [userId, rel]); } catch {}
+    invalidateGraphCache(userId);
     res.json({ ok: true });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
@@ -607,7 +719,7 @@ router.get('/goals/:id/execution', async (req, res) => {
     );
     const agents = await query<any>(
       `SELECT id::int, title, brief, status, cost_usd, created_at, started_at, ended_at, goal_id, milestone_id,
-              left(coalesce(result, ''), 1500) AS result, error
+              left(coalesce(result, ''), 1500) AS result, error, actions
        FROM sub_agents WHERE user_id=$1 AND goal_id=$2 ORDER BY created_at DESC LIMIT 100`,
       [userId, goalId],
     );
@@ -618,7 +730,75 @@ router.get('/goals/:id/execution', async (req, res) => {
     );
     const msById = new Map(propsWithMs.map((p: any) => [p.id, p.milestone_id]));
     for (const p of proposals) (p as any).milestone_id = msById.get(p.id) ?? null;
+    // Risorse per agente: file .md/.txt/… toccati (Read/Write/Edit dalle azioni),
+    // dedup per path, SOLO quelli realmente esistenti su disco (gli agenti
+    // registrano anche tentativi di lettura falliti → niente nodi fantasma).
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    for (const a of agents) {
+      const acts: any[] = Array.isArray(a.actions) ? a.actions : [];
+      const map = new Map<string, boolean>();
+      for (const act of acts) {
+        if (act?.name !== 'Read' && act?.name !== 'Write' && act?.name !== 'Edit') continue;
+        const p = String(act.brief ?? '').trim();
+        if (!p || !/\.(md|txt|pdf|csv|json|docx?)$/i.test(p)) continue;
+        map.set(p, (map.get(p) ?? false) || act.name !== 'Read');
+      }
+      const resources: { path: string; written: boolean }[] = [];
+      for (const [p, written] of map) {
+        const ok = await fs.access(path.resolve(p)).then(() => true).catch(() => false);
+        if (ok) resources.push({ path: p, written });
+      }
+      a.resources = resources;
+      delete a.actions;
+    }
     res.json({ proposals, agents });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Anteprima di un file-risorsa toccato da un agente (path assoluto). Per
+// sicurezza il path deve risiedere dentro uno dei vault dell'utente.
+router.get('/goals/:id/resource', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const raw = String(req.query.path ?? '');
+    if (!raw) return res.status(400).json({ error: 'path richiesto' });
+    const path = await import('node:path');
+    const fs = await import('node:fs/promises');
+    const abs = path.resolve(raw);
+    const { listVaults } = await import('../brain/vaults.js');
+    const vaults = await listVaults(userId);
+    // Gli agenti scrivono nell'intero albero `memory/` (es. people/ è sibling
+    // di MyCEO/), non solo dentro i vault registrati. Boundary = parent del
+    // vault root → copre le directory fratelle dello stesso brain.
+    const roots = new Set<string>();
+    for (const v of vaults) { const r = path.resolve(v.path); roots.add(r); roots.add(path.dirname(r)); }
+    const inside = [...roots].some((r) => abs === r || abs.startsWith(r + path.sep));
+    if (!inside) return res.status(403).json({ error: 'fuori dai vault' });
+    const txt = await fs.readFile(abs, 'utf8').catch(() => null);
+    if (txt == null) return res.status(404).json({ error: 'non trovato' });
+    let content = txt, title: string | undefined;
+    if (/\.md$/i.test(abs)) {
+      try { const matter = (await import('gray-matter')).default; const p = matter(txt); content = p.content; title = p.data?.title; } catch { /* keep raw */ }
+    }
+    res.json({ path: abs, name: path.basename(abs), title, content: content.slice(0, 60_000) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+// Diario dei round di goal_pursuit (append giornaliero in brain). Tasto "Recap"
+// nella pagina obiettivo.
+router.get('/goals/:id/pursuit-log', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const goalId = Number(req.params.id);
+    const { getGoal } = await import('../goals/index.js');
+    const g = await getGoal(userId, goalId);
+    if (!g) return res.status(404).json({ error: 'goal non trovato' });
+    const slug = g.title.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'goal';
+    const note = await readNote(userId, `goals/${slug}/pursuit-log.md`);
+    if (!note) return res.json({ content: null });
+    res.json({ content: note.content, title: note.title });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
@@ -1856,6 +2036,42 @@ router.get('/tool-events', async (req, res) => {
 // Plugins (.skill)
 import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+// Ingestion upload — DISK storage (streams to ~/super-agent-ingest, doesn't
+// buffer 650MB in RAM) + a high 2GB ceiling. Filenames sanitized + prefixed
+// with a timestamp-ish random to avoid collisions.
+const ingestUpload = multer({
+  storage: multer.diskStorage({
+    destination: async (_req, _file, cb) => {
+      try { const { ensureIngestRoot } = await import('../ingest/index.js'); cb(null, await ensureIngestRoot()); }
+      catch (e: any) { cb(e, ''); }
+    },
+    filename: (_req, file, cb) => {
+      const safe = (file.originalname || 'file').replace(/[/\\?%*:|"<>]/g, '_').slice(0, 180);
+      cb(null, `${crypto.randomBytes(4).toString('hex')}__${safe}`);
+    },
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 * 1024 },
+});
+router.post('/ingest', ingestUpload.single('file'), async (req, res) => {
+  try {
+    const f = (req as any).file;
+    const prompt = String(req.body?.prompt ?? '').trim();
+    if (!f) return res.status(400).json({ error: 'file mancante' });
+    if (!prompt) return res.status(400).json({ error: 'prompt mancante' });
+    const { createIngestion } = await import('../ingest/index.js');
+    const ing = await createIngestion(req.user!.id, {
+      filename: f.originalname, absPath: f.path, sizeBytes: f.size, prompt,
+    });
+    res.json({ ok: true, ingestion: ing });
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+router.get('/ingest', async (req, res) => {
+  try {
+    const { listIngestions } = await import('../ingest/index.js');
+    res.json({ rows: await listIngestions(req.user!.id) });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
 router.get('/plugins', async (_req, res) => {
   const m = await import('../plugins/index.js');
   res.json(await m.listPlugins());
@@ -2122,7 +2338,8 @@ router.get('/settings', async (req, res) => {
   const vault = await getVaultRoot(userId);
   const language = (await getSetting<string>(userId, 'language')) ?? 'it';
   const sound_on_message = (await getSetting<boolean>(userId, 'sound_on_message')) ?? true;
-  res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message });
+  const claude_model = (await getSetting<string>(userId, 'claude_model')) ?? config.claudeModel;
+  res.json({ profile, business, telegram: telegram ? { chatId: telegram.chatId ?? null, hasToken: !!telegram?.token } : null, vault, language, sound_on_message, claude_model, models: AVAILABLE_MODELS });
 });
 // Branding (per-user customizable title + logo)
 // ---------------------------------------------------------------------------
@@ -2378,6 +2595,61 @@ router.post('/mail/send', upload.array('attachments', 10), async (req, res) => {
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
+// Autosave bozza (debounce dal composer) → IMAP APPEND in Drafts.
+router.post('/mail/draft', async (req, res) => {
+  try {
+    const { saveDraft } = await import('../mail/service.js');
+    const b = req.body ?? {};
+    const refs: string[] = Array.isArray(b.references) ? b.references : [];
+    const r = await saveDraft(req.user!.id, {
+      accountLabel: String(b.account ?? ''),
+      to: b.to ? String(b.to) : undefined,
+      cc: b.cc ? String(b.cc) : undefined,
+      bcc: b.bcc ? String(b.bcc) : undefined,
+      subject: b.subject ? String(b.subject) : undefined,
+      body: b.body ? String(b.body) : undefined,
+      html: b.html ? String(b.html) : undefined,
+      inReplyTo: b.inReplyTo ? String(b.inReplyTo) : undefined,
+      references: refs,
+      replaceUid: b.replaceUid ? Number(b.replaceUid) : undefined,
+    });
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+router.post('/mail/draft/delete', async (req, res) => {
+  try {
+    const { deleteDraft } = await import('../mail/service.js');
+    const b = req.body ?? {};
+    if (!b.uid) return res.status(400).json({ ok: false, error: 'uid richiesto' });
+    res.json(await deleteDraft(req.user!.id, String(b.account ?? ''), Number(b.uid)));
+  } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
+});
+
+// L'agente gira nel contesto-sistema dell'utente (caveman mode incluso), quindi
+// a volte avvolge la bozza con un preambolo ("Email body… Draft sotto:"), la
+// racchiude tra fence `---` e ci attacca delle "Note (caveman)". Qui teniamo
+// SOLO il corpo della mail.
+function extractEmailBody(raw: string): string {
+  let t = (raw ?? '').trim();
+  // 1) Marcatori espliciti: prendi SOLO ciò che sta tra <<<EMAIL>>> e <<<END>>>.
+  const mk = t.match(/<<<\s*EMAIL\s*>>>\s*([\s\S]*?)\s*(?:<<<\s*END\s*>>>|$)/i);
+  if (mk) t = mk[1].trim();
+  else {
+    // 2) Fallback: corpo tra fence ---.
+    const parts = t.split(/^\s*---\s*$/m);
+    if (parts.length >= 3) t = parts[1].trim();
+  }
+  // 3) Pulizia difensiva di righe meta che a volte sfuggono comunque.
+  t = t.replace(/^.*\bDraft sotto\b.*$/im, '').trim();
+  t = t.replace(/^(?:Email body|Ecco (?:la|una) bozza|Bozza)[^\n]*:?\s*$/im, '').trim();
+  // Taglia un eventuale blocco di note/commenti FINALE (caveman, "Nota:",
+  // "Note:", "N.B.", "PS") fino a fine testo.
+  t = t.replace(/\n{2,}\s*(?:Note\s*\(caveman\)|Note?:|Nota:|N\.?B\.?:?|P\.?S\.?:?)[\s\S]*$/i, '').trim();
+  return t;
+}
+
 // AI-drafted reply — same pattern as WA suggestReply.
 router.post('/mail/messages/:id/suggest', quotaGuard, async (req, res) => {
   try {
@@ -2399,11 +2671,16 @@ router.post('/mail/messages/:id/suggest', quotaGuard, async (req, res) => {
       String(m.body_text ?? '').slice(0, 4000),
       `--- FINE EMAIL ---`,
       ``,
-      `Restituisci SOLO il corpo della risposta, niente subject né intestazioni.`,
+      `OUTPUT: restituisci ESCLUSIVAMENTE il corpo della risposta racchiuso tra i marcatori esatti qui sotto.`,
+      `Vietato qualsiasi testo fuori dai marcatori: niente preamboli, niente subject, niente note/commenti/avvertenze, niente "Nota:", niente spiegazioni su placeholder o scelte. Solo il corpo della mail, pronto da inviare.`,
+      `Se servono dati che non hai, lascia un placeholder tra [graffe] DENTRO il corpo — non spiegarlo fuori.`,
+      `<<<EMAIL>>>`,
+      `(qui SOLO il corpo della mail)`,
+      `<<<END>>>`,
     ].join('\n');
     const r = await runClaude(req.user!.id, prompt, { timeoutMs: 60_000, kind: 'mail_suggest', meta: { mailId: m.id } });
     if (!r.ok) return res.status(400).json({ ok: false, error: r.stderr || 'agent error' });
-    res.json({ ok: true, draft: r.text.trim() });
+    res.json({ ok: true, draft: extractEmailBody(r.text) });
   } catch (e: any) { res.status(400).json({ ok: false, error: String(e?.message ?? e) }); }
 });
 
@@ -2772,6 +3049,12 @@ router.put('/settings/language', async (req, res) => {
   const { language } = req.body ?? {};
   if (!['it', 'en'].includes(language)) return res.status(400).json({ error: 'language must be it|en' });
   await setSetting(req.user!.id, 'language', language);
+  res.json({ ok: true });
+});
+router.put('/settings/model', async (req, res) => {
+  const { model } = req.body ?? {};
+  if (!MODEL_IDS.includes(model)) return res.status(400).json({ error: `model must be one of ${MODEL_IDS.join(', ')}` });
+  await setSetting(req.user!.id, 'claude_model', model);
   res.json({ ok: true });
 });
 router.put('/settings/sound', async (req, res) => {

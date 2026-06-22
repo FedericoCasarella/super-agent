@@ -150,6 +150,34 @@ export default function Settings() {
       </Card>
 
       <Card>
+        <h2 className="text-lg font-semibold mb-1">{lang === 'it' ? 'Modello AI' : 'AI model'}</h2>
+        <p className="text-sm text-muted-foreground mb-3">{lang === 'it' ? 'Modello usato dall\'agente per ogni risposta e task.' : 'Model the agent uses for every reply and task.'}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(s.models ?? []).map((m: any) => {
+            const active = s.claude_model === m.id;
+            return (
+              <button
+                key={m.id}
+                onClick={async () => {
+                  if (active) return;
+                  try { await api.updateModel(m.id); toast.push(lang === 'it' ? `Modello: ${m.label}` : `Model: ${m.label}`, 'on'); await load(); }
+                  catch (e: any) { toast.push(e?.message ?? 'Errore', 'err'); }
+                }}
+                className={`text-left rounded-xl border p-3 transition ${active ? 'border-primary bg-primary/10' : 'border-border bg-surface2/40 hover:border-primary/50'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-sm">{m.label}</span>
+                  {active && <Chip tone="on">{lang === 'it' ? 'attivo' : 'active'}</Chip>}
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-1">{m.hint}</div>
+                <div className="text-[10px] text-muted-foreground/70 font-mono mt-1">{m.id}</div>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      <Card>
         <h2 className="text-lg font-semibold mb-1">{t('settings.vaults')}</h2>
         <p className="text-sm text-muted-foreground mb-4">{t('settings.vaultsDesc')}</p>
         {vaults.length > 0 && (

@@ -23,6 +23,7 @@ import Brain from './pages/Brain';
 import Settings from './pages/Settings';
 import Roadmap from './pages/Roadmap';
 import GoalDetailPage from './pages/GoalDetail';
+import FileIngestionPage from './pages/FileIngestion';
 import Logs from './pages/Logs';
 import Tasks from './pages/Tasks';
 import Agents from './pages/Agents';
@@ -43,6 +44,19 @@ import Report from './pages/Report';
 import Mail from './pages/Mail';
 import MessageSound from './components/MessageSound';
 import BrainLoading from './components/BrainLoading';
+
+// Rotating loading captions (cycle every 8s).
+const LOADING_MESSAGES = [
+  'Ci sto lavorando...',
+  '"Ti rimanderò indietro, indietro nel futuro"',
+  '"Che la forza sia con te"',
+  '"Ci sei Jarvis?..."',
+  '"Knock Knock"',
+  '"Segui il bianconiglio"',
+  'Sto costruendo la tua infrastruttura...',
+  'Resuscito il brain',
+  'Collego i neuroni',
+];
 
 export default function App() {
   // Backend liveness probe — runs BEFORE auth so the app is blocked behind a
@@ -100,7 +114,7 @@ export default function App() {
   if (backendUp !== true) {
     return (
       <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background">
-        <BrainLoading size={140} label="Ci sto lavorando…" />
+        <BrainLoading size={140} messages={LOADING_MESSAGES} />
       </div>
     );
   }
@@ -162,6 +176,7 @@ function AppInner() {
             the viewport exactly — e.g. the mail client 3-pane). */}
         <Routes>
           <Route path="/mail" element={<div className="overflow-hidden h-[calc(100dvh-56px)] md:h-[calc(100dvh-72px)]"><Mail /></div>} />
+          <Route path="/goals/:id" element={<div className="flex-1 min-h-0 overflow-hidden"><GoalDetailPage /></div>} />
           <Route path="*" element={
             <div className="p-4 sm:p-6 lg:p-8 min-w-0">
               <Routes>
@@ -169,7 +184,7 @@ function AppInner() {
                 <Route path="/connectors" element={<Connectors />} />
                 <Route path="/brain" element={<Brain />} />
                 <Route path="/roadmap" element={<Roadmap />} />
-                <Route path="/goals/:id" element={<GoalDetailPage />} />
+                <Route path="/ingestion" element={<FileIngestionPage />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/perks" element={<Agents />} />
                 <Route path="/perks/:name" element={<AgentDetail />} />

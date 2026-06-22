@@ -49,6 +49,11 @@ export default function Agents() {
   const itemsRef = useRef<Agent[]>([]);
   useEffect(() => { itemsRef.current = items; }, [items]);
 
+  async function toggleNotify(a: Agent) {
+    await api.updateInternalAgent(a.name, { notify_on_run: !a.notify_on_run });
+    toast.push(`${a.title} — notifiche ${!a.notify_on_run ? 'on' : 'off'}`, !a.notify_on_run ? 'on' : 'warn');
+    load();
+  }
   async function toggle(a: Agent) {
     await api.updateInternalAgent(a.name, { enabled: !a.enabled });
     toast.push(`${a.title} ${!a.enabled ? 'enabled' : 'disabled'}`, !a.enabled ? 'on' : 'warn');
@@ -149,6 +154,7 @@ export default function Agents() {
             ) : <span className="text-muted-foreground">—</span> },
             { key: 'actions', header: '', width: 'w-32', align: 'right', render: (a) => (
               <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 justify-end">
+                <button title={a.notify_on_run ? 'Notifiche Telegram ON — clicca per spegnere' : 'Notifiche Telegram OFF — clicca per accendere'} onClick={() => toggleNotify(a)} className={`h-8 w-8 inline-flex items-center justify-center rounded-lg transition ${a.notify_on_run ? 'text-emerald-400 hover:bg-emerald-500/10' : 'text-muted-foreground hover:bg-surface2'}`}>{a.notify_on_run ? '🔔' : '🔕'}</button>
                 <Toggle checked={a.enabled} onChange={() => toggle(a)} />
                 <Button size="sm" variant="ghost" onClick={(e) => run(a, e)} disabled={!!a.running || busy === a.name || cdLeft(a.name) > 0}>
                   {a.running ? '⏳' : cdLeft(a.name) > 0 ? `${cdLeft(a.name)}s` : 'Run'}
@@ -210,7 +216,8 @@ export default function Agents() {
                     <h3 className="text-lg sm:text-xl font-semibold text-gradient">{a.title}</h3>
                     <p className="text-sm text-muted-foreground line-clamp-2 mt-1">{a.description}</p>
                   </div>
-                  <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+                  <div onClick={(e) => e.stopPropagation()} className="shrink-0 flex items-center gap-1.5">
+                    <button title={a.notify_on_run ? 'Notifiche Telegram ON' : 'Notifiche Telegram OFF'} onClick={() => toggleNotify(a)} className={`h-8 w-8 inline-flex items-center justify-center rounded-lg transition ${a.notify_on_run ? 'text-emerald-400 hover:bg-emerald-500/10' : 'text-muted-foreground hover:bg-surface2'}`}>{a.notify_on_run ? '🔔' : '🔕'}</button>
                     <Toggle checked={a.enabled} onChange={() => toggle(a)} />
                   </div>
                 </div>

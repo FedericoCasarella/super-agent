@@ -1245,6 +1245,27 @@ type ComposerState = {
   references: string[];
 };
 
+// Le email vanno in HTML, ma l'AI produce markdown (**grassetto**, liste, ###).
+// Converti i costrutti inline/blocco in HTML così non finiscono come testo
+// letterale nel corpo.
+function mdToComposerHtml(text: string): string {
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = (s: string) => esc(s)
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  return text.split('\n').map((raw) => {
+    const l = raw.replace(/\s+$/, '');
+    const h = l.match(/^#{1,6}\s+(.*)$/);
+    if (h) return `<div><strong>${inline(h[1])}</strong></div>`;
+    const b = l.match(/^\s*[-*]\s+(.*)$/);
+    if (b) return `<div>• ${inline(b[1])}</div>`;
+    return `<div>${l.trim() ? inline(l) : '<br>'}</div>`;
+  }).join('');
+}
+
 function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState; setState: (s: ComposerState | null) => void; onSent: () => void; onSuggest?: () => Promise<string | null> }) {
   const toast = useToast();
   const [sending, setSending] = useState(false);
@@ -1285,6 +1306,36 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
     return () => { mounted = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Autosave bozza (debounce 500ms) ──────────────────────────────────────
+  // Ogni modifica a corpo/oggetto/destinatari ri-arma un timer; dopo 500ms di
+  // inattività la bozza viene salvata via IMAP APPEND in Drafts. `draftUid`
+  // tiene l'ultima bozza per rimpiazzarla (no duplicati).
+  const draftUid = useRef<number | undefined>(undefined);
+  const [draftState, setDraftState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const draftDirty = useRef(false);
+  useEffect(() => {
+    // Salta il primo render (init) — salva solo dopo una vera modifica utente.
+    if (!draftDirty.current) { draftDirty.current = true; return; }
+    if (!state.account) return;
+    const hasContent = (state.body && state.body.replace(/<[^>]*>/g, '').trim()) || state.subject.trim() || state.to.trim();
+    if (!hasContent) return;
+    const t = setTimeout(async () => {
+      setDraftState('saving');
+      try {
+        const r = await api.mailSaveDraft({
+          account: state.account, to: state.to, cc: state.cc, bcc: state.bcc,
+          subject: state.subject, html: bodyRef.current?.innerHTML ?? state.body,
+          body: bodyRef.current?.innerText ?? '', inReplyTo: state.inReplyTo,
+          references: state.references, replaceUid: draftUid.current,
+        });
+        if (r.ok) { draftUid.current = r.uid; setDraftState('saved'); }
+        else setDraftState('idle');
+      } catch { setDraftState('idle'); }
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.body, state.subject, state.to, state.cc, state.bcc]);
 
   // Quoted-original toggle. Collapsed by default like Spark — three-dots chip.
   const [quotedOpen, setQuotedOpen] = useState(false);
@@ -1352,6 +1403,9 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
       inReplyTo: state.inReplyTo, references: state.references, attachments: state.attachments,
     };
     const summary = state.subject || '(senza oggetto)';
+    // Snapshot della bozza autosalvata: dopo l'invio va rimossa da Drafts.
+    const autosavedUid = draftUid.current;
+    const draftAccount = state.account;
 
     // Optimistic close + toast. The actual SMTP work continues in the
     // background; user sees the failure (if any) via a destructive toast.
@@ -1366,6 +1420,7 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
         const r: any = await Promise.race([sendPromise, timeout]);
         if (r && r.ok === false) throw new Error(r.error || 'Errore invio');
         toast.push(`Email inviata · ${summary}`, 'on');
+        if (autosavedUid) api.mailDeleteDraft(draftAccount, autosavedUid).catch(() => {});
       } catch (e: any) {
         console.error('[mail:send] failed', e);
         toast.push(`Invio fallito · ${String(e.message ?? e)}`, 'err');
@@ -1379,8 +1434,8 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
     try {
       const draft = await onSuggest();
       if (draft && bodyRef.current) {
-        // Replace body with the AI draft, preserving HTML line breaks
-        const html = draft.split('\n').map((l) => `<div>${l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || '<br>'}</div>`).join('');
+        // Markdown AI → HTML (le email non renderizzano il markdown).
+        const html = mdToComposerHtml(draft);
         bodyRef.current.innerHTML = html + bodyRef.current.innerHTML;
         setState({ ...state, body: bodyRef.current.innerHTML });
       }
@@ -1402,7 +1457,7 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
       if (!r.ok) throw new Error(r.error || 'Errore generazione');
       const editor = bodyRef.current;
       if (editor) {
-        const html = r.body.split('\n').map((l) => `<div>${l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || '<br>'}</div>`).join('');
+        const html = mdToComposerHtml(r.body);
         const wrapper = document.createElement('div');
         wrapper.innerHTML = html;
         const sig = editor.querySelector('.mail-signature');
@@ -1658,7 +1713,7 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
                 <TooltipContent side="top">Allega file</TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            {onSuggest && (
+            {onSuggest && state.inReplyTo && (
               <button
                 type="button"
                 onClick={generateAI}
@@ -1669,6 +1724,7 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
                 {aiBusy ? 'Generazione…' : 'Genera risposta'}
               </button>
             )}
+            {!state.inReplyTo && (
             <div className="relative ml-1">
               <button
                 type="button"
@@ -1700,8 +1756,14 @@ function Composer({ state, setState, onSent, onSuggest }: { state: ComposerState
                 </div>
               )}
             </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
+            {draftState !== 'idle' && (
+              <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1 mr-1">
+                {draftState === 'saving' ? <><Loader2 size={11} className="animate-spin" /> Salvataggio bozza…</> : <><CheckCheck size={11} /> Bozza salvata</>}
+              </span>
+            )}
             <Button variant="ghost" size="sm" onClick={() => setState(null)}>Annulla</Button>
             <Button size="sm" onClick={send} disabled={!state.to || !state.subject} className="gap-1.5">
               <Send size={13} />

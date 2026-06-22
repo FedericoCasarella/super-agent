@@ -194,7 +194,7 @@ export default function BrainFileExplorer({
   }
 
   return (
-    <div className="h-full flex flex-col min-w-[240px] w-[280px]">
+    <div className="h-full flex flex-col w-full xl:min-w-[240px] xl:w-[280px]">
       <div className="p-2 border-b border-border flex items-center gap-1.5">
         <Search size={12} className="text-muted-foreground shrink-0" />
         <input

@@ -33,6 +33,7 @@ export const api = {
   connectors: () => req<any[]>('/connectors'),
   updateConnector: (name: string, body: any) => req(`/connectors/${name}`, { method: 'PUT', body: JSON.stringify(body) }),
   runConnector: (name: string) => req(`/connectors/${name}/run`, { method: 'POST' }),
+  spotifyAuth: () => req<{ url: string; redirectUri: string }>('/connectors/spotify/auth'),
   testImapAccount: (acc: any) => req<any>('/connectors/imap/test', { method: 'POST', body: JSON.stringify(acc) }),
   brainSearch: (q: string) => req<any[]>(`/brain/search?q=${encodeURIComponent(q)}`),
   brainIndex: () => req<any[]>('/brain/index'),
@@ -81,6 +82,8 @@ export const api = {
   brainIndexFiltered: (visibility: 'all' | 'public' | 'protected') => req<any[]>(`/brain/index?visibility=${visibility}`),
   brainGraphFiltered: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
     req<{ nodes: any[]; links: any[]; origins: string[]; vaults: string[] }>(`/brain/graph?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
+  brainGraphMeta: (visibility: 'all' | 'public' | 'protected', origin: string = 'all', vault: string = 'all') =>
+    req<{ clusters: { key: string; count: number }[]; total: number; origins: string[]; vaults: string[] }>(`/brain/graph/meta?visibility=${visibility}&origin=${encodeURIComponent(origin)}&vault=${encodeURIComponent(vault)}`),
   brainStats: () => req<any>('/brain/stats'),
   people: (opts: { q?: string; limit?: number; offset?: number; sort?: string; dir?: 'asc' | 'desc' } = {}) => {
     const p = new URLSearchParams();
@@ -151,6 +154,7 @@ export const api = {
   updateBusiness: (data: any) => req('/settings/business', { method: 'PUT', body: JSON.stringify(data) }),
   updateTelegram: (token: string) => req('/settings/telegram', { method: 'PUT', body: JSON.stringify({ token }) }),
   updateSound: (enabled: boolean) => req('/settings/sound', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  updateModel: (model: string) => req('/settings/model', { method: 'PUT', body: JSON.stringify({ model }) }),
   // Sub-agents
   emailTest: (account: string) => req<any>('/email/test', { method: 'POST', body: JSON.stringify({ account }) }),
   waStatus: () => req<any>('/whatsapp/status'),
@@ -228,6 +232,8 @@ export const api = {
   goalDelete: (id: number) => req<{ ok: boolean }>(`/goals/${id}`, { method: 'DELETE' }),
   goalMilestoneDeploy: (id: number, mid: string, instruction: string) => req<{ ok: boolean; proposalId?: number; error?: string }>(`/goals/${id}/milestones/${encodeURIComponent(mid)}/deploy`, { method: 'POST', body: JSON.stringify({ instruction }) }),
   goalExecution: (id: number) => req<{ proposals: any[]; agents: any[] }>(`/goals/${id}/execution`),
+  goalResource: (id: number, path: string) => req<{ path: string; name: string; title?: string; content: string }>(`/goals/${id}/resource?path=${encodeURIComponent(path)}`),
+  goalPursuitLog: (id: number) => req<{ content: string | null; title?: string }>(`/goals/${id}/pursuit-log`),
   roadmapGet: () => req<any>('/roadmap-v2'),
   roadmapStats: () => req<any>('/roadmap-v2/stats'),
   roadmapAddTodo: (horizon: 'shortTerm' | 'midTerm' | 'longTerm', data: any) => req<any>(`/roadmap-v2/${horizon}/todos`, { method: 'POST', body: JSON.stringify(data) }),
@@ -304,6 +310,8 @@ export const api = {
   igUnread: () => req<{ count: number }>('/instagram/unread'),
   mailSuggest: (id: number, hint?: string) => req<any>(`/mail/messages/${id}/suggest`, { method: 'POST', body: JSON.stringify({ hint }) }),
   mailCompose: (intent: string, to?: string) => req<{ ok: boolean; subject: string; body: string; error?: string }>('/mail/compose', { method: 'POST', body: JSON.stringify({ intent, to }) }),
+  mailSaveDraft: (payload: { account: string; to?: string; cc?: string; bcc?: string; subject?: string; body?: string; html?: string; inReplyTo?: string; references?: string[]; replaceUid?: number }) => req<{ ok: boolean; uid?: number; mailbox?: string; error?: string }>('/mail/draft', { method: 'POST', body: JSON.stringify(payload) }),
+  mailDeleteDraft: (account: string, uid: number) => req<{ ok: boolean; error?: string }>('/mail/draft/delete', { method: 'POST', body: JSON.stringify({ account, uid }) }),
   mailSend: (payload: { account: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html?: string; inReplyTo?: string; references?: string[]; attachments?: File[] }) => {
     const fd = new FormData();
     fd.append('account', payload.account);
@@ -323,4 +331,24 @@ export const api = {
     });
   },
   mailAttachmentUrl: (id: number) => `/api/mail/attachments/${id}`,
+  ingestList: () => req<{ rows: any[] }>('/ingest'),
+  ingestUpload: (file: File, prompt: string, onProgress?: (pct: number) => void) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('prompt', prompt);
+    // XHR (not fetch) so we get upload progress for big files.
+    return new Promise<{ ok: boolean; ingestion?: any; error?: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/ingest');
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100)); };
+      xhr.onload = () => {
+        let j: any = {}; try { j = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(j);
+        else reject(new Error(j.error || `HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('upload fallito'));
+      xhr.send(fd);
+    });
+  },
 };

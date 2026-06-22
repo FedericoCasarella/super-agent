@@ -30,7 +30,7 @@ import {
   Activity, Plug, Brain, Map as MapIcon, ListChecks, Zap, Sparkles,
   Share2, ScrollText, Settings as SettingsIcon, LogOut, MessageCircle,
   Users as UsersIcon, Send, Bot, Network as NetworkIcon, Workflow,
-  Camera as IgIcon, type LucideIcon, ChevronsUpDown, Archive, LineChart, Mail as MailIcon,
+  Camera as IgIcon, type LucideIcon, ChevronsUpDown, Archive, LineChart, Mail as MailIcon, UploadCloud,
 } from 'lucide-react';
 
 function humanizeIn(ms: number): string {
@@ -106,12 +106,13 @@ export default function AppSidebar() {
   type NavItem = { to: string; label: string; icon: LucideIcon; badge?: number; gate?: PageKey };
   const items: NavItem[] = ([
     { to: '/', label: t('nav.live'), icon: Activity },
-    { to: '/connectors', label: t('nav.connectors'), icon: Plug },
+    { to: '/connectors', label: t('nav.connectors'), icon: Plug, gate: 'connectors' },
     { to: '/brain', label: t('nav.brain'), icon: Brain },
-    { to: '/roadmap', label: t('nav.roadmap'), icon: MapIcon },
-    { to: '/tasks', label: 'Tasks', icon: ListChecks },
-    { to: '/agents', label: 'Agents', icon: Zap, badge: agentsRunning > 0 ? agentsRunning : undefined },
-    { to: '/perks', label: 'Perks', icon: Sparkles },
+    { to: '/ingestion', label: 'File-ingestion', icon: UploadCloud, gate: 'ingestion' },
+    { to: '/roadmap', label: t('nav.roadmap'), icon: MapIcon, gate: 'roadmap' },
+    { to: '/tasks', label: 'Tasks', icon: ListChecks, gate: 'tasks' },
+    { to: '/agents', label: 'Agents', icon: Zap, badge: agentsRunning > 0 ? agentsRunning : undefined, gate: 'agents' },
+    { to: '/perks', label: 'Perks', icon: Sparkles, gate: 'perks' },
     { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, gate: 'whatsapp', badge: waUnread > 0 ? waUnread : undefined },
     { to: '/mail', label: 'Email', icon: MailIcon, badge: mailUnread > 0 ? mailUnread : undefined },
     { to: '/instagram', label: 'Instagram', icon: IgIcon, gate: 'instagram', badge: igUnread > 0 ? igUnread : undefined },
@@ -121,7 +122,7 @@ export default function AppSidebar() {
     { to: '/outbound', label: 'Inviati', icon: Send, gate: 'outbound' },
     { to: '/logs', label: 'Logs', icon: ScrollText, gate: 'logs' },
     { to: '/snapshots', label: 'Snapshot', icon: Archive },
-    { to: '/report', label: 'Report', icon: LineChart },
+    { to: '/report', label: 'Report', icon: LineChart, gate: 'report' },
     { to: '/settings', label: t('nav.settings'), icon: SettingsIcon },
   ] as NavItem[]).filter((it) => !it.gate || isVisible(it.gate as PageKey));
 

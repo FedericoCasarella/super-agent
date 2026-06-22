@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { config } from '../config.js';
 import { MCP_CONFIG_PATH, MCP_SERVER_NAME } from '../mcp/config.js';
-import { query } from '../db/index.js';
+import { query, getSetting } from '../db/index.js';
 import { externalMcpAllowEntries, refreshExternalMcps } from './external_mcps.js';
 import { listVaults } from '../brain/vaults.js';
 import { bus } from '../bus.js';
@@ -127,7 +127,11 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   // Inject current datetime (Claude CLI has no clock).
   const finalPrompt = `now=${new Date().toISOString()}\n\n${prompt}`;
 
-  const model = opts.model ?? config.claudeModel;
+  // Model resolution: explicit per-call override → user's saved preference
+  // (Settings → modello) → global default. Lets the user pick the model from
+  // the UI without touching env.
+  const userModel = await getSetting<string>(userId, 'claude_model').catch(() => null);
+  const model = opts.model ?? userModel ?? config.claudeModel;
   const args = ['-p', finalPrompt, '--output-format', 'stream-json', '--verbose', '--model', model];
   if (opts.systemPrompt) {
     args.push('--append-system-prompt', opts.systemPrompt);
@@ -190,6 +194,12 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     }
     return '';
   }
+  // Text of the most recent assistant message that carried any text. The CLI's
+  // final `result` field only holds the LAST turn's text — if the agent answers
+  // in one turn then ends on a trailing tool_use (react / sleep_until / log),
+  // `result` comes back EMPTY and the real reply is lost (→ "output vuoto"
+  // fallback despite a full answer being composed). We recover it from here.
+  let lastAssistantText = '';
   const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null }>((resolve) => {
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
@@ -240,6 +250,12 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
           }
           // Detect tool_use blocks → emit brain:access
           if (ev?.type === 'assistant' && ev.message?.content) {
+            // Capture this message's text blocks. If it carried any text, it
+            // becomes the recovery reply (overwrites prior — last text wins).
+            const txt = ev.message.content
+              .filter((b: any) => b?.type === 'text' && typeof b.text === 'string')
+              .map((b: any) => b.text).join('').trim();
+            if (txt) lastAssistantText = txt;
             for (const block of ev.message.content) {
               if (block?.type !== 'tool_use') continue;
               const name = block.name as string;
@@ -271,7 +287,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
                 if (hit) {
                   bus.emit('brain:access', {
                     userId, vaultName: hit.vaultName, rel: hit.rel,
-                    tool: name, ts: Date.now(),
+                    tool: name, kind: opts.kind ?? null, ts: Date.now(),
                   });
                 }
               }
@@ -289,7 +305,10 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   const durationMs = Date.now() - started;
   const parsed: any = result.finalEvent;
 
-  const text = (parsed?.result ?? '').trim();
+  // Prefer the CLI's final result; if empty (agent ended on a tool_use), fall
+  // back to the last assistant text we saw mid-stream so a composed reply is
+  // never silently dropped.
+  const text = ((parsed?.result ?? '').trim()) || lastAssistantText;
   const usage = parsed?.usage ?? {};
   const ok = result.code === 0 && !!parsed && parsed.subtype !== 'error_during_execution';
 
@@ -324,7 +343,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
       `INSERT INTO agent_runs(user_id,kind,status,model,duration_ms,input_tokens,output_tokens,cache_creation_tokens,cache_read_tokens,cost_usd,num_turns,prompt,result,meta,error)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15) RETURNING id`,
       [
-        userId, kind, ok ? 'ok' : 'error', config.claudeModel, durationMs,
+        userId, kind, ok ? 'ok' : 'error', model, durationMs,
         out.inputTokens ?? null, out.outputTokens ?? null,
         out.cacheCreationTokens ?? null, out.cacheReadTokens ?? null,
         out.costUsd ?? null, out.numTurns ?? null,

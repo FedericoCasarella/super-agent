@@ -5,7 +5,6 @@ import { Button, Card, Chip, Input, Modal, Field, useToast } from '../components
 import { Textarea } from '@/components/ui/textarea';
 import { useDialog } from '../components/dialog';
 import { Edit3, Save as SaveIcon, X as XIcon, Trash2, Eye } from 'lucide-react';
-import BrainGraph3D from '../components/BrainGraph3D';
 import BrainGraph3DConstellation from '../components/BrainGraph3DConstellation';
 import MarkdownView from '../components/MarkdownView';
 import BrainOverview from '../components/BrainOverview';
@@ -18,7 +17,6 @@ import { useI18n } from '../i18n';
 import { api as apiX } from '../api';
 
 type Tab = 'graph' | 'list';
-type View = '2d' | '3d';
 type Filter = 'all' | 'public' | 'protected';
 
 export default function Brain() {
@@ -27,8 +25,6 @@ export default function Brain() {
   const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch {} };
   const [tab, setTab] = useState<Tab>(() => (lsGet('brain_tab', 'graph') === 'list' ? 'list' : 'graph'));
   useEffect(() => { lsSet('brain_tab', tab); }, [tab]);
-  const [view, setView] = useState<View>(() => (lsGet('brain_view', '2d') === '3d' ? '3d' : '2d'));
-  useEffect(() => { lsSet('brain_view', view); }, [view]);
   const [filter, setFilter] = useState<Filter>(() => {
     const v = lsGet('brain_filter', 'all');
     return (v === 'public' || v === 'protected' || v === 'all') ? v : 'all';
@@ -139,19 +135,13 @@ export default function Brain() {
             <Button variant={tab === 'graph' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('graph')}>{t('brain.viewGraph')}</Button>
             <Button variant={tab === 'list' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('list')}>{t('brain.viewList')}</Button>
           </div>
-          {tab === 'graph' && (
-            <div className="flex gap-1 bg-surface2/70 border border-border rounded-md p-1">
-              <Button size="sm" variant={view === '2d' ? 'primary' : 'ghost'} onClick={() => setView('2d')}>{t('brain.view2d')}</Button>
-              <Button size="sm" variant={view === '3d' ? 'primary' : 'ghost'} onClick={() => setView('3d')}>{t('brain.view3d')}</Button>
-            </div>
-          )}
         </div>
       </div>
 
       {tab === 'graph' ? (
-        <div className="flex gap-0 flex-1 min-h-0">
+        <div className="flex flex-col xl:flex-row gap-0 flex-1 min-h-0">
           {explorerOpen && (
-            <Card className="h-[78vh] shrink-0 p-0 overflow-hidden rounded-r-none border-r-0">
+            <Card className="h-[40vh] xl:h-[78vh] shrink-0 p-0 overflow-hidden xl:rounded-r-none xl:border-r-0">
               <BrainFileExplorer
                 selectedPath={note?.path ?? null}
                 onSelect={(p) => open(p)}
@@ -169,39 +159,24 @@ export default function Brain() {
               />
             </Card>
           )}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-w-0">
-          <Card className={`lg:col-span-2 !p-0 !overflow-hidden h-[78vh] relative isolate min-w-0 ${explorerOpen ? 'rounded-l-none' : ''}`}>
-            {view === '3d' ? (
-              <BrainGraph3DConstellation
-                key={`3d-${graphKey}`}
-                onSelect={open}
-                onDeselect={() => setNote(null)}
-                visibilityFilter={filter}
-                originFilter={originFilter}
-                vaultFilter={vaultFilter}
-                onOriginsChange={setOrigins}
-                onVaultsChange={setVaults}
-                explorerOpen={explorerOpen}
-                onToggleExplorer={() => setExplorerOpen((v) => !v)}
-                focusId={note?.path ?? null}
-                onGoalClick={setOpenGoalId}
-              />
-            ) : (
-              <BrainGraph3D
-                key={`2d-${graphKey}`}
-                onSelect={open}
-                onDeselect={() => setNote(null)}
-                visibilityFilter={filter}
-                originFilter={originFilter}
-                vaultFilter={vaultFilter}
-                onOriginsChange={setOrigins}
-                onVaultsChange={setVaults}
-                explorerOpen={explorerOpen}
-                onToggleExplorer={() => setExplorerOpen((v) => !v)}
-              />
-            )}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 flex-1 min-w-0">
+          <Card className={`xl:col-span-2 !p-0 !overflow-hidden h-[55vh] xl:h-[78vh] relative isolate min-w-0 ${explorerOpen ? 'xl:rounded-l-none' : ''}`}>
+            <BrainGraph3DConstellation
+              key={`3d-${graphKey}`}
+              onSelect={open}
+              onDeselect={() => setNote(null)}
+              visibilityFilter={filter}
+              originFilter={originFilter}
+              vaultFilter={vaultFilter}
+              onOriginsChange={setOrigins}
+              onVaultsChange={setVaults}
+              explorerOpen={explorerOpen}
+              onToggleExplorer={() => setExplorerOpen((v) => !v)}
+              focusId={note?.path ?? null}
+              onGoalClick={setOpenGoalId}
+            />
           </Card>
-          <Card className="h-[78vh] overflow-y-auto">
+          <Card className="h-[55vh] xl:h-[78vh] overflow-y-auto">
             {!note ? (
               <BrainOverview />
             ) : (
