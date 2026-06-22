@@ -7,6 +7,24 @@ import { externalMcpAllowEntries, refreshExternalMcps } from './external_mcps.js
 import { listVaults } from '../brain/vaults.js';
 import { bus } from '../bus.js';
 
+// ── Cap di concorrenza sui sub-processi `claude` (cic. sess.8617) ────────────
+// I task in background (reflection/proactive/vault-*) hanno coda lunga (15-18min);
+// accumulandosi saturavano la macchina → l'OS rifiutava nuovi spawn
+// (posix_spawnp / PTY `/cost` failed) e cresceva il timeout-pileup. Oltre il tetto
+// le run si ACCODANO invece di saturare. Tetto generoso: non blocca i turn utente.
+const MAX_CONCURRENT_CLAUDE = Number(process.env.CLAUDE_MAX_CONCURRENCY) || 4;
+let activeClaude = 0;
+const claudeWaitQueue: Array<() => void> = [];
+function acquireClaudeSlot(): Promise<void> {
+  if (activeClaude < MAX_CONCURRENT_CLAUDE) { activeClaude++; return Promise.resolve(); }
+  return new Promise<void>((res) => { claudeWaitQueue.push(res); });
+}
+function releaseClaudeSlot(): void {
+  const next = claudeWaitQueue.shift();
+  if (next) { next(); }                                   // passa lo slot al prossimo in coda (active invariato)
+  else { activeClaude = Math.max(0, activeClaude - 1); }  // nessuno in attesa → libera lo slot
+}
+
 export type ClaudeRunOptions = {
   cwd?: string;
   timeoutMs?: number;
@@ -200,6 +218,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
   // `result` comes back EMPTY and the real reply is lost (→ "output vuoto"
   // fallback despite a full answer being composed). We recover it from here.
   let lastAssistantText = '';
+  await acquireClaudeSlot();  // cap concorrenza: oltre MAX_CONCURRENT_CLAUDE si accoda (cic. sess.8617)
   const result = await new Promise<{ stdout: string; stderr: string; code: number | null; finalEvent: any | null }>((resolve) => {
     const child = spawn(config.claudeBin, args, {
       cwd: opts.cwd ?? process.cwd(),
@@ -213,6 +232,9 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     const timer = setTimeout(() => {
       console.error(`[runner:u${userId}:${kind}] TIMEOUT after ${timeoutMs}ms — sending SIGTERM`);
       child.kill('SIGTERM');
+      // Escalation: se ignora SIGTERM, SIGKILL dopo 5s → il processo muore davvero
+      // e libera lo slot di concorrenza, niente zombie che bloccano la coda (cic. sess.8617).
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
     }, timeoutMs);
     // External abort signal — caller can pre-empt the run
     if (opts.signal) {
@@ -300,7 +322,7 @@ export async function runClaude(userId: number, prompt: string, opts: ClaudeRunO
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     child.on('close', (code) => { clearTimeout(timer); resolve({ stdout, stderr, code, finalEvent }); });
     child.on('error', (err) => { clearTimeout(timer); resolve({ stdout: '', stderr: String(err), code: null, finalEvent: null }); });
-  });
+  }).finally(() => { releaseClaudeSlot(); });  // libera lo slot a fine run (close/error/timeout)
 
   const durationMs = Date.now() - started;
   const parsed: any = result.finalEvent;

@@ -360,7 +360,7 @@ async function onConnectorEvent(ev: { userId: number; connector: string; kind: s
   try {
     const vault = await getVaultRoot(ev.userId);
     const prompt = await buildProactivePrompt(ev.userId, `${ev.connector}:${ev.kind}`, ev.payload);
-    const res = await runClaude(ev.userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 60_000, kind: 'proactive', meta: { trigger: `${ev.connector}:${ev.kind}` } });
+    const res = await runClaude(ev.userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 180_000, kind: 'proactive', meta: { trigger: `${ev.connector}:${ev.kind}` } });  // 60s→180s: 60s uccideva pure i run normali (max OK 116s, cic. sess.8617)
     if (!res.ok) return;
     const out = res.text.trim();
     if (!out || out === 'SKIP') return;

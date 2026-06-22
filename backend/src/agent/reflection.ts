@@ -134,7 +134,7 @@ TASKS:
    - SKIP: literal 4 chars S K I P. Nothing else.`;
 
   const vault = await getVaultRoot(userId);
-  const res = await runClaude(userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 180_000, kind: 'reflection' });
+  const res = await runClaude(userId, prompt, { cwd: vault ?? process.cwd(), timeoutMs: 600_000, kind: 'reflection' });  // 180s→600s: coda reale fino a ~18min (agent_runs, cic. sess.8617)
   if (!res.ok) { console.log(`[reflection:u${userId}] failed`); return; }
   const out = res.text.trim();
   if (!out || /(^|\n)\s*SKIP\s*($|\n)/i.test(out) || out.toUpperCase().trim() === 'SKIP') {
