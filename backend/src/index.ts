@@ -50,6 +50,16 @@ async function main() {
   await refreshExternalMcps();
   setInterval(() => { refreshExternalMcps().catch(() => {}); }, 60 * 60_000);
 
+  // TUTTO il lavoro in background (scheduler, cron, bot Telegram, orchestratore,
+  // sessioni WA/IG) parte SOLO dopo che la porta è stata bindata con successo —
+  // vedi listenWithRetry. Così un secondo processo che NON riesce a bindare
+  // (orfano, doppia istanza durante un hot-reload) NON avvia i suoi scheduler e
+  // non manda notifiche duplicate ("kickoff 4×", "snapshot 30×"). È l'istanza
+  // proprietaria della porta l'UNICA a schedulare.
+  let backgroundStarted = false;
+  async function startBackgroundWork() {
+    if (backgroundStarted) return;
+    backgroundStarted = true;
   startOrchestrator();
   await startScheduler();
   const flows = await import('./flows/index.js');
@@ -106,6 +116,7 @@ async function main() {
       try { await ig.startIgForUser(uid); } catch (err) { console.error(`[ig:u${uid}] boot start failed`, err); }
     }
   } catch (e) { console.error('[ig] boot scan failed', e); }
+  } // ← fine startBackgroundWork
 
   if (config.devAutoLogin) {
     console.warn('⚠️  [auth] DEV_AUTOLOGIN attivo — login BYPASSATO, auto-auth come utente locale. NON usare in produzione/distribuzione.');
@@ -130,6 +141,9 @@ async function main() {
     server.listen(config.port, config.host, () => {
       server.off('error', onErr);
       console.log(`[backend] http://${config.host}:${config.port}`);
+      // SOLO ora che possediamo la porta avviamo scheduler/cron/bot → niente
+      // duplicati da istanze concorrenti che non bindano.
+      void startBackgroundWork();
     });
   }
   listenWithRetry();

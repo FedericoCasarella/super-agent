@@ -49,14 +49,36 @@ export default function Agents() {
   const itemsRef = useRef<Agent[]>([]);
   useEffect(() => { itemsRef.current = items; }, [items]);
 
+  // Aggiorna in modo OTTIMISTICO un agente (switch reattivo subito). Tiene
+  // itemsRef sincrono così il refetch del DataTable (triggerato dal cambio di
+  // refreshKey) legge già il valore nuovo, niente race con l'effetto di sync.
+  function patchItem(name: string, patch: Partial<Agent>) {
+    const next = itemsRef.current.map((x) => (x.name === name ? { ...x, ...patch } : x));
+    itemsRef.current = next;
+    setItems(next);
+  }
   async function toggleNotify(a: Agent) {
-    await api.updateInternalAgent(a.name, { notify_on_run: !a.notify_on_run });
-    toast.push(`${a.title} — notifiche ${!a.notify_on_run ? 'on' : 'off'}`, !a.notify_on_run ? 'on' : 'warn');
+    const next = !a.notify_on_run;
+    patchItem(a.name, { notify_on_run: next }); // ottimistico
+    try {
+      await api.updateInternalAgent(a.name, { notify_on_run: next });
+      toast.push(`${a.title} — notifiche ${next ? 'on' : 'off'}`, next ? 'on' : 'warn');
+    } catch (e: any) {
+      patchItem(a.name, { notify_on_run: a.notify_on_run }); // rollback
+      toast.push(String(e?.message ?? e), 'err');
+    }
     load();
   }
   async function toggle(a: Agent) {
-    await api.updateInternalAgent(a.name, { enabled: !a.enabled });
-    toast.push(`${a.title} ${!a.enabled ? 'enabled' : 'disabled'}`, !a.enabled ? 'on' : 'warn');
+    const next = !a.enabled;
+    patchItem(a.name, { enabled: next }); // ottimistico
+    try {
+      await api.updateInternalAgent(a.name, { enabled: next });
+      toast.push(`${a.title} ${next ? 'enabled' : 'disabled'}`, next ? 'on' : 'warn');
+    } catch (e: any) {
+      patchItem(a.name, { enabled: a.enabled }); // rollback
+      toast.push(String(e?.message ?? e), 'err');
+    }
     load();
   }
   async function run(a: Agent, e: React.MouseEvent) {
@@ -179,7 +201,7 @@ export default function Agents() {
           rowKey={(a) => a.id}
           onRowClick={(a) => nav(`/perks/${a.name}`)}
           emptyText={t('agents.noAgents')}
-          refreshKey={items.length}
+          refreshKey={items.map((a) => `${a.name}:${a.enabled ? 1 : 0}:${a.notify_on_run ? 1 : 0}`).join(',')}
         />
       ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

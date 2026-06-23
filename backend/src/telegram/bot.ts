@@ -65,13 +65,25 @@ function toTelegramHtml(raw: string): string {
     return wrap(`<code>${escapeHtml(m)}</code>`);
   });
   let s = pre.replace(/```([\s\S]*?)```/g, (_m, code) => wrap(`<pre>${escapeHtml(code)}</pre>`));
-  s = s.replace(/`([^`\n]+)`/g, (_m, code) => wrap(`<code>${escapeHtml(code)}</code>`));
+  s = s.replace(/`([^`\n]+)`/g, (_m, code) =>
+    // Se il contenuto è già una sentinella (es. un path .md protetto prima),
+    // non ri-wrappare in <code> → niente <code> annidato. Tieni il blocco interno.
+    code.includes(SENTINEL) ? code : wrap(`<code>${escapeHtml(code)}</code>`),
+  );
   s = escapeHtml(s);
   s = s.replace(/\*\*([^\n*]+)\*\*/g, '<b>$1</b>');
   s = s.replace(/(^|[\s(])\*([^\n*]+)\*/g, '$1<i>$2</i>');
   s = s.replace(/(^|[\s(])_([^\n_]+)_/g, '$1<i>$2</i>');
+  // Ripristino ITERATIVO: i blocchi possono annidarsi (es. il wrapper `.md`
+  // protegge un path che poi finisce dentro un wrapper inline-code → sentinella
+  // dentro sentinella). Un solo passaggio lascerebbe la sentinella interna
+  // intatta e l'utente vedrebbe il suo indice numerico (es. "/1"). Espandi
+  // finché non restano sentinelle.
   const re = new RegExp(`${SENTINEL}(\\d+)${SENTINEL}`, 'g');
-  s = s.replace(re, (_m, i) => blocks[Number(i)]);
+  let guard = 0;
+  while (s.includes(SENTINEL) && guard++ < 25) {
+    s = s.replace(re, (_m, i) => blocks[Number(i)] ?? '');
+  }
   return s;
 }
 
@@ -912,6 +924,18 @@ export async function sendEmailDraftKeyboard(userId: number, draft: { id: number
   // Plain text — NO Markdown, NO code-block. Markdown on a raw email body breaks
   // rendering (stray *, _, ` chars) and the ``` fence showed it as "codice".
   // Full body, never truncated — user reads the whole email before sending.
+  // Il body può essere HTML (firma casella allegata): mostra una versione
+  // testuale leggibile nell'anteprima, niente tag grezzi.
+  const bodyText = /<[a-z!][\s\S]*?>/i.test(draft.body)
+    ? draft.body
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|tr|h[1-6]|li)>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+    : draft.body;
   const header = [
     '✉️ Bozza email pronta',
     '',
@@ -926,7 +950,7 @@ export async function sendEmailDraftKeyboard(userId: number, draft: { id: number
       { text: '❌ Scarta', callback_data: `email_draft:${draft.id}:deny` },
     ]],
   };
-  const full = `${header}${draft.body}\n\nInvio?`;
+  const full = `${header}${bodyText}\n\nInvio?`;
   const TG_LIMIT = 4096;
   try {
     // Common case: fits in one message → header + body + keyboard together.
@@ -936,7 +960,7 @@ export async function sendEmailDraftKeyboard(userId: number, draft: { id: number
     }
     // Long email: send header + body in plain chunks (no truncation), then a
     // short message carrying the keyboard so the buttons attach to the tail.
-    const blob = `${header}${draft.body}`;
+    const blob = `${header}${bodyText}`;
     for (let i = 0; i < blob.length; i += TG_LIMIT) {
       await entry.bot.telegram.sendMessage(chatId, blob.slice(i, i + TG_LIMIT));
     }

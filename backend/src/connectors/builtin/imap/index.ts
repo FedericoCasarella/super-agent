@@ -43,6 +43,7 @@ type Account = {
   smtpUser?: string;
   smtpPass?: string;
   smtpFromName?: string;
+  signature?: string; // firma HTML per-casella (allegata alle bozze)
 };
 
 export type EmailDraft = {
@@ -144,14 +145,46 @@ async function safeAttachmentPaths(paths: string[]): Promise<string[]> {
 }
 // ----------------------------------------------------------------------------
 
+// Firma HTML della casella: config connettore (accounts[i].signature) con
+// fallback alla vecchia setting mail.signature.<label>.
+async function accountSignatureHtml(userId: number, accountLabel: string, acc?: Account): Promise<string> {
+  let html = (acc?.signature ?? '').trim();
+  if (!html) {
+    const legacy = await getSetting<{ html: string }>(userId, `mail.signature.${accountLabel}`);
+    html = (legacy?.html ?? '').trim();
+  }
+  return html;
+}
+
+const BODY_HAS_HTML = /<\/?(?:p|div|br|a|span|table|tr|td|h[1-6]|ul|ol|li|img|b|strong|i|em|blockquote|font|style)\b[^>]*>/i;
+// Converte un corpo testuale in HTML preservando gli a-capo (così la firma HTML
+// allegata non "appiattisce" il testo dell'agente quando l'email parte come HTML).
+function plainBodyToHtml(text: string): string {
+  return text.split('\n')
+    .map((l) => `<div>${l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || '<br>'}</div>`)
+    .join('');
+}
+// Allega la firma della casella al corpo della bozza (idempotente).
+function appendSignature(body: string, signatureHtml: string): string {
+  if (!signatureHtml) return body;
+  if (/class=["']mail-signature["']/.test(body)) return body; // già presente
+  const bodyHtml = BODY_HAS_HTML.test(body) ? body : plainBodyToHtml(body);
+  return `${bodyHtml}\n<div class="mail-signature" style="margin-top:24px;color:#444;font-size:13px;">${signatureHtml}</div>`;
+}
+
 export async function createDraft(userId: number, accountLabel: string, draft: {
   to: string; cc?: string; bcc?: string; subject: string; body: string; inReplyTo?: string; references?: string; attachments?: string[];
 }): Promise<EmailDraft> {
   const accs = await getAccountsForUser(userId);
-  if (!accs.find((a) => a.label === accountLabel)) {
+  const acc = accs.find((a) => a.label === accountLabel);
+  if (!acc) {
     const avail = accs.map((a) => `${a.label} (${a.user})`).join(', ') || 'nessuna casella configurata';
     throw new Error(`Casella "${accountLabel}" non configurata. Usa SOLO una di queste caselle dell'estensione email: ${avail}`);
   }
+  // Allega SEMPRE la firma della casella mittente → presente sia se l'utente
+  // invia dalla UI sia se l'agente manda in automatico.
+  const signatureHtml = await accountSignatureHtml(userId, accountLabel, acc);
+  draft = { ...draft, body: appendSignature(draft.body, signatureHtml) };
   // Store the resolved real paths so send-time reads exactly what was validated.
   const safePaths = draft.attachments?.length ? await safeAttachmentPaths(draft.attachments) : [];
   // meta column is JSONB NOT NULL — never pass null. Always serialize an

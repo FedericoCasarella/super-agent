@@ -150,7 +150,13 @@ export default function Tasks() {
   }
 
   async function toggle(task: Task) {
-    await api.taskUpdate(task.id, { enabled: !task.enabled });
+    const next = !task.enabled;
+    setItems((prev) => prev.map((x) => (x.id === task.id ? { ...x, enabled: next } : x))); // ottimistico
+    try { await api.taskUpdate(task.id, { enabled: next }); }
+    catch (e: any) {
+      setItems((prev) => prev.map((x) => (x.id === task.id ? { ...x, enabled: task.enabled } : x))); // rollback
+      toast.push(String(e?.message ?? e), 'err');
+    }
     load();
   }
   async function remove(task: Task) {
@@ -227,7 +233,7 @@ export default function Tasks() {
             const start = page * pageSize;
             return { rows: rows.slice(start, start + pageSize), total };
           }}
-          refreshKey={items.length /* re-fetch when toggle/run/delete reload() */}
+          refreshKey={items.map((x) => `${x.id}:${x.enabled ? 1 : 0}`).join(',') /* re-fetch su toggle/run/delete */}
           rowKey={(t) => t.id}
           searchPlaceholder="Cerca per nome, cron, ultimo risultato…"
           chipFilters={[
