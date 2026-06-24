@@ -29,6 +29,17 @@ function uniq<T>(a: T[]): T[] {
   return [...new Set(a)];
 }
 
+// Radici esterne ai 3 brain ma che ospitano file-target legittimi (location-doc):
+// un puntatore "fonte di verità" verso uno di questi non è rotto. Oggi: i workflow
+// Shopify NSA. Override/estensione via env (lista separata da ':').
+export const EXTRA_RESOLVE_ROOTS: string[] = (
+  process.env.SYNC_EXTRA_RESOLVE_ROOTS ??
+  '/Users/marcoorsi/Documents/shopify workflows'
+)
+  .split(':')
+  .map((p) => p.trim())
+  .filter(Boolean);
+
 // Zone a segnale debole / auto-generate: non sono fonti autorevoli (vedi
 // CLAUDE.md del vault). I loro contenuti non vanno trattati come conflitti.
 const SKIP_ZONE = /^(dreams|garden|library|archive|_log|thoughts)\//;
@@ -165,14 +176,18 @@ export async function runSyncDetection(
   const dryRun = opts.dryRun !== false; // default: dry-run, non scrive
   const facts = await collectAllFacts(userId);
 
-  // Set di file noti (vault + memory) per risolvere i target dei puntatori.
+  // Set di file noti per risolvere i target dei puntatori: vault + memory +
+  // location-doc esterne note (es. i workflow Shopify NSA), così un riferimento
+  // a un file che vive fuori dai brain ma esiste non viene segnalato "rotto".
   const allFiles: string[] = [];
   const primary = await getPrimaryVault(userId);
   if (primary?.path) allFiles.push(...(await listMdPaths(primary.path)));
-  try {
-    await fs.access(CLAUDE_MEMORY_ROOT);
-    allFiles.push(...(await listMdPaths(CLAUDE_MEMORY_ROOT)));
-  } catch {}
+  for (const extra of [CLAUDE_MEMORY_ROOT, ...EXTRA_RESOLVE_ROOTS]) {
+    try {
+      await fs.access(extra);
+      allFiles.push(...(await listMdPaths(extra)));
+    } catch {}
+  }
 
   const conflicts = detectConflicts(facts);
   const brokenPointers = detectBrokenPointers(facts, allFiles);
