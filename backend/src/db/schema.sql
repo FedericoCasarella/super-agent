@@ -892,14 +892,17 @@ CREATE INDEX IF NOT EXISTS thoughts_user_ts_idx ON thoughts(user_id, ts DESC);
 CREATE TABLE IF NOT EXISTS brain_proposals (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('merge','distill','prune','link')),
+  kind TEXT NOT NULL CHECK (kind IN ('merge','distill','prune','link','sync-pointer','sync-conflict','sync-missing')),
   title TEXT NOT NULL,                 -- riga breve mostrata in lista
   description TEXT,                    -- spiegazione della proposta
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-  -- merge:   { sources: [path...], target_path, content }    → scrive target, archivia sources
-  -- distill: { sources: [path...], target_path, content }    → scrive profilo distillato, linka sources
-  -- prune:   { sources: [path...] }                          → sposta in archive/<data>/
-  -- link:    { path, related: [path...] }                    → aggiunge related: al frontmatter
+  -- merge:        { sources: [path...], target_path, content } → scrive target, archivia sources
+  -- distill:      { sources: [path...], target_path, content } → scrive profilo distillato, linka sources
+  -- prune:        { sources: [path...] }                       → sposta in archive/<data>/
+  -- link:         { path, related: [path...] }                 → aggiunge related: al frontmatter
+  -- sync-conflict:{ group_key, entity, owner, values, stores } → riconcilia valori divergenti (Brain Sync)
+  -- sync-pointer: { group_key, source_path, target, store }    → puntatore "fonte di verità" rotto (Brain Sync)
+  -- sync-missing: { group_key, entity, owner, missing_in }     → fatto dell'owner non referenziato altrove (Brain Sync)
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','applied','rejected')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   resolved_at TIMESTAMPTZ

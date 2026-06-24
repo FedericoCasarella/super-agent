@@ -11,7 +11,7 @@ import { getVaultRoot, readNote, writeNote } from './vault.js';
 
 export type Proposal = {
   id: number;
-  kind: 'merge' | 'distill' | 'prune' | 'link';
+  kind: 'merge' | 'distill' | 'prune' | 'link' | 'sync-pointer' | 'sync-conflict' | 'sync-missing';
   title: string;
   description: string | null;
   payload: any;
@@ -130,6 +130,9 @@ export async function applyProposal(userId: number, id: number): Promise<{ ok: b
       const merged = [...new Set([...existing, ...((pl.related ?? []) as string[])])];
       await writeNote(userId, rel, { ...(note.data ?? {}), related: merged }, note.content);
       result.linked = { path: rel, related: merged };
+    } else if (p.kind.startsWith('sync-')) {
+      // Proposte del Brain Sync: l'apply handler arriva nello step 3.
+      return { ok: false, error: 'apply delle proposte Brain Sync non ancora disponibile (step 3)' };
     } else {
       return { ok: false, error: `kind sconosciuto: ${p.kind}` };
     }

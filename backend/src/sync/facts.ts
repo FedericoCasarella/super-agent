@@ -200,6 +200,11 @@ async function extractMarkdownFacts(root: string, store: SyncStore): Promise<Fac
   return facts;
 }
 
+// Elenco dei path .md relativi di un root (per risolvere i target dei puntatori).
+export async function listMdPaths(root: string): Promise<string[]> {
+  return (await walkMarkdown(root)).map((f) => f.rel);
+}
+
 // ── Raccolta unificata ──────────────────────────────────────────────────────
 export async function collectAllFacts(userId: number): Promise<Fact[]> {
   const facts: Fact[] = [];
