@@ -4,6 +4,11 @@ import { bus } from '../bus.js';
 
 type BotEntry = { bot: Telegraf; token: string };
 const bots = new Map<number, BotEntry>(); // userId → bot
+// In-flight start dedupe: eager startAllTelegramBots() and lazy start-on-send
+// can race during boot, both passing the bots.get() guard before either sets
+// the entry → two Telegraf instances polling the same token → permanent 409.
+// Coalesce concurrent starts for a user onto a single promise.
+const starting = new Map<number, Promise<void>>(); // userId → in-flight start
 
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -46,7 +51,15 @@ function toTelegramHtml(raw: string): string {
   return s;
 }
 
-async function startBotForUser(userId: number) {
+function startBotForUser(userId: number): Promise<void> {
+  const inflight = starting.get(userId);
+  if (inflight) return inflight;
+  const p = _startBotForUser(userId).finally(() => starting.delete(userId));
+  starting.set(userId, p);
+  return p;
+}
+
+async function _startBotForUser(userId: number) {
   const cfg = await getSetting<{ token: string; chatId?: number }>(userId, 'telegram');
   if (!cfg?.token) return;
   const existing = bots.get(userId);
