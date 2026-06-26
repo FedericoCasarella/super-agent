@@ -2112,6 +2112,23 @@ router.get('/mcp/external', async (req, res) => {
 // Claude plan + 5h session usage — letto direttamente dai jsonl di Claude Code
 // (~/.claude/projects/**/*.jsonl) per allineamento 1:1 con /cost del TUI.
 let usageCache: { ts: number; data: any } | null = null;
+
+// Converte l'orario di reset di `/cost` (es. "3:30pm") nel prossimo timestamp
+// assoluto ISO. Ora locale del processo. Se l'orario è già passato oggi → domani.
+function parseResetClock(s?: string | null): string | null {
+  if (!s) return null;
+  const m = String(s).trim().match(/^(\d{1,2}):(\d{2})\s*([ap])\.?m\.?$/i);
+  if (!m) return null;
+  let h = Number(m[1]) % 12;
+  if (m[3].toLowerCase() === 'p') h += 12;
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  const now = new Date();
+  const r = new Date(now);
+  r.setHours(h, min, 0, 0);
+  if (r.getTime() <= now.getTime()) r.setDate(r.getDate() + 1);
+  return r.toISOString();
+}
 router.get('/usage', async (req, res) => {
   const userId = req.user!.id;
   // Default sessionLimitTokens matches ccusage `totalTokens` scale (cache_read dominates,
@@ -2305,6 +2322,12 @@ router.get('/usage', async (req, res) => {
   const sessionPct = Number(claudeCost?.sessionPct ?? 0);
   const weekPct = Number(claudeCost?.weekPct ?? 0);
   const locked = sessionPct >= 95;
+  // Il reset AUTOREVOLE è quello che Claude `/cost` mostra ("Resets 3:30pm") —
+  // è il vero reset del limite di sessione. La stima dal blocco 5h di ccusage
+  // (msg più vecchio + 5h) spesso non coincide e mostrava un orario sbagliato.
+  // Se /cost ci ha dato l'orario, convertilo in timestamp assoluto e usalo.
+  const costReset = parseResetClock(claudeCost?.resetAt);
+  if (costReset) resetAt = costReset;
   const data = { usedTokens, resetAt, costUsd, burnRate, breakdown, autoBudget, claudeCost, sessionPct, weekPct, locked };
   usageCache = { ts: Date.now(), data };
   // Record into quota module so guards on other endpoints see fresh value.

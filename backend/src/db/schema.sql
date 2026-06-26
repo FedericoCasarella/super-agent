@@ -394,6 +394,17 @@ CREATE TABLE IF NOT EXISTS wa_contacts (
 );
 CREATE INDEX IF NOT EXISTS wa_contacts_user_idx ON wa_contacts(user_id);
 
+-- Sessione/credenziali Baileys persistite in DB (prima erano solo su file e si
+-- perdevano a ogni wipe/riavvio sfortunato → forzava un nuovo QR). doc_id =
+-- 'creds' per le credenziali, '<type>-<id>' per le signal keys.
+CREATE TABLE IF NOT EXISTS wa_auth (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  doc_id TEXT NOT NULL,
+  data JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, doc_id)
+);
+
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wa_contacts' AND column_name='lid') THEN
     ALTER TABLE wa_contacts ADD COLUMN lid TEXT;

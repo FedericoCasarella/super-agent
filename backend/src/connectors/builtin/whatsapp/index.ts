@@ -3,7 +3,18 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import QR from 'qrcode';
 import pino from 'pino';
-import baileysPkg, { useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion, type WASocket, type proto } from '@whiskeysockets/baileys';
+import baileysPkg, { DisconnectReason, Browsers, fetchLatestBaileysVersion, type WASocket } from '@whiskeysockets/baileys';
+import type { proto as WAProto } from '@whiskeysockets/baileys';
+// `proto`, `initAuthCreds`, `BufferJSON` non sono named-export affidabili nella
+// vista ESM (baileys è CJS) e il default export è `makeWASocket` (funzione),
+// NON il namespace → `default.initAuthCreds` è undefined. Prendili dal modulo
+// CJS reale via require.
+import { createRequire } from 'node:module';
+const _require = createRequire(import.meta.url);
+const _bly: any = _require('@whiskeysockets/baileys');
+const initAuthCreds: () => any = _bly.initAuthCreds;
+const BufferJSON: { replacer: any; reviver: any } = _bly.BufferJSON;
+const proto: any = _bly.proto;
 const makeWASocket: any = (baileysPkg as any).default ?? baileysPkg;
 import { Boom } from '@hapi/boom';
 import type { Connector } from '../../types.js';
@@ -38,6 +49,89 @@ const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL ?? 'silent' });
 
 function sessionDir(userId: number): string {
   return path.join(os.homedir(), '.super-agent', 'wa-sessions', `u${userId}`);
+}
+
+// Auth-state Baileys persistito su Postgres (tabella wa_auth) invece che su
+// file. Sopravvive a riavvii e wipe della cartella → niente nuovo QR ogni volta
+// che la sessione su disco si perde. doc_id='creds' per le credenziali,
+// '<type>-<id>' per le signal keys. I valori contengono Buffer → serializzati
+// con BufferJSON.replacer/reviver.
+async function useDbAuthState(userId: number): Promise<{ state: any; saveCreds: () => Promise<void> }> {
+  const readDoc = async (id: string): Promise<any | null> => {
+    const r = await query<{ data: any }>(`SELECT data FROM wa_auth WHERE user_id=$1 AND doc_id=$2`, [userId, id]);
+    if (!r[0]) return null;
+    return JSON.parse(JSON.stringify(r[0].data), BufferJSON.reviver);
+  };
+  const writeDoc = async (id: string, value: any): Promise<void> => {
+    const data = JSON.stringify(value, BufferJSON.replacer);
+    await query(
+      `INSERT INTO wa_auth(user_id, doc_id, data) VALUES($1,$2,$3::jsonb)
+       ON CONFLICT(user_id, doc_id) DO UPDATE SET data=$3::jsonb, updated_at=now()`,
+      [userId, id, data],
+    );
+  };
+  const removeDoc = async (id: string): Promise<void> => {
+    await query(`DELETE FROM wa_auth WHERE user_id=$1 AND doc_id=$2`, [userId, id]);
+  };
+  const creds = (await readDoc('creds')) || initAuthCreds();
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type: string, ids: string[]) => {
+          const out: Record<string, any> = {};
+          await Promise.all(ids.map(async (id) => {
+            let v = await readDoc(`${type}-${id}`);
+            if (type === 'app-state-sync-key' && v) v = proto.Message.AppStateSyncKeyData.fromObject(v);
+            if (v !== null && v !== undefined) out[id] = v;
+          }));
+          return out;
+        },
+        set: async (data: Record<string, Record<string, any>>) => {
+          const tasks: Promise<void>[] = [];
+          for (const type of Object.keys(data)) {
+            for (const id of Object.keys(data[type])) {
+              const val = (data[type] as any)[id];
+              const docId = `${type}-${id}`;
+              tasks.push(val ? writeDoc(docId, val) : removeDoc(docId));
+            }
+          }
+          await Promise.all(tasks);
+        },
+      },
+    },
+    saveCreds: () => writeDoc('creds', creds),
+  };
+}
+
+// Cancella l'auth WA dal DB (logout reale o reset) → prossimo pairing pulito.
+async function clearDbAuthState(userId: number): Promise<void> {
+  await query(`DELETE FROM wa_auth WHERE user_id=$1`, [userId]).catch(() => {});
+}
+
+// Migrazione one-shot: se esistono ancora file Baileys su disco (vecchia
+// implementazione) e il DB non ha ancora le creds, importa creds + key file in
+// wa_auth, poi rimuove la cartella. Best-effort: se fallisce si ripartirà dal QR.
+async function migrateFileAuthToDb(userId: number): Promise<void> {
+  const existing = await query<{ c: number }>(`SELECT count(*)::int AS c FROM wa_auth WHERE user_id=$1 AND doc_id='creds'`, [userId]);
+  if ((existing[0]?.c ?? 0) > 0) return; // già su DB
+  const dir = sessionDir(userId);
+  const entries = await fs.readdir(dir).catch(() => [] as string[]);
+  const files = entries.filter((e) => e.endsWith('.json'));
+  if (!files.length) return;
+  for (const f of files) {
+    try {
+      const raw = await fs.readFile(path.join(dir, f), 'utf8');
+      const docId = f.replace(/\.json$/, ''); // 'creds' oppure '<type>-<id>'
+      await query(
+        `INSERT INTO wa_auth(user_id, doc_id, data) VALUES($1,$2,$3::jsonb)
+         ON CONFLICT(user_id, doc_id) DO UPDATE SET data=$3::jsonb, updated_at=now()`,
+        [userId, docId, raw],
+      );
+    } catch { /* salta il file rotto */ }
+  }
+  await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  dlog(`[wa:u${userId}] migrated ${files.length} file auth → DB`);
 }
 
 function jidToPhone(jid: string): string {
@@ -83,31 +177,13 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
     try { existing.sock.end(undefined); } catch {}
     sessions.delete(userId);
   }
-  const dir = sessionDir(userId);
-  await fs.mkdir(dir, { recursive: true });
-  // Detect partial / corrupt creds — if creds.json missing or registered=false but other key files present, wipe.
-  try {
-    const credsPath = path.join(dir, 'creds.json');
-    let needsWipe = false;
-    try {
-      const raw = await fs.readFile(credsPath, 'utf8');
-      const j = JSON.parse(raw);
-      if (!j?.noiseKey || !j?.signedIdentityKey) needsWipe = true;
-    } catch {
-      // creds.json missing — check if other key files exist (orphan state)
-      const entries = await fs.readdir(dir).catch(() => [] as string[]);
-      if (entries.some((e) => e.endsWith('.json'))) needsWipe = true;
-    }
-    if (needsWipe) {
-      dlog(`[wa:u${userId}] partial/orphan creds detected, wiping ${dir}`);
-      await fs.rm(dir, { recursive: true, force: true });
-      await fs.mkdir(dir, { recursive: true });
-    }
-  } catch {}
-  // 60s cooldown between rapid pairing attempts — WA rate-limits and returns 401
+  // Cooldown breve fra tentativi rapidi di pairing — WA rate-limita (401).
   await new Promise((r) => setTimeout(r, 1500));
-  const { state, saveCreds } = await useMultiFileAuthState(dir);
-  dlog(`[wa:u${userId}] auth state loaded, registered=${(state.creds as any)?.registered ?? false}`);
+  // Auth-state da Postgres (persistente). Migrazione one-shot da eventuali file
+  // creds.json residui della vecchia implementazione su disco.
+  await migrateFileAuthToDb(userId).catch(() => {});
+  const { state, saveCreds } = await useDbAuthState(userId);
+  dlog(`[wa:u${userId}] auth state loaded (db), registered=${(state.creds as any)?.registered ?? false}`);
   // Pull latest supported WA Web protocol version
   let version: [number, number, number] | undefined;
   try {
@@ -188,6 +264,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
       // Wipe local rows so next pair starts clean (no @lid duplicate stacking).
       if (code === DisconnectReason.loggedOut) {
         try {
+          await clearDbAuthState(userId); // creds non più valide → pairing pulito al prossimo start
           const dm = await query<{ c: number }>(`WITH d AS (DELETE FROM wa_messages WHERE user_id=$1 RETURNING 1) SELECT count(*)::int AS c FROM d`, [userId]);
           const dc = await query<{ c: number }>(`WITH d AS (DELETE FROM wa_contacts WHERE user_id=$1 RETURNING 1) SELECT count(*)::int AS c FROM d`, [userId]);
           dlog(`[wa:u${userId}] loggedOut wipe: ${dm[0]?.c ?? 0} messages, ${dc[0]?.c ?? 0} contacts removed`);
@@ -318,7 +395,7 @@ export async function startWaForUser(userId: number): Promise<{ ok: boolean; sta
   return { ok: true, status: 'starting' };
 }
 
-function extractText(m: proto.IMessage): string {
+function extractText(m: WAProto.IMessage): string {
   if (m.conversation) return m.conversation;
   if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
   if (m.imageMessage?.caption) return `[immagine] ${m.imageMessage.caption}`;
@@ -329,7 +406,7 @@ function extractText(m: proto.IMessage): string {
   return '';
 }
 
-async function ingestMessage(userId: number, msg: proto.IWebMessageInfo) {
+async function ingestMessage(userId: number, msg: WAProto.IWebMessageInfo) {
   const text = extractText(msg.message!);
   const key = msg.key ?? {};
   const fromMe = !!key.fromMe;
@@ -1323,6 +1400,7 @@ export async function logoutWaForUser(userId: number): Promise<void> {
   if (s) { try { await s.sock.logout(); } catch {} }
   sessions.delete(userId);
   try { await fs.rm(sessionDir(userId), { recursive: true, force: true }); } catch {}
+  await clearDbAuthState(userId);
   bus.emit('wa:closed', { userId, code: 'logout' });
 }
 

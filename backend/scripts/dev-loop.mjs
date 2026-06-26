@@ -66,13 +66,23 @@ function onHealthMiss(reason) {
 
 function killChild(signal) {
   if (!child || child.killed) return;
-  try { child.kill(signal); } catch {}
+  const pid = child.pid;
+  // Il child è `node tsx/dist/cli.mjs` che a sua volta spawna il VERO server
+  // (`node --require preflight … src/index.ts`). child.kill() colpisce solo il
+  // wrapper tsx → il server-grandchild resta orfano (ppid 1) e continua a girare
+  // → istanze duplicate. Con detached:true il child è capostipite del suo
+  // process group, quindi `process.kill(-pid)` abbatte TUTTO l'albero.
+  const send = (sig) => {
+    try { process.kill(-pid, sig); }
+    catch { try { child.kill(sig); } catch {} }
+  };
+  send(signal);
   // Backstop: if SIGTERM doesn't deliver an exit in 3s, escalate.
   if (signal !== 'SIGKILL') {
     setTimeout(() => {
       if (child && !child.exitCode && !child.killed) {
         console.warn('[dev-loop] child ignored SIGTERM — escalating to SIGKILL');
-        try { child.kill('SIGKILL'); } catch {}
+        send('SIGKILL');
       }
     }, 3000).unref?.();
   }
@@ -85,7 +95,10 @@ function spawnChild() {
   child = spawn(
     process.execPath,
     [tsxBin, 'src/index.ts'],   // no `watch` — this script owns reloading
-    { stdio: 'inherit', env: process.env },
+    // detached:true → il child diventa leader del proprio process group, così
+    // killChild può abbattere l'intero albero (wrapper tsx + server reale) e
+    // non lasciare orfani.
+    { stdio: 'inherit', env: process.env, detached: true },
   );
   child.on('exit', (code, signal) => {
     if (shuttingDown) return;

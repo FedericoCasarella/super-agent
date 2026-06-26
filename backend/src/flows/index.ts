@@ -361,8 +361,26 @@ let busAttached = false;
 export function attachFlowDispatchers() {
   if (busAttached) return;
   busAttached = true;
-  // WhatsApp incoming
-  bus.on('wa:message', (m: any) => { if (m?.userId) dispatchTrigger('whatsapp.received', m.userId, m); });
+  // WhatsApp incoming. Il payload bus ha i campi NIDIFICATI sotto `msg`, ma i
+  // template dei flow usano {{trigger.text}}/{{trigger.sender}}/{{trigger.chatName}}
+  // → aggiungo alias FLAT così i flow ricevono i dati (prima erano sempre vuoti
+  // → l'agente rispondeva "silenzio" a ogni messaggio). Salto i messaggi MIEI
+  // (from_me) e quelli senza testo: niente triage a vuoto.
+  bus.on('wa:message', (m: any) => {
+    if (!m?.userId) return;
+    const msg = m.msg ?? {};
+    if (msg.from_me) return;                       // non triagare i miei stessi messaggi
+    if (!String(msg.text ?? '').trim()) return;    // niente testo → niente da valutare
+    dispatchTrigger('whatsapp.received', m.userId, {
+      ...m,
+      text: msg.text ?? '',
+      sender: msg.sender_name ?? msg.sender_phone ?? msg.sender_jid ?? '',
+      senderPhone: msg.sender_phone ?? '',
+      chatName: msg.is_group ? (msg.group_jid ?? msg.chat_jid ?? '') : (msg.sender_name ?? msg.chat_jid ?? ''),
+      isGroup: !!msg.is_group,
+      personSlug: msg.person_slug ?? null,
+    });
+  });
   // Instagram DM incoming
   bus.on('ig:message', (m: any) => { if (m?.userId) dispatchTrigger('instagram.received', m.userId, m); });
   // Telegram incoming

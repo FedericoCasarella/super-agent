@@ -27,8 +27,14 @@ export default function FlowsPage() {
     catch (e: any) { toast.push(e.message, 'err'); }
   }
   async function toggle(f: FlowRow) {
-    try { await api.flowUpdate(f.id, { enabled: !f.enabled }); load(); }
-    catch (e: any) { toast.push(e.message, 'err'); }
+    const next = !f.enabled;
+    setItems((prev) => prev.map((x) => (x.id === f.id ? { ...x, enabled: next } : x))); // ottimistico
+    try { await api.flowUpdate(f.id, { enabled: next }); }
+    catch (e: any) {
+      setItems((prev) => prev.map((x) => (x.id === f.id ? { ...x, enabled: f.enabled } : x))); // rollback
+      toast.push(e.message, 'err');
+    }
+    load();
   }
   async function del(f: FlowRow) {
     const ok = await dlg.confirm(`Archiviare il flow "${f.name}"?`, { title: 'Conferma archiviazione', tone: 'danger', confirmLabel: 'Archivia' });
@@ -47,7 +53,7 @@ export default function FlowsPage() {
 
       <DataTable<FlowRow>
         persistKey="flows"
-        refreshKey={items.length}
+        refreshKey={items.map((x) => `${x.id}:${x.enabled ? 1 : 0}`).join(',')}
         fetcher={async ({ q, page, pageSize, filters, sort }) => {
           let rows = items;
           const state = filters.state ?? [];
