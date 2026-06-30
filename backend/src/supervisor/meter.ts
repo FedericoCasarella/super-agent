@@ -32,7 +32,10 @@ export type AutoCloseRate = {
 
 export async function computeAutoCloseRate(userId: number, windowDays = WINDOW_DAYS): Promise<AutoCloseRate> {
   const sinceMs = Date.now() - windowDays * 86_400_000;
-  const closed = await getRecentlyClosedTasks(sinceMs);
+  // Escludi le task `cancelled` dal denominatore: sono chiuse ma annullate, mai
+  // candidate alla chiusura automatica — inflazionerebbero il target. Conta solo
+  // il lavoro davvero completato (es. `completato`).
+  const closed = (await getRecentlyClosedTasks(sinceMs)).filter((t) => !/cancel/i.test(t.status));
   const base = { windowDays, computedAt: new Date().toISOString() };
   if (closed.length === 0) return { ...base, closed: 0, auto: 0, rate: 0 };
 
