@@ -163,9 +163,19 @@ export async function startScheduler() {
     meterRunning = true;
     try {
       const { updateAutoCloseKpi } = await import('../supervisor/meter.js');
+      const { sendTelegram } = await import('../telegram/bot.js');
       const users = await listActiveUsers();
       for (const u of users) {
-        try { await updateAutoCloseKpi(u.id); }
+        try {
+          const r = await updateAutoCloseKpi(u.id);
+          // Readout mattutino su Telegram: il rate del giorno verso il target 70%.
+          const goalNote = r.goalId ? '' : ' (nessun goal attivo — solo backup)';
+          await sendTelegram(
+            u.id,
+            `📊 Meter task auto-chiuse (7gg): ${r.rate}% — ${r.auto}/${r.closed} chiuse dall'agente · target 70%${goalNote}`,
+            'meter',
+          ).catch(() => {});
+        }
         catch (e) { console.error(`[meter:u${u.id}]`, e); }
       }
     } catch (e) { console.error('[meter] sweep failed', e); }
