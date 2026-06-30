@@ -155,6 +155,24 @@ export async function startScheduler() {
   cron.schedule('0 0 * * *', () => { runSnapshotSweep('cron').catch(() => {}); }, { timezone: 'Europe/Rome' });
   console.log('[scheduler] brain-snapshot loop armed (daily 00:00 Europe/Rome)');
 
+  // Automation meter: 09:05 Europe/Rome ricalcola il rate rolling-7gg "% task
+  // auto-chiuse" e lo appende allo storico KPI del goal "automazione 70%".
+  let meterRunning = false;
+  cron.schedule('5 9 * * *', async () => {
+    if (meterRunning) return;
+    meterRunning = true;
+    try {
+      const { updateAutoCloseKpi } = await import('../supervisor/meter.js');
+      const users = await listActiveUsers();
+      for (const u of users) {
+        try { await updateAutoCloseKpi(u.id); }
+        catch (e) { console.error(`[meter:u${u.id}]`, e); }
+      }
+    } catch (e) { console.error('[meter] sweep failed', e); }
+    finally { meterRunning = false; }
+  }, { timezone: 'Europe/Rome' });
+  console.log('[scheduler] automation-meter loop armed (daily 09:05 Europe/Rome)');
+
   // Catch-up: backend was down at midnight, or process restarted mid-sweep.
   // On boot, check whether a cron snapshot for TODAY already exists per user;
   // if not, run one now. Guarantees daily coverage even with frequent restarts.

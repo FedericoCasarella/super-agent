@@ -957,3 +957,29 @@ DO $$ BEGIN
     ALTER TABLE agent_proposals ADD COLUMN milestone_id TEXT;
   END IF;
 EXCEPTION WHEN others THEN NULL; END $$;
+
+-- =====================================================================
+-- Automation meter — ledger delle transizioni di stato eseguite DALL'AGENTE
+-- su task ClickUp. Append-only. È la sola fonte di verità per "chiusura
+-- automatica": col token personale (pk_) ClickUp attribuisce ogni mossa a
+-- Marco, quindi solo ciò che è loggato qui conta come azione dell'agente;
+-- tutto il resto = manuale. Il rate rolling-7gg incrocia questo ledger con le
+-- task realmente chiuse (API, date_closed/date_done).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS task_action_log (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  task_id TEXT NOT NULL,            -- ClickUp task id
+  task_name TEXT,                   -- snapshot del nome (report storici fedeli)
+  client_name TEXT,                 -- cliente risolto, se noto
+  to_status TEXT NOT NULL,          -- stato impostato dalla PUT
+  status_type TEXT,                 -- 'open' | 'custom' | 'done' | 'closed'
+  is_close BOOLEAN NOT NULL DEFAULT false,  -- true se la mossa è in stato terminale
+  origin TEXT,                      -- perk/'agent'/'subagent:<title>'
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS task_action_log_user_ts_idx ON task_action_log(user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS task_action_log_close_idx ON task_action_log(user_id, is_close, ts DESC)
+  WHERE is_close = true;
+CREATE INDEX IF NOT EXISTS task_action_log_task_idx ON task_action_log(task_id);

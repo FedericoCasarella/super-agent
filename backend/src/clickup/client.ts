@@ -8,6 +8,8 @@
 //   GET  /task/{id}/comment  — read comments (preview link lives here)
 //   PUT  /task/{id}          — move status after send
 
+import { query } from '../db/index.js';
+
 const BASE = 'https://api.clickup.com/api/v2';
 
 // Defaults for Marco's Performa workspace; overridable via env.
@@ -123,8 +125,67 @@ export async function findPreviewLink(taskId: string): Promise<string | null> {
   return null;
 }
 
-export async function setTaskStatus(taskId: string, status: string): Promise<void> {
+// Opzioni di logging per l'automation meter. Quando `userId` è presente, ogni
+// transizione di stato riuscita viene registrata in task_action_log — l'unica
+// fonte di verità per "l'ha fatto l'agente" (col token pk_ ClickUp attribuisce
+// la mossa a Marco, indistinguibile lato ClickUp). `isClose` segna le mosse
+// verso uno stato terminale; il rate finale incrocia comunque con le task
+// realmente chiuse via API, quindi questo flag è solo report/indice.
+export type StatusLog = {
+  userId: number;
+  origin?: string;
+  isClose?: boolean;
+  statusType?: string;
+  taskName?: string;
+  clientName?: string;
+};
+
+export async function setTaskStatus(taskId: string, status: string, log?: StatusLog): Promise<void> {
   await cu(`/task/${taskId}`, { method: 'PUT', body: JSON.stringify({ status }) });
+  if (log?.userId) {
+    try {
+      await query(
+        `INSERT INTO task_action_log(user_id, task_id, task_name, client_name, to_status, status_type, is_close, origin)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [log.userId, taskId, log.taskName ?? null, log.clientName ?? null, status,
+         log.statusType ?? null, log.isClose ?? false, log.origin ?? 'agent'],
+      );
+    } catch (e: any) {
+      // Il log non deve mai far fallire la mossa di stato (best-effort audit).
+      console.error('[task_action_log] insert failed', e?.message ?? e);
+    }
+  }
+}
+
+// Task assegnate a Marco entrate in stato terminale (done/closed) dopo `sinceMs`.
+// Denominatore dell'automation meter. Usa include_closed=true + date_updated_gt
+// come superset, poi filtra sul `type` dello status (configurabile per lista,
+// quindi rilevato a runtime, non hardcodato) e su date_closed/date_done nella
+// finestra. `status` è il nome dello stato finale: il numeratore matcha proprio
+// quel nome contro il ledger (la mossa di chiusura fatta dall'agente).
+export type ClosedTask = { id: string; name: string; status: string; statusType: string; closedAt: number };
+
+export async function getRecentlyClosedTasks(sinceMs: number): Promise<ClosedTask[]> {
+  const out: ClosedTask[] = [];
+  for (let page = 0; ; page++) {
+    const qs = new URLSearchParams();
+    qs.set('page', String(page));
+    qs.append('assignees[]', ASSIGNEE_ID);
+    qs.set('subtasks', 'true');
+    qs.set('include_closed', 'true');
+    qs.set('date_updated_gt', String(sinceMs));
+    const data = await cu<{ tasks: any[] }>(`/team/${TEAM_ID}/task?${qs.toString()}`);
+    const batch = data.tasks ?? [];
+    for (const t of batch) {
+      const type = t.status?.type ?? '';
+      if (type !== 'done' && type !== 'closed') continue;
+      const closedAt = Number(t.date_closed ?? t.date_done ?? t.date_updated ?? 0);
+      if (!closedAt || closedAt < sinceMs) continue;
+      out.push({ id: t.id, name: t.name, status: t.status?.status ?? '', statusType: type, closedAt });
+    }
+    if (batch.length < 100) break;
+  }
+  return out;
 }
 
 // Post a comment on a task (kept as a fallback option).

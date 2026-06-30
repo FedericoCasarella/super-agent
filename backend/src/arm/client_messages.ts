@@ -305,8 +305,16 @@ async function dispatchSend(userId: number, d: any, finalBody: string): Promise<
   }
 
   // Move every batched task to "waiting feedback client". Best-effort per task.
+  // Logga la mossa nel ledger dell'automation meter (origin = braccio). Non è una
+  // chiusura — 'waiting feedback client' è uno stato intermedio — quindi isClose
+  // resta false e questa mossa NON conta come task auto-chiusa.
   for (const tid of taskIds) {
-    try { await setTaskStatus(tid, DONE_STATUS); }
+    try {
+      await setTaskStatus(tid, DONE_STATUS, {
+        userId, origin: 'agent:client-arm', isClose: false,
+        clientName: client?.clickup_list_name,
+      });
+    }
     catch (e: any) { console.error(`[arm] setTaskStatus ${tid} failed`, e?.message ?? e); }
   }
   await query(`UPDATE client_msg_drafts SET status='sent', sent_at=now(), decided_at=COALESCE(decided_at, now()) WHERE id=$1`, [d.id]);
