@@ -42,7 +42,7 @@ export async function trackStatuses(tasks: ClickUpTask[]): Promise<void> {
          ON CONFLICT(task_id) DO NOTHING`, [t.id, t.status, since]);
     } else if (prev !== t.status) {
       await query(
-        `UPDATE task_status_seen SET status=$2, since=now(), last_seen=now(), last_nudged_at=NULL, last_followup_at=NULL, followup_count=0 WHERE task_id=$1`,
+        `UPDATE task_status_seen SET status=$2, since=now(), last_seen=now(), last_nudged_at=NULL, last_followup_at=NULL, followup_count=0, client_reply_at=NULL WHERE task_id=$1`,
         [t.id, t.status]);
     } else {
       await query(`UPDATE task_status_seen SET last_seen=now() WHERE task_id=$1`, [t.id]);

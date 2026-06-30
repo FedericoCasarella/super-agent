@@ -386,6 +386,9 @@ CREATE TABLE IF NOT EXISTS task_status_seen (
 -- Step 2b: tracciamento auto-follow-up al cliente (waiting feedback client).
 ALTER TABLE task_status_seen ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ;
 ALTER TABLE task_status_seen ADD COLUMN IF NOT EXISTS followup_count INT NOT NULL DEFAULT 0;
+-- Step 3: timestamp dell'ultimo alert "il cliente ha risposto" (dedup per ciclo
+-- di attesa; azzerato quando la task cambia stato, come gli altri contatori).
+ALTER TABLE task_status_seen ADD COLUMN IF NOT EXISTS client_reply_at TIMESTAMPTZ;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='email_drafts' AND column_name='account_label') THEN

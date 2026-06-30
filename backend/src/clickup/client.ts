@@ -209,3 +209,28 @@ export async function createChatMessage(channelId: string, text: string): Promis
     throw new Error(`ClickUp Chat POST ${channelId} → ${res.status} ${body.slice(0, 200)}`);
   }
 }
+
+// Leggi i messaggi recenti di un canale Chat [EXT] (v3 API). Usato dallo step 3
+// del supervisore per capire se il cliente ha risposto. `authorId` permette di
+// distinguere i messaggi del cliente da quelli di Marco/agente (che usano il
+// token pk_ → autore = Marco, ID 84001538). Best-effort sui campi: la v3 espone
+// `date` (ms epoch) e l'autore in forme diverse a seconda della versione.
+export type ChatMessage = { id: string; authorId: string; text: string; dateMs: number };
+
+export async function getChatMessages(channelId: string, limit = 50): Promise<ChatMessage[]> {
+  const res = await fetch(
+    `https://api.clickup.com/api/v3/workspaces/${TEAM_ID}/chat/channels/${channelId}/messages?limit=${limit}`,
+    { headers: { Authorization: token(), 'Content-Type': 'application/json' } },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`ClickUp Chat GET ${channelId} → ${res.status} ${body.slice(0, 200)}`);
+  }
+  const data = await res.json() as { data?: any[] };
+  return (data.data ?? []).map((m) => ({
+    id: String(m.id ?? ''),
+    authorId: String(m.user?.id ?? m.userid ?? m.user_id ?? ''),
+    text: String(m.content ?? m.comment_text ?? ''),
+    dateMs: Number(m.date ?? m.created_at ?? 0),
+  }));
+}

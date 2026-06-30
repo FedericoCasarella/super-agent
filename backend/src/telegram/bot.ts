@@ -300,6 +300,20 @@ async function _startBotForUser(userId: number) {
     }
   });
 
+  // Step 3 on-demand: chi mi ha risposto tra le task in attesa cliente.
+  bot.command('risposte', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const cur = await getSetting<any>(userId, 'telegram');
+    if (cur?.chatId !== chatId) return;
+    try {
+      const { alertClientReplies } = await import('../supervisor/client_replies.js');
+      const r = await alertClientReplies(userId);
+      if (r.ok && r.count === 0) await ctx.reply('Nessuna nuova risposta dai clienti in attesa. 👍');
+    } catch (e: any) {
+      await ctx.reply(`Errore: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
+  });
+
   // Interruttore auto-follow-up al cliente (step 2b).
   bot.command('followups', async (ctx) => {
     const chatId = ctx.chat.id;
